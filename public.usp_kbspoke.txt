@@ -1,0 +1,4093 @@
+-- FUNCTION: public.usp_kbspokejson
+
+-- DROP FUNCTION public.usp_kbspokejson;
+
+CREATE OR REPLACE FUNCTION public.usp_kbspoke(
+	input json)
+RETURNS json
+    LANGUAGE 'plpgsql'
+    COST 100.0
+    VOLATILE 
+AS $function$
+
+/*added limit 1 in get details transtype on 25-09-2018
+Select Row_to_json(src) "MetricExtraction"*/
+
+DECLARE
+	VTRAN		VARCHAR(30);
+	VActiondate	timestamp default(current_timestamp at time zone 'utc')	;
+	VID		int;
+	VCreated_By	int;
+	VResult		json;
+	VTimeZones 	Json;
+	VFormulas 	json;
+	VConnectionTypes Json;
+	VDataFormat 	Json;
+	VPushbasedURLDetails Json;
+	VDSObjects 	Json;
+	VEntityObjects 	Json;
+	VDataTypes	json;
+	VSpokeTypes	json;
+	VFuzzyrules	json;
+	VQuery 		text;
+	VTableName 	varchar(200);
+	VSourcetypeid 	bigint;
+	VSourceTypename	varchar(255);
+	VSrctype 	int;
+	VSpokeName 	varchar(100);
+	VHasNLegsNMachine varchar(1000);
+	VIsMetricAdded	smallint;
+	VSource 	int;
+    Visactive 	int=1;
+	VCUSTOMERIDENTIFIER varchar(1000);
+	vTIMEZONEID	int;
+	VLicenseKey	int;
+	VCntr		smallint;
+	VCnt		smallint;
+	VTempstring	text;
+	VMName		varchar(255);
+	VIsFormulaexists	smallint;
+	VQuery_MaxRecord	text;
+	VURLID		int;
+	VHistoryURLID	int;
+	VSpokeAlias 	varchar(255);
+	VSOURCEURL	varchar(500);
+	Voldid		int;
+	Vdatasources 	json;
+	VSpokeDescription	varchar(500);
+	VEntityidentifier	varchar(1000);
+	Vmainseperator	varchar(100);
+	VSubSeparator	varchar(100);
+	VPRIMARYKEY	varchar(2000);
+	VMQTTURL	varchar(255);
+	VMQTTTopic	varchar(255);
+	VMQTTUsername	varchar(255);
+	VMQTTPassword	varchar(255);
+    vIsEntity integer;
+    vIsEntityType integer;
+    vfromdate timestamp without time zone;
+    vdate timestamp without time zone;
+    vtodate timestamp without time zone;
+    vtype varchar(50);
+    vhierarchy varchar(500);
+    
+	
+ 
+begin
+
+drop table if exists temps;
+drop table if exists users;
+drop table if exists Inputtable;
+drop table if exists DBKPIFactTABLES;
+drop table if exists DuplicateKeys;
+drop table if exists CallEndIdentitifer;
+drop table if exists InputMetricRulesData;
+drop table if exists InputMetricData;
+drop table if exists MetricTable;
+drop table if exists ExistingSourceTemplates;
+drop table if exists TimeBased;
+drop table if exists ValidationMetricExtraction;
+drop table if exists RuleExtraction;
+drop table if exists MetricExtraction;
+drop table if exists queries;
+drop table if exists InputData;
+drop table if exists SpokeTable;
+drop table if exists primarykeys;
+create temp table temps(id serial,ivalue json);
+create temp table users (id serial,userid int);
+create temp table Inputtable(RecId Serial,ColumnName varchar(255),DataType varchar(100),Coalesceable bit,IsIdentity bit,IsPrimary bit);
+create temp table DBKPIFactTABLES(ID serial,SPOKE_ID INT,TABLE_NAME VARCHAR(100),TABLE_COLUMNS VARCHAR(200),ATTRIBUTES VARCHAR(100)
+,IS_NULLABLE BIT,IS_PRIMARY BIT
+,DATATYPE VARCHAR(100),iTYPE INT,XPATH VARCHAR(100));
+
+create temp table DuplicateKeys(id serial,Identifier varchar(1000),MetricName varchar(1000),Operator varchar(1000),Value1 varchar(1000),Value2 varchar(1000),BoolOperator varchar(1000));
+
+create temp table CallEndIdentitifer(id serial,Identifier varchar(1000),MetricName varchar(1000),Operator varchar(1000),Value1 varchar(1000),Value2 varchar(1000),BoolOperator varchar(1000));
+
+create temp table InputData(RecordID serial, SpokeName varchar(1000), SpokeDescription varchar(1000), CreatedBy int,
+ServerName varchar(256),UserName varchar(1000),Password varchar(256),AuthenticationType int,FilePath varchar(256),HASNLEGSNMACHINE varchar(100)
+,INPUT varchar(256),Primarykey varchar(1000),CUSTOMERIDENTIFIER varchar(1000),TIMEZONEID int,CONNECTIONTYPE int,DataFormat int,
+CollectionName varchar(1000),MainSeparator varchar(100),SubSeparator varchar(100),SourceURL varchar(1000),SourceType INT,SpokeType INT,entityidentitfier varchar(1000),sourceguid varchar(100)
+,masterspokeid bigint);
+
+create temp table InputMetricRulesData(RecordID serial,Sourceid bigint,MetricId bigint, MetricName varchar(256),RuleID int,Value varchar(3000),Priority int
+,TransformActualDataType varchar(50),TransformationDataTypeAlias varchar(50));
+
+create temp table InputMetricData(RecordID serial,Sourceid bigint, MetricName varchar(256),MetricDataType varchar(256),MetricDataTypeName varchar(256)
+,IsRequired bit,FORMULA varchar(50) ,IsType varchar(100),METRICALIAS varchar(100),ConstantValue varchar(1000),IsCustomerIdentifier bit, IsPrimaryKey bit,MetricId INT
+,MeasureId INT,NewlyAdded bit,EntitydefId bigint, EntityMetric varchar(255),RuleType varchar(255), RuleDelimeter varchar(50),isreasonablecheck bit,isNewFormula  bit, xpath varchar(100));
+
+create temp table MetricTable(ID serial,MetricName varchar(50),DataType varchar(50));
+
+create temp table ExistingSourceTemplates(ID serial,SourceID bigint, TemplateID bigint);
+
+create temp table TimeBased(Id serial,MetricName varchar(1000));
+
+ create temp table ValidationMetricExtraction
+(Id serial,SourceID INT, Metricname varchar(255), DBDatatype varchar(100), TOrder smallint);
+
+create temp table RuleExtraction
+(Id serial, RuleID INT, RuleType varchar(255), ExpectedDatatype varchar(1000),RegExpression varchar(3000),Conditions  varchar(3000), ServiceExpressions  varchar(3000), TOrder smallint);
+
+ create temp table MetricExtraction
+(Id serial,SourceID INT,SelectedDatabaseType INT,DBServerName varchar(1000),DBAuthType INT,DBUsername varchar(500),DBPassword varchar(1000),
+DBQuery varchar(3000),DatabaseName varchar(500),TableQuery varchar(3000),MainSeperator varchar(50),SubSeperator varchar(50));
+
+create temp table queries(id serial,query text);
+
+create temp table SpokeTable(RECORDID serial,SPOKE_ID INT,TABLE_NAME VARCHAR(500),METRICS VARCHAR(500),IS_PRIMARY INT,IS_NULLABLE INT,DATATYPE VARCHAR(100));
+
+create temp table primarykeys(metricid int,metricname varchar (50));
+                              
+insert into temps(ivalue)
+select input;
+	
+    
+VTRAN:= (select ivalue->'SPOKE'->> 'TRANSTYPE' from temps limit 1);
+VCreated_By:= (select ivalue->'SPOKE'->> 'LoginId' from temps limit 1);
+VID:= (select ivalue->'SPOKE'->> 'VID' from temps limit 1);
+VTableName:=(select ivalue->'SPOKE'->> 'TableName' from temps limit 1);  
+VSourcetypeid:=(select ivalue->'SPOKE'->> 'SPOKEID' from temps limit 1);
+VSourceTypename:=(select ivalue->'SPOKE'->> 'SPOKENAME' from temps limit 1);
+VSOURCEURL:=(select ivalue->'SPOKE'-> 'SourceURL'->>'URL' from temps limit 1);
+VCUSTOMERIDENTIFIER:=(select ivalue->'SPOKE'->> 'CUSTOMERIDENTIFIER' from temps limit 1);
+VTIMEZONEID:=(select cast(ivalue->'SPOKE'->> 'TIMEZONEID' as int) from temps limit 1);
+VSpokedescription:=(select ivalue->'SPOKE'->> 'SPOKEDESCRIPTION' from temps limit 1);
+VEntityidentifier:=(select  ivalue->'SPOKE'->> 'IDENTIFIER' from temps limit 1);
+vIsEntity:=(select  ivalue->'SPOKE'->> 'IsEntity' from temps limit 1);
+vIsEntityType:=(select  ivalue->'SPOKE'->> 'IsEntityType' from temps limit 1);
+vtype:=(select  ivalue->'SPOKE'->> 'TYPE' from temps limit 1);
+vhierarchy:=(select  ivalue->'SPOKE'->> 'hierarchy' from temps limit 1);
+
+select  ivalue->'SPOKE'->> 'MQTTURL' 
+,ivalue->'SPOKE'->> 'MQTTTopic' 
+,ivalue->'SPOKE'->> 'MQTTUsername' 
+,ivalue->'SPOKE'->> 'MQTTPassword' 
+into VMQTTURL,VMQTTTopic,VMQTTUsername,VMQTTPassword
+from 
+temps 
+limit 1;
+
+insert into users(userid)
+select userid
+From
+KBUserCustomerMapping A
+Inner join
+(
+	Select customerid 
+	from KBUserCustomerMapping
+	where userid=VCreated_By
+) B  on A.customerid=B.customerid
+
+;
+
+	/* Inserting the input values in the respective temporary table(s) after parsing the xml. */
+
+	Insert into InputData(SpokeName,SpokeDescription,CreatedBy,ServerName,UserName,Password,AuthenticationType,FilePath,HASNLEGSNMACHINE
+	,INPUT,Primarykey,CUSTOMERIDENTIFIER,TIMEZONEID,CONNECTIONTYPE ,DataFormat,CollectionName,MainSeparator,SubSeparator,SourceURL,SourceType,SpokeType,entityidentitfier
+	,sourceguid,masterspokeid)
+	SELECT 
+		ivalue->'SPOKE'->> 'SPOKENAME',
+		ivalue->'SPOKE'->> 'SPOKEDESCRIPTION',
+		cast(ivalue->'SPOKE'->> 'CREATEDBY' as int),
+		ivalue->'SPOKE'->> 'ServerName',
+		ivalue->'SPOKE'->> 'UserName',
+		ivalue->'SPOKE'->> 'Password',
+		cast(ivalue->'SPOKE'->> 'AuthenticationType' as int),
+		ivalue->'SPOKE'->> 'MDFPath',
+		ivalue->'SPOKE'->> 'HASNLEGSNMACHINE',
+		ivalue->'SPOKE'->> 'INPUT',
+		ivalue->'SPOKE'->> 'PRIMARYKEY',
+		ivalue->'SPOKE'->> 'CUSTOMERIDENTIFIER',
+		cast(ivalue->'SPOKE'->> 'TIMEZONEID' as int),
+		cast(ivalue->'SPOKE'->> 'ConnectionType' as int),
+		cast(ivalue->'SPOKE'->> 'DataFormat' as int),
+		ivalue->'SPOKE'->> 'CollectionName',
+		ivalue->'SPOKE'->> 'MainSeparator',
+		ivalue->'SPOKE'->> 'SubSeparator',
+		VSOURCEURL,
+		cast(ivalue->'SPOKE'->> 'SourceType' as int),
+		cast(ivalue->'SPOKE'->> 'SPOKETYPE' as int),
+		ivalue->'SPOKE'->> 'IDENTIFIER',
+		ivalue->'SPOKE'->> 'sourceguid' sourceguid,
+		cast(ivalue->'SPOKE'->> 'MASTERSPOKEID' as bigint) masterspokeid
+		
+	from temps limit 1
+
+	;
+	VPRIMARYKEY:=(select Primarykey from InputData limit 1);
+	select MainSeparator,SubSeparator into Vmainseperator,VSubSeparator from InputData limit 1;
+
+--Return(select row_to_json(a) from (Select * from inputdata)a);
+
+	
+	Insert into MetricExtraction
+	(SourceID  ,SelectedDatabaseType  ,DBServerName  ,DBAuthType  ,DBUsername  ,DBPassword  ,
+	DBQuery  ,DatabaseName  ,TableQuery  ,MainSeperator  ,SubSeperator  )
+	SELECT   cast(ivalue->'SPOKE'->'MetricExtraction'->>'Source' as int)	 
+		,cast(ivalue->'SPOKE'->'MetricExtraction'->>'SelectedDatabaseType' as int)
+		,ivalue->'SPOKE'->'MetricExtraction'->>'DBServerName'	
+		,cast(ivalue->'SPOKE'->'MetricExtraction'->>'DBAuthType' as smallint)	 
+		,ivalue->'SPOKE'->'MetricExtraction'->>'DBUsername'	
+		,ivalue->'SPOKE'->'MetricExtraction'->>'DBPassword'	
+		,ivalue->'SPOKE'->'MetricExtraction'->>'DBQuery'
+		,ivalue->'SPOKE'->'MetricExtraction'->>'Database'
+		,ivalue->'SPOKE'->'MetricExtraction'->>'TableQuery'	
+		,ivalue->'SPOKE'->'MetricExtraction'->>'MainSeparator'	
+		,ivalue->'SPOKE'->'MetricExtraction'->>'SubSeparator'
+	from temps limit 1;
+
+	Select SourceType,SpokeName,HasNLegsNMachine 
+		into VSrctype, VSpokeName,VHasNLegsNMachine
+	from InputData limit 1;
+
+--return VTran;
+--RAISE NOTICE ' heloo %', VTran;
+
+if lower(VTRAN)='addbulkparameter' then
+begin 
+VURLID:=(select ID from KBSOURCEURLMST where SOURCEID=VSourcetypeid and lower(objecttype)='source' and Data_Fetch_Type='CurrentData' limit 1);
+VHistoryURLID:=(select ID from KBSOURCEURLMST where SOURCEID=VSourcetypeid and lower(objecttype)='source' and Data_Fetch_Type='HistoricalData' limit 1);
+
+INSERT INTO KBSOURCEURLDETAILS(URLID,PARAM_NAME,PARAM_VALUE,PARAM_TYPE,format,SOURCEID,FORMULA,filteroption,PARAM_VALUETYPE,Operator,EntityDefId,concatenator,parametertype,CREATEDBY,groupname,type)
+        SELECT VURLID  URLID,iparams->>'NAME',iparams->>'VALUE',iparams->>'TYPE',iparams->>'format',VSourcetypeid spokeid	
+		,iparams->>'FORMULA' ,iparams->>'FilterOption', vhierarchy,iparams->>'Operator'
+		,cast(iparams->>'EntityDefId' as int),iparams->>'Concater',cast(iparams->>'AddParameters'  as smallint)
+		,VCreated_By,iparams->>'GroupName',vtype
+		from
+		(
+		select json_array_elements(sparams) as iparams
+		from
+		(
+		select ivalue->'SPOKE'->'SourceURL'->'PARAMETERDETAILS'->'PARAMETER' as sparams
+		From
+		temps limit 1
+		)a
+		)params
+		;
+
+		INSERT INTO KBSOURCEURLDETAILS(URLID,PARAM_NAME,PARAM_VALUE,PARAM_TYPE,format,SOURCEID,FORMULA,filteroption,PARAM_VALUETYPE,Operator,EntityDefId,concatenator,parametertype,CREATEDBY,groupname,type)
+		SELECT VHistoryURLID  URLID,iparams->>'NAME',iparams->>'VALUE',iparams->>'TYPE',iparams->>'format',VSourcetypeid spokeid
+		,iparams->>'FORMULA' ,iparams->>'FilterOption' ,vhierarchy,iparams->>'Operator'
+		,cast(iparams->>'EntityDefId' as int),iparams->>'Concater',cast(iparams->>'AddParameters'  as smallint)
+		,VCreated_By,iparams->>'GroupName',vtype
+		from
+		(
+		select json_array_elements(sparams) as iparams
+		from
+		(
+		select ivalue->'SPOKE'->'ImportSettingsDetails'->'PARAMETERDETAILS'->'PARAMETER' as sparams
+		From
+		temps limit 1
+		)a
+		)params
+		;
+        
+end ;
+
+Return(select array_to_json(array_agg(row_to_json(output)))
+		from (
+select VSourcetypeid as SPOKEID,'success' as "message")output);
+end if;
+
+if lower(VTRAN)='bulkgetparameter' then
+begin 
+if lower(vtype)=lower('current') then 
+VResult:=(
+
+		Select row_to_json(spokes)
+		from
+		(	
+			Select  Array_to_json(Array_agg(row_to_json(spoke))) as "DataSource"
+			from
+			(
+				select distinct URLID,PARAM_NAME,PARAM_VALUE,PARAM_TYPE,format,A.SOURCEID,FORMULA,filteroption,PARAM_VALUETYPE,Operator,EntityDefId,concatenator,parametertype,groupname,type
+				from kbsourceurldetails A inner join kbsourceurlmst b on  A.urlid=b.id
+				where lower(type)=lower('bulk') and data_fetch_type='CurrentData'
+                limit 25
+			) spoke	
+		) spokes
+		);  
+
+elseif lower(vtype)=lower('history')then 
+VResult:=(
+
+		Select row_to_json(spokes)
+		from
+		(	
+			Select  Array_to_json(Array_agg(row_to_json(spoke))) as "DataSource"
+			from
+			(
+				select distinct URLID,PARAM_NAME,PARAM_VALUE,PARAM_TYPE,format,A.SOURCEID,FORMULA,filteroption,PARAM_VALUETYPE,Operator,EntityDefId,concatenator,parametertype,groupname,type
+				from kbsourceurldetails A inner join kbsourceurlmst b on  A.urlid=b.id
+				where lower(type)=lower('bulk') and data_fetch_type='HistoricalData'
+                limit 25
+			) spoke	
+		) spokes
+		);  
+end if;        
+end;
+return VResult;
+end if;
+
+If lower(VTran)='getpullsourceiterationdetails' Then
+Begin
+vfromdate:=(NOW() - INTERVAL '30 DAY');
+vdate:=(NOW() - INTERVAL '1 DAY');
+vtodate:= vdate :: date ;
+VResult:=(
+		Select Array_to_json(Array_agg(row_to_json(datas))) as "SPOKE"
+		From
+		(
+		Select kbenginewisedatafetchinginformation.createddate "PulledDatetime",recordcount "Recordcount",callstatus,
+            (select  count(1) as "errorcount" from nmsspperformancelogger 
+             where sourceid=kbenginewisedatafetchinginformation.callstatus 
+             and createddate::date=kbenginewisedatafetchinginformation.createddate::date           
+             )                        
+		from kbenginewisedatafetchinginformation 
+            inner join kbsourceurlmst url on kbenginewisedatafetchinginformation.callstatus=url.sourceid
+            where callstatus=VSourcetypeid
+            and (case when url.data_fetch_type='daily' then 
+                 (kbenginewisedatafetchinginformation.createddate>=vfromdate)
+                 when url.data_fetch_type='hourly' then 
+                 (kbenginewisedatafetchinginformation.createddate>=vdate)end)
+		and engineinstanceid in (select distinct engineinstanceid from kbenginepagingworktable where lower(enginetype)='pull' )
+		order by kbenginewisedatafetchinginformation.createddate desc
+		
+		)datas
+
+	);
+
+Return(VResult);
+
+End;
+						   
+ElseIf lower(VTran)='addprimarykey' Then
+begin
+-- insert into primarykeyss(ivalue)
+-- select input;
+
+select ivalue->'SPOKE'->> 'TRANSTYPE' 
+,ivalue->'SPOKE'->> 'SPOKEID'
+,ivalue->'SPOKE'->> 'VSrctype' 
+,ivalue->'SPOKE'->> 'IDENTIFIER'
+,ivalue->'SPOKE' ->> 'SPOKENAME'									   
+into
+VTRAN,VSourcetypeid,VSrctype,VEntityidentifier,VSpokeName from temps limit 1; 
+									   
+Insert into primarykeys(metricname)
+select  metricname->> 'name' from 
+( select json_array_elements(ivalue->'SPOKE'-> 'primarykeys')metricname from temps) r;
+Insert into primarykeys(metricid)									   
+select  cast(metricid->> 'id' as int) from 
+( select json_array_elements(ivalue->'SPOKE'-> 'primarykeys')metricid from temps) h;
+									   
+    Update kbsourcetypemst  set primarykeycolumns=VEntityidentifier 
+    where sourcetype_id=VSourcetypeid ;
+     
+	Update kbmetricmst set isprimarykey='0' where metric_id=VSrctype and
+    metricname in (select metricname from kbmetricmst where source_id=VSourcetypeid); 
+	Update kbspokeconfigurations set isprimarykey='0' where configid=Voldid and
+    metricname in (select metricname from kbspokeconfigurations where sourcetypeid=VSourcetypeid);
+									   
+	Update kbspokeconfigurations set isprimarykey='1'
+    where metricname=VSpokeName and sourcetypeid=VSourcetypeid;
+    Update kbmetricmst set isprimarykey='1' where metricname=VSpokeName and
+    source_id=VSourcetypeid;							   
+
+ return(select array_to_json(array_agg(row_to_json(output)))
+		from (
+select --VEntityidentifier as IDENTIFIER,VSourcetypeid as SPOKEID,VSrctype as metricid,VSpokeName as metricname,
+			'success' as "message")output);
+End;
+									   
+ElseIf lower(VTRAN)='priority' Then
+Begin
+
+insert into temps(ivalue)
+select input;
+	
+select ivalue->'SPOKE'->> 'TRANSTYPE' 
+,ivalue->'SPOKE'->> 'SPOKEID'
+,ivalue->'SPOKE'->> 'VSrctype'
+into
+VTRAN,VID,VSrctype from temps limit 1;
+									  
+ update kbsourcetypemst
+	set priority=VSrctype
+	where sourcetype_id=VID;
+Return(select array_to_json(array_agg(row_to_json(output)))
+		from (
+select VID as sourcetype_id,'successfully setted priority' as "message")output);									  
+End;
+ 								   
+elseif Lower(VTRAN)='deletemetrics' Then
+begin 
+								  
+insert into temps(ivalue)
+select input;
+	
+select ivalue->'SPOKE'->> 'TRANSTYPE' 
+,ivalue->'SPOKE'->> 'SPOKEID'
+,ivalue->'SPOKE'->> 'matricid'
+into
+VTRAN,VID,VSrctype from temps limit 1;
+									  
+VSpokeName:=(select primarykeycolumns from kbsourcetypemst where sourcetype_id=VID limit 1);
+							  
+delete from kbmetricmst
+where source_id=VID and metric_id=VSrctype;
+									  
+delete  from kbspokeconfigurations
+where sourcetypeid=VID and configid=VSrctype;
+
+Return(select array_to_json(array_agg(row_to_json(output)))
+		from (
+select VID as sourceid,VSrctype as metricid,'successfully deleted' as "message")output);
+									  
+End;									  
+ 
+ElseIf lower(VTran)='getmasterdata' Then
+Begin
+
+Vdatasources:=(
+
+		Select row_to_json(spokes)
+		from
+		(	
+			Select  Array_to_json(Array_agg(row_to_json(spoke))) as "DataSource"
+			from
+			(
+				Select sourcetype_id, sourcetype_name ,A.input "MQTTTopic"
+				from kbsourcetypemst A 
+				where exists(select 1 from users usr where A.createdby=usr.userid )
+			) spoke	
+		) spokes
+		);
+
+	
+Vresult:=(
+		Select Row_to_json(output)  as "Tables"
+		from
+		(
+		Select Array_to_json(Array_agg(row_to_json(spoke))) as "Table"
+		From
+		(
+		select Masters.MasterTypeId Id,Masters.MasterTypeName "Name"
+		,
+		(
+			select Array_to_json(array_agg(row_to_json(a))) as "Column"
+			From
+			(
+				Select Masterinfo.MetaDataID "Id",MetaDataName "Name"
+				From
+				KBSpokeMasterMetadataInformation MasterInfo 
+				Where Masters.MasterTypeId=MasterInfo.MasterTypeID
+			--for XML RAW('Column')
+			)a 
+		)
+		from KBspokeMastertypes Masters
+		) spoke
+		) output
+		--For XML RAW('Table'),ROOT('Tables')
+		)
+
+;
+ VTimeZones:=
+(				
+			Select Array_to_json(Array_agg(row_to_json(times))) as "TIMEZONE"
+			From
+			(
+				SELECT 
+				'(GMT'|| CASE WHEN UTCOffset < 0 THEN REPLACE(CAST(UTCOffset AS varchar(10)),'.',':') ||')'    
+				ELSE '||' || REPLACE(CAST(UTCOffset AS varchar(10)),'.',':') ||')' END || ' ' || TimeZoneName 
+				AS "Name",
+				'(GMT'|| CASE WHEN UTCOffset < 0 THEN REPLACE(CAST(UTCOffset AS varchar(10)),'.',':') ||')'    
+				ELSE '||' || REPLACE(CAST(UTCOffset AS varchar(10)),'.',':') ||')' END || ' ' || TimeZoneName 
+				AS "Alias",
+				TimeZoneId "ID"
+				FROM KBTimeZoneOffsets
+				Order By UTCOffset desc
+			)times
+				--FOR XML RAW('TIMEZONE'),ROOT('TIMEZONES')
+);
+
+VDataTypes:=(
+		Select Array_to_json(Array_agg(row_to_json(datas))) as "DATATYPE"
+		From
+		(
+		Select DataTypeID "ID",DataTypeName "Name", coalesce(DataTypeAlias,'') as "Alias" 
+		from KBMasterDataTypes 
+		--for XML RAW('DATATYPE'),ROOT('DATATYPES') 
+		)datas
+
+	);
+ 
+VSpokeTypes:=( 
+		Select Array_to_json(Array_agg(row_to_json(spk))) as "SPOKETYPE"
+		From
+		(
+		Select SpokeTypeID "ID", coalesce(SpokeTypeAlias,SpokeTypeName) "TypeName" 
+		from 
+		KBspokeTypesMst 
+		)spk
+		--For XML RAW('SPOKETYPE'),ROOT('SPOKETYPES')
+	);
+
+ 
+VConnectionTypes:=( 
+			Select Array_to_json(Array_agg(row_to_json(con))) as "CONNECTION"
+			From
+			(
+			Select ID "ID", CONNECTIONTYPE "CONNECTIONTYPENAME" 
+			from 
+			KbConnectionTypeMst 
+			)con
+			--For XML RAW('CONNECTION'),ROOT('CONNECTIONTYPES')
+		);
+
+ 
+VFormulas:=(
+		Select Array_to_json(Array_agg(row_to_json(form))) as "FORMULA"
+		From
+		(
+			Select ForumulaID "FORMULAID",FormulaName "FORMULANAME" 
+			from 
+			KBFormulaTypeMst 
+			where ForumulaID NOT IN(2,6) 
+		)form
+		--FOR XML RAW('FORMULA'),ROOT('FORMULATYPES')
+	);
+
+Vfuzzyrules:=(
+		Select Array_to_json(Array_agg(row_to_json(rul))) as "RULES"
+		From
+		(
+		Select RULETITLE as "RULETITLE",NUMBEROFCONTROLS "NUMBEROFCONTROLS",CONTROLTYPE "CONTROLTYPE",TOOLTIP "TOOLTIP",SEPARATOR "SEPARATOR",PARAMETERTYPE "PARAMETERTYPE",PARAMETERCOUNT "PARAMETERCOUNT" 
+		from 
+		CBFuzzyLogicRulesMst 
+		)rul
+		--FOR XML RAW('RULES'),ROOT('TRANSFORMATIONS')
+	);
+
+VDataFormat:=(
+		Select Array_to_json(Array_agg(row_to_json(dat))) as "DATAFORMAT"
+		From
+		(
+		Select ID "DATAFORMATID",FORMATTYPE "DATAFORMATNAME" 
+		from KbSpokeDataFormats 
+		--FOR XML RAW('DATAFORMAT'),ROOT('DATAFORMATTYPES')
+		)dat
+	);
+
+VPushbasedURLDetails:=( 
+		Select Array_to_json(Array_agg(row_to_json(ser))) as "URL"
+		From
+		(
+		select M.ServiceType "ServiceType", S.SpokeName as "ServiceName", S.URL "URL" 
+		from KBserviceInfo S 
+		Join KBServiceMaster M on S.ServiceId=M.Serviceid and M.Serviceid=16 
+		)ser
+		--FOR XML RAW('URL'),ROOT('VIRTUSAPIURLDETAILS')
+	);
+
+ 
+ 
+VDSObjects=(
+		Select Array_to_json(Array_agg(row_to_json(sour))) as "Source"
+		From
+		(
+		select DataSourceid "SourceID", DataSourceName "SourceName",
+		
+		(
+			Select Array_to_json(Array_agg(row_to_json(att))) as "DataSources"
+			From
+			(
+			Select DSAttributeDetailID "DSAttributeDetailID",DSADetailName "DSADetailName",TOrder  "TOrder"
+			from KBDataSourceAttributeDetails B 
+			Where A.dataSourceId=DSAttributeID
+			)att
+			--For XML RAW('DataSources')
+		)
+		from KBDataSourceMst A
+		Order by A.Torder
+		)sour
+		--For XML RAW('Source'),ROOT('Sources')
+ );
+
+VEntityObjects:=(
+			Select Array_to_json(Array_agg(row_to_json(entdef))) as "ENTITYDEFINATION"
+			From
+			(
+			select EntityDef_id as  "ID", ENTITYTYPE as "Name" ,Entity_Name as "Alias" 
+			 
+			 ,(
+				Select Array_to_json(Array_agg(row_to_json(ent))) as "Entity"
+				From
+				(
+				Select SMst.ControlTitle "Label" 
+				,coalesce(Smst.ServiceLabel,'') "ServiceLabel"
+				,Entitymst.ENTITYDEF_ID as "ID"
+				,Entitymst.ENTITYTYPE as "Name"
+				,SMst.ControlTitle as "Alias"
+				from KBEntityScreenConfigurationMst SMst 
+				where ObjectType='EntityDefinition'
+				and smst.EntityDefID=Entitymst.ENTITYDEF_ID
+				Order By Rowindex
+				)ent
+				--For XML RAW('Entity')
+			)
+			from KBEntityMst  Entitymst
+			where ENTITYDEF_ID<>1  
+			and exists (select 1 from users b where Entitymst.createdby=B.userid)
+			)entdef
+			--For XML RAW('ENTITYDEFINATION'),ROOT('ENTITYDEFINATIONS')
+);
+
+VResult:=(
+		Select row_to_json(output) 
+		from
+		(
+		Select row_to_json(a) as "SPOKE"
+		from
+		(
+		select Vresult as "Tables", VDataTypes "DATATYPES",VSpokeTypes "SPOKETYPES"
+		,VConnectionTypes "CONNECTIONTYPES",VTimeZones "TIMEZONES",VFormulas "FORMULATYPES",VDataFormat "DATAFORMATTYPES",VPushbasedURLDetails "VIRTUSAPIURLDETAILS",
+		VDSObjects as "Sources",VEntityObjects as "ENTITYDEFINATIONS",Vfuzzyrules "TRANSFORMATIONS"
+		,Vdatasources as "DataSources"
+		)a
+		) output
+		--for XML PATH(''),ROOT('SPOKE')
+	);
+
+Return(VResult);
+
+End;
+Elseif lower(VTran)='create' or  lower(VTran)='update' Then
+
+Begin
+	
+		Insert into ValidationMetricExtraction(SourceID  , Metricname, DBDatatype, TOrder)
+		SELECT VSourcetypeid sourceid
+			,imetrics->'Metric'->>'NAME'	
+			,imetrics->'Metric'->>'DATATYPE'
+			,cast(imetrics->'Metric'->>'Order' as int)
+		FROM 
+		(
+			Select json_array_elements(imetric) as imetrics
+			From
+			(
+			select ivalue->'SPOKE'-> 'METRICS'->'METRIC' as imetric
+			from temps limit 1
+			)a
+		)mets;	
+	
+	
+
+	If lower(VTran)='update' Then
+	Begin
+
+	Delete from  KBMetricValidationRules
+	using
+	ValidationMetricExtraction B 
+	where KBMetricValidationRules.MetricName=B.Metricname and KBMetricValidationRules.SourceId=B.SourceID;
+
+	Insert into KBMetricValidationRules(MetricName, SourceId,RuleID, RuleType,ExpectedDatatype, RegExpression,Conditions,ServiceExpressions )
+	Select MetricName, SourceId,RuleID, RuleType,ExpectedDatatype, RegExpression,Conditions,ServiceExpressions
+	from ValidationMetricExtraction A 
+	Join  RuleExtraction B on A.TOrder=B.TOrder;
+
+	End;
+	end if; 
+
+	If lower(VTran)='create' Then
+	Begin
+
+		INSERT INTO KBSourceTypeMst(SOURCETYPE_NAME,Description,CreatedBy,CreatedDate,HasNlegsNMachine,Input,IsMetricAdded,PrimaryKeyColumns
+		,CorrelationKeyColumns,TIMEZONEID,DataFormat,CollectionName ,MainSeparator,SubSeparator,DuplicateKeys
+		,CallEndIdentitifer,SourceType,SOURCEURL,ENTITYIDENTIFIER,Alias,IsActive,SpokeType,CUSTOMERIDENTIFIER,ENTITYIDENTIFIER_service,sourceguid
+		,masterspokeid,spokeplaceholders,dataseperator,IsEntity,IsEntityType)
+		SELECT SpokeName, SpokeDescription,CreatedBy,VActiondate,HASNLEGSNMACHINE,VMQTTTopic,VIsMetricAdded,PrimaryKey,PrimaryKey
+		,TIMEZONEID,DataFormat, VMQTTUsername,MainSeparator,SubSeparator,PrimaryKey,NULL,SourceType,SOURCEURL,CUSTOMERIDENTIFIER
+		,Replace(SpokeName,' ',''),'1',SpokeType,CUSTOMERIDENTIFIER,entityidentitfier,sourceguid,masterspokeid,VMQTTPassword,VMQTTURL,vIsEntity,vIsEntityType
+		FROM  
+		InputData a;
+ 
+		VSourcetypeid:=(Select Currval(pg_get_serial_sequence('kbsourcetypemst','sourcetype_id')));
+		VLicenseKey:=(Select LicenseKeyId from KBLicenseDetails 
+							where Customerid=(Select customerid from kbusercustomermapping where UserID=VCreated_by limit 1) limit 1);
+		/* Inserting into the License details table the license key along with the sources that have been licensed */
+	 
+		Insert into KBSpokeLicenseDetails(LicenseKeyId,CustomerId,LocationId,CustomerName,SpokeName,Status,CreatedBy,ModifiedBy,SpokeID)
+		Select VLicenseKey LicenseKey, 1 CustomerID, 1 LocationID, 'Default' CustomerName,SpokeName,'1' "Status",1,1,Sources.SOURCETYPE_ID
+		From InputData Input 
+		Left Join KBSourceTypeMst Sources on Input.SpokeName=Sources.SOURCETYPE_NAME;
+	 
+		Insert into KBSpokeLicenseDetails(LicenseKeyId,CustomerId,LocationId,CustomerName,SpokeName,Status,CreatedBy,ModifiedBy,SpokeID)
+		Select VLicenseKey LicenseKey,  cust.CustomerID, 1 LocationID, NULL CustomerName,SpokeName,'1' "Status",1,1,Sources.SOURCETYPE_ID
+		From InputData Input 
+		Left Join KBSourceTypeMst Sources on Input.SpokeName=Sources.SOURCETYPE_NAME
+		Left join KBUserCustomerMapping cust on UserID=VCreated_By;
+		
+			
+		/* Inserting the metric details into the temporary table used in insertion  into the KBMetricmst and the KBMeasuremst tables */ 
+		 
+		Insert into InputMetricData(Sourceid,MetricName,MetricDataType,IsRequired,FORMULA,IsType,METRICALIAS,ConstantValue,IsCustomerIdentifier,IsPrimaryKey,EntitydefId
+		,EntityMetric,RuleType,RuleDelimeter,isreasonablecheck,xpath)
+		select  VSourcetypeid
+		,imetrics->'Metric'->>'NAME'
+		,imetrics->'Metric'->>'DATATYPE'
+		,cast(imetrics->'Metric'->>'IsRequired' as bit)
+		,imetrics->'Metric'->>'FormulaId'
+		,imetrics->'Metric'->>'IsType'
+		,case when imetrics->'Metric'->>'MetricAlias'='' then NULL else imetrics->'Metric'->>'MetricAlias' end metricalias
+		,imetrics->'Metric'->>'ConstantValue'
+		,Cast(imetrics->'Metric'->>'CUSTOMERIDENTIFIER'  as bit)
+		,Cast(imetrics->'Metric'->>'PRIMARYKEY' as bit)
+		,Cast(imetrics->'Metric'->>'ENTITYDEFID' as bigint)
+		,imetrics->'Metric'->>'ENTITYMETRIC'
+		,imetrics->'Metric'->>'Type'
+		,imetrics->'Metric'->>'Delimiter'
+		,Cast(imetrics->'Metric'->>'IsReasonablecheck'  as bit)
+		,imetrics->'Metric'->>'Path'
+		FROM 
+		(
+			Select json_array_elements(imetric) as imetrics
+			From
+			(
+			select ivalue->'SPOKE'-> 'METRICS'->'METRIC' as imetric
+			from temps limit 1
+			)a
+		)mets;	
+
+		Update InputMetricData set IsRequired='1' where IsPrimaryKey='1';
+
+		VIsFormulaexists:=(select count(1) from InputMetricData where cast(FORMULA as smallint)>0 and cast(FORMULA as smallint) in(1,3,4,5));
+		
+		--UPdating InputMetricData with Datatype Based on DataTypeAlias---
+
+		Update InputMetricData set MetricDataTypeName=Datatypes.DataTypeName
+		from  
+		KBMasterDataTypes Datatypes
+		where Datatypes.DataTypeAlias=InputMetricData.MetricDataType;
+
+		Insert into InputMetricRulesData(Sourceid, MetricName,RuleID,Value,Priority,TransformActualDataType,TransformationDataTypeAlias)
+		select spokeid,MetricName,RuleID,TE,priority,TransformActualDataType,TransformationDataTypeAlias
+		from
+		(
+		select  VSourcetypeid spokeid
+			,imetrics->'Metric'->>'NAME' MetricName
+			,cast(-100 as int) RuleID
+			,imetrics->'Metric'->>'TransformExpression' TE
+			,cast(NULL  as smallint)priority
+			,imetrics->'Metric'->>'TransformActualDataType' TransformActualDataType
+			,imetrics->'Metric'->>'TransformDataType' TransformationDataTypeAlias
+			FROM 
+			(
+			Select json_array_elements(imetric) as imetrics
+			From
+			(
+			select ivalue->'SPOKE'-> 'METRICS'->'METRIC' as imetric
+			from temps limit 1
+			)a
+			)mets
+		)INPUTS
+		where INPUTs.TE is not null ;
+
+		Insert into KBMetricMst(SOURCE_ID,METRICNAME,TEMPLATE_ID,METRICDATATYPE,CREATEDBY,ModifiedBy,AGG_FORMULA,IsType,METRICALIAS,ConstantValue,IscustomerIdentifier,IsPrimaryKey
+		,RuleType,RuleDelimeter,IsReasonableCheck)
+		select distinct VSourcetypeid,MetricName,1 "Template",MetricDataTypeName,VCreated_By,VCreated_By,FORMULA,IsType
+		,METRICALIAS
+		,ConstantValue,IsCustomerIdentifier
+		,IsPrimaryKey,RuleType,RuleDelimeter,isreasonablecheck
+		FROM  InputMetricData 
+		Union
+		select distinct A.Sourceid,A.MetricName||'Fuzzy',1 "Template",MetricDataTypeName,VCreated_By,VCreated_By,FORMULA,IsType,METRICALIAS
+		,ConstantValue,IsCustomerIdentifier,IsPrimaryKey,RuleType,RuleDelimeter,isreasonablecheck
+		FROM  InputMetricData  A
+		Join InputMetricRulesData B on A.MetricName=B.MetricName
+		where B.Metricname is not null
+		;
+
+		---------------Updating the @InputMetricData Temp Table with Metric Ids------------------
+
+		Update InputMetricData set MetricId=B.METRIC_ID
+		from
+		KBMetricMst B 
+		where InputMetricData.Sourceid=B.SOURCE_ID
+		and InputMetricData.MetricName=B.METRICNAME and B.TEMPLATE_ID=1;
+
+		Update  InputMetricRulesData set MetricId=B.METRIC_ID
+		from   
+		KBMetricMst B 
+		where InputMetricRulesData.Sourceid=B.SOURCE_ID
+		and InputMetricRulesData.MetricName=B.METRICNAME and B.TEMPLATE_ID=1;
+
+		/* Inserting the Fuzzy rules created on a metric */
+	 
+	 
+		Insert into KBMetricRules(TEMPLATE_ID,METRIC_ID,RULEID,SOURCEID,VALUE,PRIORITY,ISACTIVE,Torder,TransformationDataType,TransformationDataTypeAlias,CREATEDBY)
+		Select 1 TemplateID, MetricId,RuleID,VSourcetypeid,Value,Priority,'1' IsActive, RecordID,TransformActualDataType,TransformationDataTypeAlias,Vcreated_by CreatedBy
+		From
+		InputMetricRulesData;
+
+		Insert into KBMeasureMst(SOURCE_ID,MEASURE_NAME,MEASURE_DESC,MEASUREUNIT_ID,FORMULATITLE,FORMULAMEASURE,FORMULA_CHK,MEASURE_MINMAX,
+		TEMPLATE_ID,CREATEDBY,CREATEDDATE,IsActive)
+		select distinct VSourcetypeid
+		,MetricName||'_Measure'
+		,MetricName||'_Measure'
+		,DTypes.DaTaTypeID
+		,NULL
+		,NULL
+		,cast(NULL as smallint)
+		,cast(NULL as smallint)
+		,1
+		,VCreated_By
+		,VActiondate
+		,0
+		FROM  InputMetricData A
+		Join KBMasterDataTypes DTypes on A.MetricDataType= DTypes.DataTypeAlias
+		where cast(Formula as int) Not in (9,10)
+		/* Inserting the Fuzzy Metrics into Measure mst. 24072014. Azeem.*/
+		Union
+		select distinct A.Sourceid
+		,A.MetricName||'Fuzzy'||'_Measure'
+		,A.MetricName||'Fuzzy'||'_Measure'
+		,DTypes.DaTaTypeID
+		,NULL
+		,NULL
+		,cast(NULL as smallint)
+		,cast(NULL as smallint)
+		,1
+		,VCreated_By
+		,VActiondate
+		,0
+		FROM  InputMetricData  A
+		Join InputMetricRulesData B on A.MetricName=B.MetricName
+		Join KBMasterDataTypes DTypes on A.MetricDataType= DTypes.DataTypeAlias;
+
+		/* Inserting into the Measuremst table the Metrics that have got rules defined*/
+
+		Insert into KBMeasureMst(SOURCE_ID,MEASURE_NAME,MEASURE_DESC,MEASUREUNIT_ID,FORMULATITLE,FORMULAMEASURE,FORMULA_CHK,MEASURE_MINMAX,
+		TEMPLATE_ID,CREATEDBY,CREATEDDATE,IsActive)
+		select distinct  VSourcetypeid
+		,MetricName ||'_Measure'
+		,MetricName ||'_Measure'
+		,DTypes.DaTaTypeID
+		,A.Formulatitle
+		,A.FormulaMeasure
+		,case when A.Formulatitle is not null or A.Formulatitle!='' then 1 else NULL END
+		,cast(NULL as int)
+		,1
+		,VCreated_By
+		,VActiondate
+		,1
+		FROM  
+		(
+		select  VSourcetypeid Sourceid
+		,imetrics->'Metric'->>'NAME' MetricName
+		,imetrics->'Metric'->>'NewFormula'  Formulatitle
+		,imetrics->'Metric'->>'ServiceFormula' FormulaMeasure
+		,imetrics->'Metric'->>'DATATYPE'	MetricDataType
+		,cast(imetrics->'Metric'->>'FormulaId' as int)	Formula
+		FROM  
+		(
+			Select json_array_elements(imetric) as imetrics
+			From
+			(
+			select ivalue->'SPOKE'-> 'METRICS'->'METRIC' as imetric
+			from temps limit 1
+			)a
+			)mets
+		)A
+		Join KBMasterDataTypes DTypes on A.MetricDataType= DTypes.DataTypeAlias
+		where Formula in (9,10);
+
+		---------------Updateing the @InputMetricData Temp Table with Measure Ids------------------
+
+		Update  InputMetricData set MeasureId=B.MEASURE_ID
+		from 
+		KBMeasureMst B 
+		where InputMetricData.Sourceid=B.SOURCE_ID
+		and InputMetricData.MetricName=B.MEASURE_NAME and B.TEMPLATE_ID=1;
+
+		/* Inserting the spoke configuration information like the NLeg, Metricorder, Alias, Constant value */ 
+	  
+		Insert into KBSpokeConfigurations(SOURCETYPEID,NLEG,METRICNAME,METRICORDER,AGG_FORMULA,IsActive,IsType,METRICALIAS,ConstantValue,IsEntityIdentifier,IsPrimaryKey
+		,Buffer1,CreatedBy,EntitydefID,EntityAttribute,xpath)
+		select  VSourcetypeid
+		,1
+		,MetricName
+		,RecordID
+		,FORMULA
+		,case when metricname ='vgeofencestatus' then cast('0' as bit) else Cast('1' as bit) End isactive
+		,IsType
+		,METRICALIAS
+		,ConstantValue
+		,IsCustomerIdentifier
+		,IsPrimaryKey
+		,NULL
+		,VCreated_By
+		,EntitydefId
+		,EntityMetric
+		,xpath
+		FROM  InputMetricData A
+		where NOT Exists(select 1 from KBSpokeConfigurations B where a.MetricName=B.METRICNAME 
+				and A.Sourceid=B.SOURCETYPEID and SOURCETYPEID=VSourcetypeid)
+		
+				;
+
+		/* Added Inserting into Dimensions  table where MetricDataType IS Datetime on 19th FEB 2013 BY RAJESH*/
+
+		Insert into kb_dim_Sourcelink (ID,SOURCEID,METRICID,METRICNAME,DIM_tbl,DIMCol,SurrogateCol,attributename,CreatedBy) 
+		select 1,VSourcetypeid,Metricid,MetricName,'DIM_TimeDimension','AlternateDate','TimeID','TimeID',VCreated_By
+		from InputMetricData  
+		where Lower(MetricDataTypeName)='datetime';
+		 
+		/* Added Inserting into Dimensions  table where MetricDataType IS Location related BY RAJESH*/ 
+		/* Added Inserting into Dimensions  table where MetricDataType IS Location related BY RAJESH*/ 
+		 
+		Insert into kb_dim_Sourcelink (ID,SOURCEID,METRICID,METRICNAME,DIM_tbl,DIMCol,SurrogateCol,attributename,CreatedBy) 
+		select 2,VSourcetypeid,Metricid,MetricName,'DIM_LocationDimension','LocationID','LocationID','LocationID',VCreated_by
+		from InputMetricData  
+		where lower(MetricDataType) in('latitude' ,'longitude','city','country','state name','post code');
+
+		/* Updating the Calltime metrics */
+
+		Insert into TimeBased(MetricName)
+		select  MetricName 
+		from InputMetricData 
+		where  Lower(MetricDataTypeName)='datetime';
+
+		VCnt:=(select count(MetricName) from TimeBased);
+
+		while(VCntr<=VCnt) Loop
+		
+		VMName:=(select MetricName from TimeBased where ID=VCntr);
+		 
+		VTempstring:= VTempstring||VMName||';';
+		VCntr:= VCntr||1;
+		
+		End Loop;
+
+		if exists(select 1 from InputMetricData where Lower(MetricDataTypeName)='datetime') Then
+		begin
+		Update KBSourceTypeMst set  CALLTIMEMETRICS=VTempstring where SOURCETYPE_NAME=(select distinct SpokeName from InputData);
+		END;
+		End if;
+
+		/* Inserting the spoke information and the metrics created data */
+
+--return(select Array_to_json(array_Agg(row_to_json(a))) from (select * from InputMetricData)a);
+	 
+		insert into KBSpokewiseMetricsInformation(SourceTypeId,MetricID,ISRequired,MetricDataType,CREATEDBY,ModifiedBy)--,AGG_Formula)
+		select distinct  SOURCE_ID,METRIC_ID,metricdata.IsRequired,Metricdata.MetricDataType,VCreated_by,VCreated_by --,FORMULA
+		from KBMetricMst Metrics
+		Join InputMetricData MetricData on Metrics.SOURCE_ID=MetricData.Sourceid and Metrics.METRICNAME=MetricData.MetricName
+		where SOURCE_ID=VSourcetypeid and TEMPLATE_ID=1 
+
+		;
+
+		/* Inserting the source metric information in the below table. this will be used by the Correlation process */
+		
+		insert into CBSourceInfo(SourceID,MSTTableName,MSTTableColumns,MSTTableColumnDataType,MetricId,SourceField,CreatedBy)
+		select VSourcetypeid,'DBKPIFactMSt'||VSourceTypename,MetricData.MetricName,Metricdata.MetricDataType,MetricData.MetricId
+		,Coalesce(MetricData.METRICALIAS,MetricData.MetricName),VCreated_by
+		from InputMetricData MetricData 
+		Union
+		select SOURCEID,'DBKPIFactMSt'||VSourceTypename,'RECORDDATEUTC' MetricName, 'Datetime' MetricDataType,NULL,NULL,VCreated_by
+		from InputMetricData MetricData 
+		;
+
+			
+		/*concatenating the metrics whose datatype is Lat long*/
+		 
+
+		insert into CBSourceInfo(SourceID,MSTTableName,MSTTableColumns,MSTTableColumnDataType,MetricId,SourceField,CreatedBy)
+		Select VSourcetypeid, TableName, Metricname MetricName,MetricDataType,NULL,NULL,VCreated_By
+		From
+		(
+		Select distinct SOURCEID,'DBKPIFactMSt'||VSourceTypename TableName,
+		(
+			Select String_agg(metrics,'') 
+			from	
+			(
+			Select '#CWT02#'||B.MetricName   metrics
+			from 
+			InputMetricData B
+			where lower(B.MetricDataType)='latitude' or lower(B.MetricDataType)='longitude' and A.Sourceid=B.Sourceid
+			--For xml path('')
+			) as mets
+			
+		)MetricName
+		,'LatitudeLongitude' MetricDataType
+		from InputMetricData A
+		where MetricDataType='Latitude' or MetricDataType='Longitude'
+		) S;
+
+		
+	  
+		/* Inserting into the table KBSpokeTypeSourceMappings */
+
+		Insert into  KBSpokeTypeSourceMappings(SourceTypeID,SpokeTypeID,CreatedBy)
+		Select  VSourcetypeid SourceTypeID, cast(substring(Split.item ,1,1) as int)SpokeTypeID,VCreated_By
+		From 
+		InputData Inputs
+		Join (
+			select item
+			from
+			(
+			select regexp_split_to_table(VHasNLegsNMachine,',') as item
+			)a
+			where item is not null and item!=''
+		) Split on 1=1
+		
+		;
+
+		/* Inserting into Spoke identifier mst table */
+
+		Insert into KBSpokeIndetifierMst(SourceTypeID,IdentifierNames,IdentifierMetrics,IdentifierValues,CreatedBy,CreatedDate)
+		Select VSourcetypeid,'MetricPosition', RecordID-1, ConstantValue,VCreated_By ,VActiondate
+		from InputMetricData
+		where ConstantValue is not null and ConstantValue!='';
+
+		
+
+		if (select SourceType from InputData  A)=1 then
+		Begin 
+		VSource:=(select cast(ivalue->'SPOKE'->'SourceURL'->> 'Source' as smallint) from temps limit 1);
+
+		/* Inserting the url's master information. */
+		if(VSource=1)  Then
+		BEGIN
+		
+			INSERT INTO KBSOURCEURLMST(SOURCEID,URL,USERNAME,password,DATA_RETRIEVAL_TIME,DATA_RETRIEVAL_UOM,ISACTIVE,DataSourceID,ServerName
+			,DatabaseName,DBQuery,TableQuery,DBAuthType,DATABASETYPE,InitialPullType,InitialPullFromDate,InitialPullToDate,IntialPullTimePeriod
+			,InitialPullTimePeriodUOM,DATA_FETCH_TYPE,ParameterAppender,HasPaging,PagingColumn,NoofRecords,CREATEDBY,DBIDColumn,DBIDColumnDataType,concatenation_operator
+			,concatenation_rule,uploadtype)
+			SELECT VSourcetypeid
+			,ivalue->'SPOKE'->'SourceURL'->> 'URL' 
+			,ivalue->'SPOKE'->'SourceURL'->> 'DBUsername' 
+			,ivalue->'SPOKE'->'SourceURL'->> 'DBPassword' 
+			,ivalue->'SPOKE'->'SourceURL'->> 'TIMEPERIOD' 
+			,ivalue->'SPOKE'->'SourceURL'->> 'TIMEPERIODUOM' 
+			,'1'
+			,cast(ivalue->'SPOKE'->'SourceURL'->> 'Source' as smallint)
+			,ivalue->'SPOKE'->'SourceURL'->> 'DBServerName' 
+			,ivalue->'SPOKE'->'SourceURL'->> 'Database' 	
+			,ivalue->'SPOKE'->'SourceURL'->> 'DBQuery' 	
+			,ivalue->'SPOKE'->'SourceURL'->> 'TableQuery' 	
+			,cast(ivalue->'SPOKE'->'SourceURL'->> 'DBAuthType' as smallint) 		
+			,cast(ivalue->'SPOKE'->'SourceURL'->> 'SelectedDatabaseType' as smallint) 
+			,cast(ivalue->'SPOKE'->'SourceURL'->> 'InitialPullType' as smallint)
+            
+			,case when cast(ivalue->'SPOKE'->'SourceURL'->>'InitialPullFromDate' as  timestamp)  is not null						
+						Then Cast(ivalue->'SPOKE'->'SourceURL'->>'InitialPullFromDate' as  timestamp)
+						Else Cast('1900-01-01' as Timestamp) End
+			,case when cast(ivalue->'SPOKE'->'SourceURL'->>'InitialPullToDate' as  timestamp) is not null 					
+					Then Cast(ivalue->'SPOKE'->'SourceURL'->>'InitialPullToDate' as  timestamp)
+					Else Cast('1900-01-01' as Timestamp) End
+			,cast(ivalue->'SPOKE'->'SourceURL'->> 'InitialPullTimePeriod' as smallint) 
+			,ivalue->'SPOKE'->'SourceURL'->> 'InitialPullTimePeriodUOM' 
+			,'CurrentData'
+			,ivalue->'SPOKE'->'SourceURL'->> 'ParameterAppender' 
+			,cast(ivalue->'SPOKE'->'SourceURL'->> 'HasPaging' as smallint) 
+			,ivalue->'SPOKE'->'SourceURL'->> 'PagingColumn' 
+			,cast(ivalue->'SPOKE'->'SourceURL'->> 'NoofRecords' as smallint) 
+			,VCreated_By
+			,ivalue->'SPOKE'->'SourceURL'->> 'DBIDColumn' 
+			,ivalue->'SPOKE'->'SourceURL'->> 'DBIDColumnDataType' 
+			,ivalue->'SPOKE'->'SourceURL'->> 'ConcatenationOperator' ConcatenationOperator
+			,ivalue->'SPOKE'->'SourceURL'->> 'ConcatenationRule' ConcatenationRule 
+			,cast(ivalue->'SPOKE'->'SourceURL'->> 'EXACTTIME' as smallint  )EXACTTIME
+			 
+			From
+			temps limit 1;
+
+			update kbsourceurlmst
+			set databasetype=2
+			where sourceid=VSourcetypeid and datasourceid=9;
+
+	  	 	Begin 
+	  			
+				VQuery:=(select ivalue->'SPOKE'->'SourceURL'->'ImportSettingsDetails' ->>'TableQuery'
+				From
+				temps limit 1);
+				insert into queries(Query)
+				Select item 
+				from 
+				(select regexp_split_to_table(VQuery,';') item)a;
+				VQuery=(Select query from queries where id=1);
+				VQuery_MaxRecord=(Select query from queries where id=2);
+
+				if (select cast(ivalue->'SPOKE'->'SourceURL'->'ImportSettingsDetails' ->>'Source' as smallint) From temps limit 1) is not null then
+				begin
+               
+				Insert into KBSOURCEURLMST(SOURCEID,USERNAME,"password",DATA_RETRIEVAL_TIME,DATA_RETRIEVAL_UOM,DataSourceID,DATABASETYPE,ServerName,DBAuthType,DatabaseName
+				,DBQuery,TableQuery,InitialPullType,IntialPullTimePeriod,InitialPullTimePeriodUOM,DATA_FETCH_TYPE,Parameter,HasPaging,PagingColumn,NoofRecords,CREATEDBY
+				,DBIDColumn,DBIDColumnDataType,Query_Maxrecord,URL,IsRestBased
+				,PortNumber,Organisation,"group",isactive)
+				select VSourcetypeid
+
+				,case when cast(ivalue->'SPOKE'->'SourceURL'->'ImportSettingsDetails'->>'DBUsername' as varchar(255)) IS not null 
+						then cast(ivalue->'SPOKE'->'SourceURL'->'ImportSettingsDetails'->>'DBUsername' as varchar(255))
+				when cast(ivalue->'SPOKE'->'SourceURL'->'ImportSettingsDetails'->>'WSUSERNAME' as varchar(255)) is not null 
+						then cast(ivalue->'SPOKE'->'SourceURL'->'ImportSettingsDetails'->>'WSUSERNAME' as varchar(255))
+				Else cast(ivalue->'SPOKE'->'SourceURL'->'ImportSettingsDetails'->>'LDAPUSERNAME'  as varchar(255))
+				End Username
+
+			   	,Case when cast(ivalue->'SPOKE'->'SourceURL'->'ImportSettingsDetails'->>'DBPassword' as varchar(255)) IS not null 
+					Then cast(ivalue->'SPOKE'->'SourceURL'->'ImportSettingsDetails'->>'DBPassword' as varchar(255))
+				when Cast(ivalue->'SPOKE'->'SourceURL'->'ImportSettingsDetails'->>'WSPASSWORD' as varchar(255)) IS not null 
+					Then Cast(ivalue->'SPOKE'->'SourceURL'->'ImportSettingsDetails'->>'WSPASSWORD' as varchar(255)) 
+				When Cast(ivalue->'SPOKE'->'SourceURL'->'ImportSettingsDetails'->>'LDAPPASSWORD' as varchar(255)) is not null 
+					Then Cast(ivalue->'SPOKE'->'SourceURL'->'ImportSettingsDetails'->>'LDAPPASSWORD' as varchar(255))
+				Else Cast(ivalue->'SPOKE'->'SourceURL'->'ImportSettingsDetails'->>'Password' as varchar(255)) 
+				End "Password"
+
+				,ivalue->'SPOKE'->'SourceURL'->>'TIMEPERIOD' 
+				
+				,ivalue->'SPOKE'->'SourceURL'->>'TIMEPERIODUOM' 
+				
+				,cast(ivalue->'SPOKE'->'SourceURL'->'ImportSettingsDetails' ->>'Source' as smallint)
+				
+				,cast(ivalue->'SPOKE'->'SourceURL'->'ImportSettingsDetails' ->>'SelectedDatabaseType' as smallint)
+				
+				,case when cast(ivalue->'SPOKE'->'SourceURL'->'ImportSettingsDetails' ->>'Source' as smallint) =3 
+						then ivalue->'SPOKE'->'SourceURL'->'ImportSettingsDetails' ->>'LDAPServerName' 
+					else ivalue->'SPOKE'->'SourceURL'->'ImportSettingsDetails' ->>'DBServerName' End as DBServerName
+					
+				,cast(ivalue->'SPOKE'->'SourceURL'->'ImportSettingsDetails' ->>'DBAuthType' as smallint)
+				,ivalue->'SPOKE'->'SourceURL'->'ImportSettingsDetails' ->>'Database'
+				,ivalue->'SPOKE'->'SourceURL'->'ImportSettingsDetails' ->>'DBQuery'
+				,VQuery tablequery
+				,cast(ivalue->'SPOKE'->'SourceURL'->>'InitialPullType'  as smallint)
+				,cast(ivalue->'SPOKE'->'SourceURL'->>'InitialPullTimePeriod'  as smallint)
+				,ivalue->'SPOKE'->'SourceURL'->>'InitialPullTimePeriodUOM'
+				,'HistoricalData'
+				,ivalue->'SPOKE'->'SourceURL'->'ImportSettingsDetails' ->>'Parameter'
+				,cast(ivalue->'SPOKE'->'SourceURL'->'ImportSettingsDetails' ->>'HasPaging' as smallint)  
+				,ivalue->'SPOKE'->'SourceURL'->'ImportSettingsDetails' ->>'PagingColumn'  
+				,cast(ivalue->'SPOKE'->'SourceURL'->'ImportSettingsDetails' ->>'NoofRecords' as smallint)  
+				,VCreated_By
+				,ivalue->'SPOKE'->'SourceURL'->'ImportSettingsDetails' ->>'DBIDColumn'
+				,ivalue->'SPOKE'->'SourceURL'->'ImportSettingsDetails' ->>'DBIDColumnDataType'  
+				,VQuery_MaxRecord Query_maxrecord
+				,ivalue->'SPOKE'->'SourceURL'->'ImportSettingsDetails' ->>'URL'  
+				,cast(ivalue->'SPOKE'->'SourceURL'->'ImportSettingsDetails' ->>'IsRestBased' as bit)  
+				,case when (
+(ivalue->'SPOKE'->'SourceURL'->>'LDAPPortNumber') !='' and cast(ivalue->'SPOKE'->'SourceURL'->>'LDAPPortNumber' as int) is not null )
+then cast(ivalue->'SPOKE'->'SourceURL'->>'LDAPPortNumber' as int) else null end
+				,ivalue->'SPOKE'->'SourceURL'->'ImportSettingsDetails' ->>'LDAPOrg'
+				,ivalue->'SPOKE'->'SourceURL'->'ImportSettingsDetails' ->>'LDAPGroup'
+                ,'1'
+				From
+				temps limit 1;
+				end;
+				end if;
+				 
+			End;
+     		END;
+            
+elseif (VSource=10) then
+begin 
+INSERT INTO KBSOURCEURLMST(SOURCEID,URL,USERNAME,password,DATA_RETRIEVAL_TIME,DATA_RETRIEVAL_UOM,ISACTIVE,DataSourceID,ServerName
+			,DatabaseName,DBQuery,TableQuery,DBAuthType,DATABASETYPE,InitialPullType,InitialPullFromDate,InitialPullToDate,IntialPullTimePeriod
+			,InitialPullTimePeriodUOM,DATA_FETCH_TYPE,ParameterAppender,HasPaging,PagingColumn,NoofRecords,CREATEDBY,DBIDColumn,DBIDColumnDataType,concatenation_operator
+			,concatenation_rule,uploadtype,wsdlclassname)
+			SELECT VSourcetypeid
+			,ivalue->'SPOKE'->'SourceURL'->> 'URL' 
+			,ivalue->'SPOKE'->'SourceURL'->> 'WSUSERNAME' 
+			,ivalue->'SPOKE'->'SourceURL'->> 'WSPASSWORD' 
+			,ivalue->'SPOKE'->'SourceURL'->> 'TIMEPERIOD' 
+			,ivalue->'SPOKE'->'SourceURL'->> 'TIMEPERIODUOM' 
+			,'1'
+			,cast(ivalue->'SPOKE'->'SourceURL'->> 'Source' as smallint)
+			,ivalue->'SPOKE'->'SourceURL'->> 'DBServerName' 
+			,ivalue->'SPOKE'->'SourceURL'->> 'Database' 	
+			,ivalue->'SPOKE'->'SourceURL'->> 'DBQuery' 	
+			,ivalue->'SPOKE'->'SourceURL'->> 'TableQuery' 	
+			,cast(ivalue->'SPOKE'->'SourceURL'->> 'DBAuthType' as smallint) 		
+			,cast(ivalue->'SPOKE'->'SourceURL'->> 'SelectedDatabaseType' as smallint) 
+			,cast(ivalue->'SPOKE'->'SourceURL'->> 'InitialPullType' as smallint) 
+			,case when cast(ivalue->'SPOKE'->'SourceURL'->>'InitialPullFromDate' as  timestamp)  is not null						
+						Then Cast(ivalue->'SPOKE'->'SourceURL'->>'InitialPullFromDate' as  timestamp)
+						Else Cast('1900-01-01' as Timestamp) End
+			,case when cast(ivalue->'SPOKE'->'SourceURL'->>'InitialPullToDate' as  timestamp) is not null 					
+					Then Cast(ivalue->'SPOKE'->'SourceURL'->>'InitialPullToDate' as  timestamp)
+					Else Cast('1900-01-01' as Timestamp) End
+			,cast(ivalue->'SPOKE'->'SourceURL'->> 'InitialPullTimePeriod' as smallint) 
+			,ivalue->'SPOKE'->'SourceURL'->> 'InitialPullTimePeriodUOM' 
+			,'CurrentData'
+			,ivalue->'SPOKE'->'SourceURL'->> 'ParameterAppender' 
+			,cast(ivalue->'SPOKE'->'SourceURL'->> 'HasPaging' as smallint) 
+			,ivalue->'SPOKE'->'SourceURL'->> 'PagingColumn' 
+			,cast(ivalue->'SPOKE'->'SourceURL'->> 'NoofRecords' as smallint) 
+			,VCreated_By
+			,ivalue->'SPOKE'->'SourceURL'->> 'DBIDColumn' 
+			,ivalue->'SPOKE'->'SourceURL'->> 'DBIDColumnDataType' 
+			,ivalue->'SPOKE'->'SourceURL'->> 'ConcatenationOperator' ConcatenationOperator
+			,ivalue->'SPOKE'->'SourceURL'->> 'ConcatenationRule' ConcatenationRule 
+			,cast(ivalue->'SPOKE'->'SourceURL'->> 'EXACTTIME' as smallint  )EXACTTIME
+			 ,ivalue->'SPOKE'->'SourceURL'->> 'SelectedWSDLClassName'
+			From
+			temps limit 1;
+
+			update kbsourceurlmst
+			set databasetype=2
+			where sourceid=VSourcetypeid and datasourceid=9;
+
+	  	 	Begin 
+	  			
+				VQuery:=(select ivalue->'SPOKE'->'SourceURL'->'ImportSettingsDetails' ->>'TableQuery'
+				From
+				temps limit 1);
+				insert into queries(Query)
+				Select item 
+				from 
+				(select regexp_split_to_table(VQuery,';') item)a;
+				VQuery=(Select query from queries where id=1);
+				VQuery_MaxRecord=(Select query from queries where id=2);
+
+				if (select cast(ivalue->'SPOKE'->'SourceURL'->'ImportSettingsDetails' ->>'Source' as smallint) 
+                    From temps limit 1) is not null   then
+				begin
+               
+				Insert into KBSOURCEURLMST(SOURCEID,USERNAME,"password",DATA_RETRIEVAL_TIME,DATA_RETRIEVAL_UOM,DataSourceID,DATABASETYPE,ServerName,DBAuthType,DatabaseName
+				,DBQuery,TableQuery,InitialPullType,IntialPullTimePeriod,InitialPullTimePeriodUOM,DATA_FETCH_TYPE,Parameter,HasPaging,PagingColumn,NoofRecords,CREATEDBY
+				,DBIDColumn,DBIDColumnDataType,Query_Maxrecord,URL,IsRestBased
+				,PortNumber,Organisation,"group",isactive,wsdlclassname)
+				select VSourcetypeid
+
+				,case when cast(ivalue->'SPOKE'->'SourceURL'->'ImportSettingsDetails'->>'DBUsername' as varchar(255)) IS not null 
+						then cast(ivalue->'SPOKE'->'SourceURL'->'ImportSettingsDetails'->>'DBUsername' as varchar(255))
+				when cast(ivalue->'SPOKE'->'SourceURL'->'ImportSettingsDetails'->>'WSUSERNAME' as varchar(255)) is not null 
+						then cast(ivalue->'SPOKE'->'SourceURL'->'ImportSettingsDetails'->>'WSUSERNAME' as varchar(255))
+				Else cast(ivalue->'SPOKE'->'SourceURL'->'ImportSettingsDetails'->>'LDAPUSERNAME'  as varchar(255))
+				End Username
+
+			   	,Case when cast(ivalue->'SPOKE'->'SourceURL'->'ImportSettingsDetails'->>'DBPassword' as varchar(255)) IS not null 
+					Then cast(ivalue->'SPOKE'->'SourceURL'->'ImportSettingsDetails'->>'DBPassword' as varchar(255))
+				when Cast(ivalue->'SPOKE'->'SourceURL'->'ImportSettingsDetails'->>'WSPASSWORD' as varchar(255)) IS not null 
+					Then Cast(ivalue->'SPOKE'->'SourceURL'->'ImportSettingsDetails'->>'WSPASSWORD' as varchar(255)) 
+				When Cast(ivalue->'SPOKE'->'SourceURL'->'ImportSettingsDetails'->>'LDAPPASSWORD' as varchar(255)) is not null 
+					Then Cast(ivalue->'SPOKE'->'SourceURL'->'ImportSettingsDetails'->>'LDAPPASSWORD' as varchar(255))
+				Else Cast(ivalue->'SPOKE'->'SourceURL'->'ImportSettingsDetails'->>'Password' as varchar(255)) 
+				End "Password"
+
+				,ivalue->'SPOKE'->'SourceURL'->>'TIMEPERIOD' 
+				
+				,ivalue->'SPOKE'->'SourceURL'->>'TIMEPERIODUOM' 
+				
+				,cast(ivalue->'SPOKE'->'SourceURL'->'ImportSettingsDetails' ->>'Source' as smallint)
+				
+				,cast(ivalue->'SPOKE'->'SourceURL'->'ImportSettingsDetails' ->>'SelectedDatabaseType' as smallint)
+				
+				,case when cast(ivalue->'SPOKE'->'SourceURL'->'ImportSettingsDetails' ->>'Source' as smallint) =3 
+						then ivalue->'SPOKE'->'SourceURL'->'ImportSettingsDetails' ->>'LDAPServerName' 
+					else ivalue->'SPOKE'->'SourceURL'->'ImportSettingsDetails' ->>'DBServerName' End as DBServerName
+					
+				,cast(ivalue->'SPOKE'->'SourceURL'->'ImportSettingsDetails' ->>'DBAuthType' as smallint)
+				,ivalue->'SPOKE'->'SourceURL'->'ImportSettingsDetails' ->>'Database'
+				,ivalue->'SPOKE'->'SourceURL'->'ImportSettingsDetails' ->>'DBQuery'
+				,VQuery tablequery
+				,cast(ivalue->'SPOKE'->'SourceURL'->>'InitialPullType'  as smallint)
+				,cast(ivalue->'SPOKE'->'SourceURL'->>'InitialPullTimePeriod'  as smallint)
+				,ivalue->'SPOKE'->'SourceURL'->>'InitialPullTimePeriodUOM'
+				,'HistoricalData'
+				,ivalue->'SPOKE'->'SourceURL'->'ImportSettingsDetails' ->>'Parameter'
+				,cast(ivalue->'SPOKE'->'SourceURL'->'ImportSettingsDetails' ->>'HasPaging' as smallint)  
+				,ivalue->'SPOKE'->'SourceURL'->'ImportSettingsDetails' ->>'PagingColumn'  
+				,cast(ivalue->'SPOKE'->'SourceURL'->'ImportSettingsDetails' ->>'NoofRecords' as smallint)  
+				,VCreated_By
+				,ivalue->'SPOKE'->'SourceURL'->'ImportSettingsDetails' ->>'DBIDColumn'
+				,ivalue->'SPOKE'->'SourceURL'->'ImportSettingsDetails' ->>'DBIDColumnDataType'  
+				,VQuery_MaxRecord Query_maxrecord
+				,ivalue->'SPOKE'->'SourceURL'->'ImportSettingsDetails' ->>'URL'  
+				,cast(ivalue->'SPOKE'->'SourceURL'->'ImportSettingsDetails' ->>'IsRestBased' as bit)  
+				,case when (
+(ivalue->'SPOKE'->'SourceURL'->>'LDAPPortNumber') !='' and cast(ivalue->'SPOKE'->'SourceURL'->>'LDAPPortNumber' as int) is not null )
+then cast(ivalue->'SPOKE'->'SourceURL'->>'LDAPPortNumber' as int) else null end
+				,ivalue->'SPOKE'->'SourceURL'->'ImportSettingsDetails' ->>'LDAPOrg'
+				,ivalue->'SPOKE'->'SourceURL'->'ImportSettingsDetails' ->>'LDAPGroup'
+                ,'1'
+                ,ivalue->'SPOKE'->'SourceURL'->'ImportSettingsDetails' ->>'SelectedWSDLClassName'
+				From
+				temps limit 1;
+				end;
+				end if;
+				 
+			End;
+     		END;
+
+		ELSEIF(VSource=2) Then
+		BEGIN
+
+		 
+INSERT INTO KBSOURCEURLMST(SOURCEID,URL,USERNAME,PASSWORD,DATA_RETRIEVAL_TIME,DATA_RETRIEVAL_UOM,ISACTIVE,DataSourceID
+,WSDLURL,WSDLClassName,WSDLAction,IsRestBased,InitialPullType,InitialPullFromDate,InitialPullToDate,IntialPullTimePeriod,InitialPullTimePeriodUOM,DATA_FETCH_TYPE,ParameterAppender,CREATEDBY ,DBIDColumn,DBIDColumnDataType,DBAuthType, custom_authenticationtype,concatenation_operator,concatenation_rule,uploadtype)
+			SELECT VSourcetypeid
+			,ivalue->'SPOKE'->'SourceURL'->> 'URL'
+			,ivalue->'SPOKE'->'SourceURL'->>'WSUSERNAME'	
+			,ivalue->'SPOKE'->'SourceURL'->>'WSPASSWORD'	
+			,ivalue->'SPOKE'->'SourceURL'->> 'TIMEPERIOD' 
+			,ivalue->'SPOKE'->'SourceURL'->> 'TIMEPERIODUOM'
+			,'1'
+			,cast(ivalue->'SPOKE'->'SourceURL'->> 'Source' as smallint)
+			,ivalue->'SPOKE'->'SourceURL'->>'WSDLURL'	
+			,ivalue->'SPOKE'->'SourceURL'->>'SelectedWSDLClassName'	
+			,ivalue->'SPOKE'->'SourceURL'->>'SelectedWSDLAction'	
+			,cast(ivalue->'SPOKE'->'SourceURL'->>'IsRestBased' as bit)	 
+			,cast(ivalue->'SPOKE'->'SourceURL'->> 'InitialPullType' as smallint)
+			,case when cast(ivalue->'SPOKE'->'SourceURL'->>'InitialPullFromDate' as  timestamp)  is not null						
+			Then Cast(ivalue->'SPOKE'->'SourceURL'->>'InitialPullFromDate' as  timestamp)
+			Else Cast('1900-01-01' as Timestamp) End
+			,case when cast(ivalue->'SPOKE'->'SourceURL'->>'InitialPullToDate' as  timestamp) is not null 					
+			Then Cast(ivalue->'SPOKE'->'SourceURL'->>'InitialPullToDate' as  timestamp)
+			Else Cast('1900-01-01' as Timestamp) End
+			,cast(ivalue->'SPOKE'->'SourceURL'->> 'InitialPullTimePeriod' as smallint)
+			,ivalue->'SPOKE'->'SourceURL'->> 'InitialPullTimePeriodUOM'
+			,'CurrentData'
+			,ivalue->'SPOKE'->'SourceURL'->> 'ParameterAppender'
+			,VCreated_By
+			,ivalue->'SPOKE'->'SourceURL'->> 'DBIDColumn'  
+			,ivalue->'SPOKE'->'SourceURL'->> 'DBIDColumnDataType'  
+			,cast(ivalue->'SPOKE'->'SourceURL'->> 'DBAuthType' as int) DBauthtype
+			,cast(ivalue->'SPOKE'->'SourceURL'->> 'CustAuthType' as int) custom_authenticationtype
+			,ivalue->'SPOKE'->'SourceURL'->> 'ConcatenationOperator' ConcatenationOperator
+			,ivalue->'SPOKE'->'SourceURL'->> 'ConcatenationRule' ConcatenationRule  
+			,cast(ivalue->'SPOKE'->'SourceURL'->> 'EXACTTIME' as int) EXACTTIME
+			From
+			temps limit 1;
+
+				update kbsourceurlmst
+			set databasetype=2
+			where sourceid=VSourcetypeid and datasourceid=9;
+			
+			Begin 
+			  
+			  
+				VQuery:=(select ivalue->'SPOKE'->'SourceURL'->'ImportSettingsDetails' ->>'TableQuery'
+					From
+					temps limit 1
+					);
+				insert into queries(Query)
+				Select item 
+				from 
+				(select regexp_split_to_table(VQuery,';') as item)a ;
+				VQuery=(Select query from queries where id=1);
+				VQuery_MaxRecord=(Select query from queries where id=2);
+
+		
+if (select cast(ivalue->'SPOKE'->'SourceURL'->'ImportSettingsDetails' ->>'Source' as smallint) From temps limit 1) is not null then
+				begin
+
+Insert into KBSOURCEURLMST(SOURCEID,URL,USERNAME,PASSWORD,DATA_RETRIEVAL_TIME,DATA_RETRIEVAL_UOM,ISACTIVE,DataSourceID,WSDLURL,WSDLClassName,WSDLAction,IsRestBased,DATA_FETCH_TYPE,ParameterAppender,CREATEDBY,DBIDColumn,DBIDColumnDataType,DBAuthType,
+custom_authenticationtype,InitialPullType)
+select VSourcetypeid
+,case when cast(ivalue->'SPOKE'->'SourceURL'->'ImportSettingsDetails'->>'URL' as varchar(255)) IS not null 
+	then cast(ivalue->'SPOKE'->'SourceURL'->'ImportSettingsDetails'->>'URL' as varchar(255)) else null 
+end URL 
+,case when cast(ivalue->'SPOKE'->'SourceURL'->'ImportSettingsDetails'->>'WSUSERNAME' as varchar(255)) is not null 
+	then cast(ivalue->'SPOKE'->'SourceURL'->'ImportSettingsDetails'->>'WSUSERNAME' as varchar(255))
+	Else cast(ivalue->'SPOKE'->'SourceURL'->'ImportSettingsDetails'->>'LDAPUSERNAME'  as varchar(255)) 
+End Username
+,Case when cast(ivalue->'SPOKE'->'SourceURL'->'ImportSettingsDetails'->>'DBPassword' as varchar(255)) IS not null 
+	Then cast(ivalue->'SPOKE'->'SourceURL'->'ImportSettingsDetails'->>'DBPassword' as varchar(255))
+when Cast(ivalue->'SPOKE'->'SourceURL'->'ImportSettingsDetails'->>'WSPASSWORD' as varchar(255)) IS not null 
+	Then Cast(ivalue->'SPOKE'->'SourceURL'->'ImportSettingsDetails'->>'WSPASSWORD' as varchar(255)) 
+When Cast(ivalue->'SPOKE'->'SourceURL'->'ImportSettingsDetails'->>'LDAPPASSWORD' as varchar(255)) is not null 
+	Then Cast(ivalue->'SPOKE'->'SourceURL'->'ImportSettingsDetails'->>'LDAPPASSWORD' as varchar(255))
+Else Cast(ivalue->'SPOKE'->'SourceURL'->'ImportSettingsDetails'->>'Password' as varchar(255)) 
+End "Password"
+,ivalue->'SPOKE'->'SourceURL'->>'TIMEPERIOD' 
+,ivalue->'SPOKE'->'SourceURL'->>'TIMEPERIODUOM' 
+,'1'
+,cast(ivalue->'SPOKE'->'SourceURL'->'ImportSettingsDetails' ->>'Source' as smallint)
+,ivalue->'SPOKE'->'SourceURL'->'ImportSettingsDetails' ->>'WSDLURL' 
+,ivalue->'SPOKE'->'SourceURL'->'ImportSettingsDetails' ->>'SelectedWSDLClassName' 
+,ivalue->'SPOKE'->'SourceURL'->'ImportSettingsDetails' ->>'SelectedWSDLAction'
+,cast(ivalue->'SPOKE'->'SourceURL'->'ImportSettingsDetails' ->>'IsRestBased' as bit )
+,'HistoricalData'
+,ivalue->'SPOKE'->'SourceURL'->'ImportSettingsDetails' ->>'ParameterAppender',VCreated_By
+,ivalue->'SPOKE'->'SourceURL'->'ImportSettingsDetails' ->>'DBIDColumn'
+,ivalue->'SPOKE'->'SourceURL'->'ImportSettingsDetails' ->>'DBIDColumnDataType'  
+,cast(ivalue->'SPOKE'->'SourceURL'->> 'DBAuthType' as int) authenticationtype
+ ,cast(ivalue->'SPOKE'->'SourceURL'->> 'CustAuthType' as int) custom_authenticationtype
+,cast(ivalue->'SPOKE'->'SourceURL'->> 'InitialPullType' as smallint)
+from 	temps limit 1;
+
+update kbsourceurlmst
+set databasetype=2
+where sourceid=VSourcetypeid and datasourceid=9;
+
+				end;
+				end if;
+
+				
+			End;
+		END;
+		Elseif(VSource=6) or (VSource=7) or VSource=4 or VSource=5 or VSource=9 Then
+		BEGIN
+        
+			INSERT INTO KBSOURCEURLMST(SOURCEID,URL,USERNAME,PASSWORD,DATA_RETRIEVAL_TIME,DATA_RETRIEVAL_UOM,ISACTIVE,DataSourceID,ServerName
+			,DatabaseName,DBQuery,TableQuery,DBAuthType,DATABASETYPE,InitialPullType,InitialPullFromDate,InitialPullToDate
+			,IntialPullTimePeriod,InitialPullTimePeriodUOM,DATA_FETCH_TYPE,ParameterAppender,CreatedBy ,DBIDColumn,DBIDColumnDataType,concatenation_operator,concatenation_rule,uploadtype)
+			SELECT VSourcetypeid
+			,ivalue->'SPOKE'->'SourceURL'->> 'URL'
+			,case when cast(ivalue->'SPOKE'->'SourceURL' ->>'DBUsername' as varchar(255)) IS not null 
+					 
+						then cast(ivalue->'SPOKE'->'SourceURL'->>'DBUsername' as varchar(255))
+				when cast(ivalue->'SPOKE'->'SourceURL'->>'WSUSERNAME' as varchar(255)) is not null 
+					  
+						then cast(ivalue->'SPOKE'->'SourceURL'->'ImportSettingsDetails'->>'WSUSERNAME' as varchar(255))
+				Else cast(ivalue->'SPOKE'->'SourceURL'->>'LDAPUSERNAME'  as varchar(255)) 
+				End Username
+			   
+			   
+				,Case when cast(ivalue->'SPOKE'->'SourceURL'->>'DBPassword' as varchar(255)) IS not null 
+						 
+					Then cast(ivalue->'SPOKE'->'SourceURL'->>'DBPassword' as varchar(255))
+				when Cast(ivalue->'SPOKE'->'SourceURL'->>'WSPASSWORD' as varchar(255)) IS not null 
+						 
+					Then Cast(ivalue->'SPOKE'->'SourceURL'->>'WSPASSWORD' as varchar(255)) 
+				When Cast(ivalue->'SPOKE'->'SourceURL''LDAPPASSWORD' as varchar(255)) is not null 
+						 
+					Then Cast(ivalue->'SPOKE'->'SourceURL'->>'LDAPPASSWORD' as varchar(255))
+				Else Cast(ivalue->'SPOKE'->'SourceURL'->>'Password' as varchar(255)) 
+				End "Password"
+			,ivalue->'SPOKE'->'SourceURL'->> 'TIMEPERIOD' 
+			,ivalue->'SPOKE'->'SourceURL'->> 'TIMEPERIODUOM'
+			,'1'
+			,cast(ivalue->'SPOKE'->'SourceURL'->> 'Source' as smallint)
+			,ivalue->'SPOKE'->'SourceURL'->> 'DBServerName'
+			,ivalue->'SPOKE'->'SourceURL'->> 'Database'
+			,ivalue->'SPOKE'->'SourceURL'->> 'DBQuery'
+			,ivalue->'SPOKE'->'SourceURL'->> 'TableQuery'
+			,cast(ivalue->'SPOKE'->'SourceURL'->> 'DBAuthType' as smallint)	
+			,cast(ivalue->'SPOKE'->'SourceURL'->> 'SelectedDatabaseType' as smallint)
+			,cast(ivalue->'SPOKE'->'SourceURL'->> 'InitialPullType' as smallint)
+			,case when cast(ivalue->'SPOKE'->'SourceURL'->>'InitialPullFromDate' as  timestamp)  is not null						
+						Then Cast(ivalue->'SPOKE'->'SourceURL'->>'InitialPullFromDate' as  timestamp)
+						Else Cast('1900-01-01' as Timestamp) End
+			,case when cast(ivalue->'SPOKE'->'SourceURL'->>'InitialPullToDate' as  timestamp) is not null 					
+					Then Cast(ivalue->'SPOKE'->'SourceURL'->>'InitialPullToDate' as  timestamp)
+					Else Cast('1900-01-01' as Timestamp) End
+			,cast(ivalue->'SPOKE'->'SourceURL'->> 'InitialPullTimePeriod' as smallint)
+			,ivalue->'SPOKE'->'SourceURL'->> 'InitialPullTimePeriodUOM'
+			,'CurrentData'
+			,ivalue->'SPOKE'->'SourceURL'->> 'ParameterAppender'  
+			,VCreated_By
+			,ivalue->'SPOKE'->'SourceURL'->> 'DBIDColumn'  
+			,ivalue->'SPOKE'->'SourceURL'->> 'DBIDColumnDataType'  
+			,ivalue->'SPOKE'->'SourceURL'->> 'ConcatenationOperator' ConcatenationOperator
+			,ivalue->'SPOKE'->'SourceURL'->> 'ConcatenationRule' ConcatenationRule  
+			,cast(ivalue->'SPOKE'->'SourceURL'->> 'EXACTTIME' as int) EXACTTIME
+			From
+			temps limit 1;
+
+			update kbsourceurlmst
+			set databasetype=2
+			where sourceid=VSourcetypeid and datasourceid=9;
+
+			Begin 
+
+				VQuery:=(select ivalue->'SPOKE'->'SourceURL'->'ImportSettingsDetails' ->>'TableQuery'
+					From
+					temps limit 1
+					);
+				insert into queries(Query)
+				Select item 
+				from 
+				(select regexp_split_to_table(VQuery,';') as item)a ;
+				VQuery=(Select query from queries where id=1);
+				VQuery_MaxRecord=(Select query from queries where id=2);
+
+				if (select cast(ivalue->'SPOKE'->'SourceURL'->'ImportSettingsDetails' ->>'Source' as smallint) From temps limit 1) is not null then
+				begin
+
+				Insert into KBSOURCEURLMST(SOURCEID,USERNAME,PASSWORD,DATA_RETRIEVAL_TIME,DATA_RETRIEVAL_UOM,DataSourceID,DATABASETYPE,ServerName,DBAuthType,DatabaseName
+				,DBQuery,TableQuery,InitialPullType,IntialPullTimePeriod,InitialPullTimePeriodUOM,DATA_FETCH_TYPE,Parameter,HasPaging,PagingColumn,NoofRecords,CREATEDBY
+				,DBIDColumn,DBIDColumnDataType,Query_Maxrecord,URL,IsRestBased
+				,PortNumber,Organisation,"group",isactive
+				)
+				select VSourcetypeid
+				,case when cast(ivalue->'SPOKE'->'SourceURL'->'ImportSettingsDetails'->>'DBUsername' as varchar(255)) IS not null 
+					 
+						then cast(ivalue->'SPOKE'->'SourceURL'->'ImportSettingsDetails'->>'DBUsername' as varchar(255))
+				when cast(ivalue->'SPOKE'->'SourceURL'->'ImportSettingsDetails'->>'WSUSERNAME' as varchar(255)) is not null 
+					  
+						then cast(ivalue->'SPOKE'->'SourceURL'->'ImportSettingsDetails'->>'WSUSERNAME' as varchar(255))
+				Else cast(ivalue->'SPOKE'->'SourceURL'->'ImportSettingsDetails'->>'LDAPUSERNAME'  as varchar(255)) 
+				End Username
+			   
+			   
+				,Case when cast(ivalue->'SPOKE'->'SourceURL'->'ImportSettingsDetails'->>'DBPassword' as varchar(255)) IS not null 
+						 
+					Then cast(ivalue->'SPOKE'->'SourceURL'->'ImportSettingsDetails'->>'DBPassword' as varchar(255))
+				when Cast(ivalue->'SPOKE'->'SourceURL'->'ImportSettingsDetails'->>'WSPASSWORD' as varchar(255)) IS not null 
+						 
+					Then Cast(ivalue->'SPOKE'->'SourceURL'->'ImportSettingsDetails'->>'WSPASSWORD' as varchar(255)) 
+				When Cast(ivalue->'SPOKE'->'SourceURL'->'ImportSettingsDetails'->>'LDAPPASSWORD' as varchar(255)) is not null 
+						 
+					Then Cast(ivalue->'SPOKE'->'SourceURL'->'ImportSettingsDetails'->>'LDAPPASSWORD' as varchar(255))
+				Else Cast(ivalue->'SPOKE'->'SourceURL'->'ImportSettingsDetails'->>'Password' as varchar(255)) 
+				End "Password"
+				,ivalue->'SPOKE'->'SourceURL'->>'TIMEPERIOD' 
+				,ivalue->'SPOKE'->'SourceURL'->>'TIMEPERIODUOM' 
+				,cast(ivalue->'SPOKE'->'SourceURL'->'ImportSettingsDetails' ->>'Source' as smallint)
+				,cast(ivalue->'SPOKE'->'SourceURL'->'ImportSettingsDetails' ->>'SelectedDatabaseType' as smallint)
+				,case when cast(ivalue->'SPOKE'->'SourceURL'->'ImportSettingsDetails' ->>'Source' as smallint) =3 
+						then ivalue->'SPOKE'->'SourceURL'->'ImportSettingsDetails' ->>'LDAPServerName' 
+					else ivalue->'SPOKE'->'SourceURL'->'ImportSettingsDetails' ->>'DBServerName' End as DBServerName
+				,cast(ivalue->'SPOKE'->'SourceURL'->'ImportSettingsDetails' ->>'DBAuthType' as smallint)
+				,ivalue->'SPOKE'->'SourceURL'->'ImportSettingsDetails' ->>'Database'
+				,ivalue->'SPOKE'->'SourceURL'->'ImportSettingsDetails' ->>'DBQuery'
+				,VQuery tablequery
+				,cast(ivalue->'SPOKE'->'SourceURL'->>'InitialPullType'  as smallint)
+				,cast(ivalue->'SPOKE'->'SourceURL'->>'InitialPullTimePeriod'  as smallint)
+				,ivalue->'SPOKE'->'SourceURL'->>'InitialPullTimePeriodUOM'
+				,'HistoricalData'
+				,ivalue->'SPOKE'->'SourceURL'->'ImportSettingsDetails' ->>'Parameter'
+				,cast(ivalue->'SPOKE'->'SourceURL'->'ImportSettingsDetails' ->>'HasPaging' as smallint)  
+				,ivalue->'SPOKE'->'SourceURL'->'ImportSettingsDetails' ->>'PagingColumn'  
+				,cast(ivalue->'SPOKE'->'SourceURL'->'ImportSettingsDetails' ->>'NoofRecords' as smallint)  
+				,VCreated_By
+				,ivalue->'SPOKE'->'SourceURL'->'ImportSettingsDetails' ->>'DBIDColumn'
+				,ivalue->'SPOKE'->'SourceURL'->'ImportSettingsDetails' ->>'DBIDColumnDataType'  
+				,VQuery_MaxRecord Query_maxrecord
+				,ivalue->'SPOKE'->'SourceURL'->'ImportSettingsDetails' ->>'URL'  
+				,cast(ivalue->'SPOKE'->'SourceURL'->'ImportSettingsDetails' ->>'IsRestBased' as bit)  
+				,case when (
+(ivalue->'SPOKE'->'SourceURL'->>'LDAPPortNumber') !='' and cast(ivalue->'SPOKE'->'SourceURL'->>'LDAPPortNumber' as int) is not null )
+then cast(ivalue->'SPOKE'->'SourceURL'->>'LDAPPortNumber' as int) else null end
+				,ivalue->'SPOKE'->'SourceURL'->'ImportSettingsDetails' ->>'LDAPOrg'
+				,ivalue->'SPOKE'->'SourceURL'->'ImportSettingsDetails' ->>'LDAPGroup'
+                ,'1'
+				From
+				temps limit 1;
+				end;
+				end if;
+				
+			
+			End;
+		END;
+ 		ELSE
+		BEGIN
+
+INSERT INTO KBSOURCEURLMST(SOURCEID,URL,USERNAME,PASSWORD,DATA_RETRIEVAL_TIME,DATA_RETRIEVAL_UOM,ISACTIVE,DataSourceID,ServerName
+,PortNumber
+,Organisation,"group",DBAuthType,InitialPullType,InitialPullFromDate,InitialPullToDate,DATA_FETCH_TYPE,ParameterAppender
+,HasPaging,PagingColumn,NoofRecords,CREATEDBY ,DBIDColumn,DBIDColumnDataType,concatenation_operator,concatenation_rule,uploadtype )
+				
+				SELECT VSourcetypeid
+				,ivalue->'SPOKE'->'SourceURL'->> 'URL'
+				,ivalue->'SPOKE'->'SourceURL'->>'LDAPUSERNAME'
+				,ivalue->'SPOKE'->'SourceURL'->>'LDAPPASSWORD'
+				,ivalue->'SPOKE'->'SourceURL'->> 'TIMEPERIOD' 
+			    ,ivalue->'SPOKE'->'SourceURL'->> 'TIMEPERIODUOM'
+			    ,'1'
+			    ,cast(ivalue->'SPOKE'->'SourceURL'->> 'Source' as smallint)
+			    ,ivalue->'SPOKE'->'SourceURL'->>'LDAPServerName'
+,case when (
+(ivalue->'SPOKE'->'SourceURL'->>'LDAPPortNumber') !='' and cast(ivalue->'SPOKE'->'SourceURL'->>'LDAPPortNumber' as int) is not null )
+then cast(ivalue->'SPOKE'->'SourceURL'->>'LDAPPortNumber' as int) else null end 
+			,ivalue->'SPOKE'->'SourceURL'->>'LDAPOrg',ivalue->'SPOKE'->'SourceURL'->>'LDAPGroup'
+,case when(cast(ivalue->'SPOKE'->'SourceURL'->>'LDAPAuthType' as smallint) is not null and (ivalue->'SPOKE'->'SourceURL'->>'LDAPAuthType')!='' )
+then cast(ivalue->'SPOKE'->'SourceURL'->>'LDAPAuthType' as smallint) else null end
+,cast(ivalue->'SPOKE'->'SourceURL'->> 'InitialPullType' as smallint)
+,case when cast(ivalue->'SPOKE'->'SourceURL'->>'InitialPullFromDate' as  timestamp)  is not null		
+Then Cast(ivalue->'SPOKE'->'SourceURL'->>'InitialPullFromDate' as  timestamp) Else Cast('1900-01-01' as Timestamp) End
+,case when cast(ivalue->'SPOKE'->'SourceURL'->>'InitialPullToDate' as  timestamp) is not null 					
+Then Cast(ivalue->'SPOKE'->'SourceURL'->>'InitialPullToDate' as  timestamp) Else Cast('1900-01-01' as Timestamp) End
+,'CurrentData' ,ivalue->'SPOKE'->'SourceURL'->>'ParameterAppender',cast(ivalue->'SPOKE'->'SourceURL'->> 'HasPaging' as smallint)  
+,ivalue->'SPOKE'->'SourceURL'->> 'PagingColumn'  ,cast(ivalue->'SPOKE'->'SourceURL'->> 'NoofRecords' as smallint)  
+,VCreated_By,ivalue->'SPOKE'->'SourceURL'->> 'DBIDColumn',ivalue->'SPOKE'->'SourceURL'->> 'DBIDColumnDataType'  
+,ivalue->'SPOKE'->'SourceURL'->> 'ConcatenationOperator' ConcatenationOperator
+,ivalue->'SPOKE'->'SourceURL'->> 'ConcatenationRule' ConcatenationRule 
+,cast(ivalue->'SPOKE'->'SourceURL'->> 'EXACTTIME' as int) EXACTTIME 
+From
+temps limit 1;
+
+				
+	  			Begin 
+	  	  				VQuery:=(select ivalue->'SPOKE'->'SourceURL'->'ImportSettingsDetails' ->>'TableQuery'
+					From
+					temps limit 1
+					);
+				insert into queries(Query)
+				Select item 
+				from 
+				(select regexp_split_to_table(VQuery,';') item)a ;
+				VQuery=(Select query from queries where id=1);
+				VQuery_MaxRecord=(Select query from queries where id=2);
+				
+				if (select cast(ivalue->'SPOKE'->'SourceURL'->'ImportSettingsDetails' ->>'Source' as smallint) From temps limit 1) is not null then
+				begin
+Insert into KBSOURCEURLMST(SOURCEID,USERNAME,PASSWORD,DATA_RETRIEVAL_TIME,DATA_RETRIEVAL_UOM,DataSourceID,DATABASETYPE,ServerName,DBAuthType,DatabaseName,DBQuery,TableQuery,InitialPullType,IntialPullTimePeriod,InitialPullTimePeriodUOM,DATA_FETCH_TYPE,Parameter,HasPaging,PagingColumn,NoofRecords,CREATEDBY,DBIDColumn,DBIDColumnDataType,Query_Maxrecord,URL,IsRestBased,PortNumber,Organisation,"group",isactive)
+select VSourcetypeid
+,case when cast(ivalue->'SPOKE'->'SourceURL'->'ImportSettingsDetails'->>'DBUsername' as varchar(255)) IS not null 
+then cast(ivalue->'SPOKE'->'SourceURL'->'ImportSettingsDetails'->>'DBUsername' as varchar(255))
+when cast(ivalue->'SPOKE'->'SourceURL'->'ImportSettingsDetails'->>'WSUSERNAME' as varchar(255)) is not null 
+then cast(ivalue->'SPOKE'->'SourceURL'->'ImportSettingsDetails'->>'WSUSERNAME' as varchar(255))
+else cast(ivalue->'SPOKE'->'SourceURL'->'ImportSettingsDetails'->>'LDAPUSERNAME'  as varchar(255)) 
+End Username
+,Case when cast(ivalue->'SPOKE'->'SourceURL'->'ImportSettingsDetails'->>'DBPassword' as varchar(255)) IS not null 
+	Then cast(ivalue->'SPOKE'->'SourceURL'->'ImportSettingsDetails'->>'DBPassword' as varchar(255))
+     when Cast(ivalue->'SPOKE'->'SourceURL'->'ImportSettingsDetails'->>'WSPASSWORD' as varchar(255)) IS not null 
+	Then Cast(ivalue->'SPOKE'->'SourceURL'->'ImportSettingsDetails'->>'WSPASSWORD' as varchar(255)) 
+     When Cast(ivalue->'SPOKE'->'SourceURL'->'ImportSettingsDetails'->>'LDAPPASSWORD' as varchar(255)) is not null 
+	Then Cast(ivalue->'SPOKE'->'SourceURL'->'ImportSettingsDetails'->>'LDAPPASSWORD' as varchar(255))
+Else Cast(ivalue->'SPOKE'->'SourceURL'->'ImportSettingsDetails'->>'Password' as varchar(255)) End "Password"
+,ivalue->'SPOKE'->'SourceURL'->> 'TIMEPERIOD' 
+,ivalue->'SPOKE'->'SourceURL'->>'TIMEPERIODUOM' 
+,cast(ivalue->'SPOKE'->'SourceURL'->'ImportSettingsDetails' ->>'Source' as smallint)
+,cast(ivalue->'SPOKE'->'SourceURL'->'ImportSettingsDetails' ->>'SelectedDatabaseType' as smallint)
+,case when cast(ivalue->'SPOKE'->'SourceURL'->'ImportSettingsDetails' ->>'Source' as smallint) =3 
+	then ivalue->'SPOKE'->'SourceURL'->'ImportSettingsDetails' ->>'LDAPServerName' 
+else ivalue->'SPOKE'->'SourceURL'->'ImportSettingsDetails' ->>'DBServerName' End as DBServerName
+, case when ( (ivalue->'SPOKE'->'SourceURL'->'ImportSettingsDetails' ->>'DBAuthType' ) !='' and cast(ivalue->'SPOKE'->'SourceURL'->'ImportSettingsDetails' ->>'DBAuthType' as smallint) != null) then
+cast(ivalue->'SPOKE'->'SourceURL'->'ImportSettingsDetails' ->>'DBAuthType' as smallint)  else null end 
+,ivalue->'SPOKE'->'SourceURL'->'ImportSettingsDetails' ->>'Database'
+,ivalue->'SPOKE'->'SourceURL'->'ImportSettingsDetails' ->>'DBQuery'
+,VQuery tablequery
+				,cast(ivalue->'SPOKE'->'SourceURL'->>'InitialPullType'  as smallint)
+				,cast(ivalue->'SPOKE'->'SourceURL'->>'InitialPullTimePeriod'  as smallint)
+				,ivalue->'SPOKE'->'SourceURL'->>'InitialPullTimePeriodUOM'
+				,'HistoricalData'
+				,ivalue->'SPOKE'->'SourceURL'->'ImportSettingsDetails' ->>'Parameter'
+				,cast(ivalue->'SPOKE'->'SourceURL'->'ImportSettingsDetails' ->>'HasPaging' as smallint)  
+				,ivalue->'SPOKE'->'SourceURL'->'ImportSettingsDetails' ->>'PagingColumn'  
+				,cast(ivalue->'SPOKE'->'SourceURL'->'ImportSettingsDetails' ->>'NoofRecords' as smallint)  
+				,VCreated_By
+				,ivalue->'SPOKE'->'SourceURL'->'ImportSettingsDetails' ->>'DBIDColumn'
+				,ivalue->'SPOKE'->'SourceURL'->'ImportSettingsDetails' ->>'DBIDColumnDataType'  
+				,VQuery_MaxRecord Query_maxrecord
+				,ivalue->'SPOKE'->'SourceURL'->'ImportSettingsDetails' ->>'URL'  
+				,cast(ivalue->'SPOKE'->'SourceURL'->'ImportSettingsDetails' ->>'IsRestBased' as bit)  
+			  
+				,case when (
+(ivalue->'SPOKE'->'SourceURL'->>'LDAPPortNumber') !='' and cast(ivalue->'SPOKE'->'SourceURL'->>'LDAPPortNumber' as int) is not null )
+then cast(ivalue->'SPOKE'->'SourceURL'->>'LDAPPortNumber' as int) else null end
+				,ivalue->'SPOKE'->'SourceURL'->'ImportSettingsDetails' ->>'LDAPOrg'
+				,ivalue->'SPOKE'->'SourceURL'->'ImportSettingsDetails' ->>'LDAPGroup'
+                ,'1'
+				From
+				temps limit 1;
+				end; 
+				end if;
+			
+			End;
+		END;
+		End if;
+ 
+		VURLID:=(select ID from KBSOURCEURLMST where SOURCEID=VSourcetypeid and lower(objecttype)='source' and Data_Fetch_Type='CurrentData' limit 1);
+		VHistoryURLID:=(select ID from KBSOURCEURLMST where SOURCEID=VSourcetypeid and lower(objecttype)='source' and Data_Fetch_Type='HistoricalData' limit 1);
+ 
+
+		/*Inserting the dynamic parameters values*/
+
+  
+		Insert INTO KBDynamicParameterListMst (URLID,PARAM_NAME,PARAM_VALUE,PARAM_TYPE,SOURCEID,filteroption)
+		SELECT 
+		VURLID  URLID
+		,dparams->>'NAME'
+		,case when dparams->>'VALUE' like '%Latitude%' then 'Latlong' else dparams->>'VALUE' end 
+		,dparams->>'TYPE'
+		,VSourcetypeid spokeid
+		,dparams->>'FilterOption'
+		from
+		(
+		select json_array_elements(dynparams) as dparams
+		from
+		(
+		select ivalue->'SPOKE'->'SourceURL'->'PARAMETERDETAILS'->'DynamicParameters'->'DynamicParameter' as dynparams
+		From
+		temps limit 1
+		)a
+		)params
+		;
+		
+		
+		  /* Inserting the Url's Details in the below tabble */
+		/*
+		 parametertype
+		 0-> existing values
+		 1-> add new values to the parameter list
+
+		*/
+
+		INSERT INTO KBSOURCEURLDETAILS(URLID,PARAM_NAME,PARAM_VALUE,PARAM_TYPE,format,SOURCEID,FORMULA,filteroption,PARAM_VALUETYPE,Operator,EntityDefId,concatenator,parametertype,CREATEDBY,groupname)
+        SELECT VURLID  URLID,iparams->>'NAME',iparams->>'VALUE',iparams->>'TYPE',iparams->>'format',VSourcetypeid spokeid	
+		,iparams->>'FORMULA' ,iparams->>'FilterOption' ,iparams->>'VALUETYPE',iparams->>'Operator'
+		,cast(iparams->>'EntityDefId' as int),iparams->>'Concater',cast(iparams->>'AddParameters'  as smallint)
+		,VCreated_By,iparams->>'GroupName'
+		from
+		(
+		select json_array_elements(sparams) as iparams
+		from
+		(
+		select ivalue->'SPOKE'->'SourceURL'->'PARAMETERDETAILS'->'PARAMETER' as sparams
+		From
+		temps limit 1
+		)a
+		)params
+		;
+		
+		INSERT INTO KBSOURCEURLDETAILS(URLID,PARAM_NAME,PARAM_VALUE,PARAM_TYPE,format,SOURCEID,FORMULA,filteroption,PARAM_VALUETYPE,Operator,EntityDefId,concatenator,parametertype,CREATEDBY,groupname)
+		SELECT VHistoryURLID  URLID,iparams->>'NAME',iparams->>'VALUE',iparams->>'TYPE',iparams->>'format',VSourcetypeid spokeid
+		,iparams->>'FORMULA' ,iparams->>'FilterOption' ,iparams->>'VALUETYPE',iparams->>'Operator'
+		,cast(iparams->>'EntityDefId' as int),iparams->>'Concater',cast(iparams->>'AddParameters'  as smallint)
+		,VCreated_By,iparams->>'GroupName'
+		from
+		(
+		select json_array_elements(sparams) as iparams
+		from
+		(
+		select ivalue->'SPOKE'->'SourceURL'->'ImportSettingsDetails'->'PARAMETERDETAILS'->'PARAMETER' as sparams
+		From
+		temps limit 1
+		)a
+		)params
+		;
+
+		
+		End;
+		End if;
+ 
+
+		INSERT INTO KBSpokeMetricExtractionMst(SOURCEDBID,DATABASETYPE,DBSERVERNAME,DBAUTHTYPE,USERNAME,PASSWORD,DBQUERY,DATABASENAME,TABLEQUERY,MAINSEPEREATOR,SUBSEPERATOR,SPOKEID)
+		select VSourcetypeid,SelectedDatabaseType  ,DBServerName  ,DBAuthType  ,DBUsername  ,DBPassword  ,
+		DBQuery  ,DatabaseName  ,TableQuery  ,MainSeperator  ,SubSeperator ,VSourcetypeid
+		from 
+		MetricExtraction;
+
+		/*Inserting the metadata*/
+
+		VSpokeAlias:=(select Alias from kbsourcetypeMst where SOURCETYPE_ID=VSourcetypeid);
+
+		If (select masterspokeid from inputdata)=0 then
+		begin	
+
+		/*wajahat*/
+		/* The tables KBSPOKETABLE and KBSPOKETABLEDETAILS are used to insert the source related meta data */
+
+		Insert into KBSPOKETABLE(SPOKE_ID,SPOKE_TYPE,TABLE_NAME,TABLE_TYPE,XPATH,TYPE)
+		select VSourcetypeid,'ROLE','Scrty_Fact_'||VSpokeAlias,'ROLE','ROWS/ROW',3;
+
+		Insert into KBSPOKETABLEDETAILS(TABLE_ID,TABLE_COLUMNS,ATTRIBUTES,DATATYPE,XPATH)
+		select  RecordID,'Security_ID','Security_ID','varchar(255)','ROWS/ROW'
+		from KBSPOKETABLE where SPOKE_ID=VSourcetypeid and SPOKE_TYPE='ROLE' and TABLE_NAME='Scrty_Fact_'||VSpokeAlias
+		union all  
+		select RecordID,'Role_ID','Role_ID','bigint','ROWS/ROW'
+		from KBSPOKETABLE where SPOKE_ID=VSourcetypeid and SPOKE_TYPE='ROLE' and TABLE_NAME='Scrty_Fact_'||VSpokeAlias
+		union all  
+		select RecordID,'Seq','seq','varchar(255)','ROWS/ROW'
+		from KBSPOKETABLE where SPOKE_ID=VSourcetypeid and SPOKE_TYPE='ROLE' and TABLE_NAME='Scrty_Fact_'||VSpokeAlias
+		;
+		
+		Insert into KBSPOKETABLE(SPOKE_ID,SPOKE_TYPE,TABLE_NAME,TABLE_TYPE,XPATH,TYPE)
+		select VSourcetypeid,'ProcessedData','Data_Fact_'||VSpokeAlias,'ProcessedData','ROWS/ROW',4 ;
+		
+		Insert into KBSPOKETABLEDETAILS(TABLE_ID,TABLE_COLUMNS,ATTRIBUTES,DATATYPE,XPATH)
+		select RecordID,'Seq','seq','varchar(255)','ROWS/ROW'
+		from KBSPOKETABLE where SPOKE_ID=VSourcetypeid and SPOKE_TYPE='ProcessedData' and TABLE_NAME='Data_Fact_'||VSpokeAlias
+		union all  
+		select RecordID,'factual_xml','','varchar(max)','ROWS'
+		from KBSPOKETABLE where SPOKE_ID=VSourcetypeid and SPOKE_TYPE='ProcessedData' and TABLE_NAME='Data_Fact_'||VSpokeAlias 
+		union all
+		select  RecordID,'recorddate','','Datetime',''
+		from KBSPOKETABLE where SPOKE_ID=VSourcetypeid and SPOKE_TYPE='ProcessedData' and TABLE_NAME='Data_Fact_'||VSpokeAlias 
+		union all  
+		select RecordID,'epochtime','','varchar(100)',''
+		from KBSPOKETABLE where SPOKE_ID=VSourcetypeid and SPOKE_TYPE='ProcessedData' and TABLE_NAME='Data_Fact_'||VSpokeAlias ; 
+    
+  		
+		   
+		-- 		if(@Isprofiling=1)
+		-- 		begin
+		-- 		Insert into KBSPOKETABLE(SPOKE_ID,SPOKE_TYPE,TABLE_NAME,TABLE_TYPE,XPATH,TYPE)
+		-- 		select VSourcetypeid,'ValidationData','Data_ValidationAggregate','ProfileRule','ROWS/ROW',2 -- For profiling Added By arif Shareef
+		-- 		Union
+		-- 		select VSourcetypeid,'ValidationData','Data_Validation_'||VSpokeAlias,'Rules','ROWS/ROW',2 -- For profiling Added By arif Shareef
+		-- 		Insert into KBSPOKETABLEDETAILS(TABLE_ID,TABLE_COLUMNS,ATTRIBUTES,DATATYPE,XPATH)
+		-- 		Select TABLE_ID,TABLE_COLUMNS,ATTRIBUTES,DATATYPE,XPATH
+		-- 		From
+		-- 		(
+		-- 		select RecordID TABLE_ID,'seq' TABLE_COLUMNS,'seq' ATTRIBUTES,'varchar(255)' DATATYPE,'ROOT' XPATH,1 TOrder
+		-- 		from KBSPOKETABLE where SPOKE_ID=VSourcetypeid and Lower(SPOKE_TYPE)='validationdata' and TABLE_NAME='Data_Validation_'||VSpokeAlias
+		-- 		union all  
+		-- 		select RecordID,'source_id','sourceid','bigint','ROOT',2 TOrder
+		-- 		from KBSPOKETABLE where SPOKE_ID=VSourcetypeid and Lower(SPOKE_TYPE)='validationdata' and TABLE_NAME='Data_Validation_'||VSpokeAlias
+		-- 		union all
+		-- 		select  RecordID,'metricname','metricname','varchar(255)','ROOT',3 TOrder
+		-- 		from KBSPOKETABLE where SPOKE_ID=VSourcetypeid and Lower(SPOKE_TYPE)='validationdata' and TABLE_NAME='Data_Validation_'||VSpokeAlias
+		-- 		union all  
+		-- 		select RecordID,'metricvalue','metricvalue','varchar(100)','ROOT',4 TOrder
+		-- 		from KBSPOKETABLE where SPOKE_ID=VSourcetypeid and Lower(SPOKE_TYPE)='validationdata' and TABLE_NAME='Data_Validation_'||VSpokeAlias
+		-- 		union all  
+		-- 		select RecordID,'profileid','profileid','int','ROOT',5 TOrder
+		-- 		from KBSPOKETABLE where SPOKE_ID=VSourcetypeid and Lower(SPOKE_TYPE)='validationdata' and TABLE_NAME='Data_Validation_'||VSpokeAlias
+		-- 		union all  
+		-- 		select RecordID,'metadata','metadata','smallint','ROOT',6 TOrder
+		-- 		from KBSPOKETABLE where SPOKE_ID=VSourcetypeid and Lower(SPOKE_TYPE)='validationdata' and TABLE_NAME='Data_Validation_'||VSpokeAlias
+		-- 		union all  
+		-- 		select RecordID,'range','range','smallint','ROOT',7 TOrder
+		-- 		from KBSPOKETABLE where SPOKE_ID=VSourcetypeid and Lower(SPOKE_TYPE)='validationdata' and TABLE_NAME='Data_Validation_'||VSpokeAlias
+		-- 		union all  
+		-- 		select RecordID,'length','length','smallint','ROOT',8 TOrder
+		-- 		from KBSPOKETABLE where SPOKE_ID=VSourcetypeid and Lower(SPOKE_TYPE)='validationdata' and TABLE_NAME='Data_Validation_'||VSpokeAlias
+		-- 		union all  
+		-- 		select RecordID,'stringlength','stringlength','smallint','ROOT',9 TOrder
+		-- 		from KBSPOKETABLE where SPOKE_ID=VSourcetypeid and Lower(SPOKE_TYPE)='validationdata' and TABLE_NAME='Data_Validation_'||VSpokeAlias
+		-- 		union all
+		-- 		select RecordID,'notnull','notnull','smallint','ROOT',10 TOrder
+		-- 		from KBSPOKETABLE where SPOKE_ID=VSourcetypeid and Lower(SPOKE_TYPE)='validationdata' and TABLE_NAME='Data_Validation_'||VSpokeAlias
+		-- 		union all  
+		-- 		select RecordID,'contains_include','contains','smallint','ROOT',11 TOrder
+		-- 		from KBSPOKETABLE where SPOKE_ID=VSourcetypeid and Lower(SPOKE_TYPE)='validationdata' and TABLE_NAME='Data_Validation_'||VSpokeAlias
+		-- 		union all  
+		-- 		select RecordID,'contains_exclude','notcontains','smallint','ROOT',12 TOrder
+		-- 		from KBSPOKETABLE where SPOKE_ID=VSourcetypeid and Lower(SPOKE_TYPE)='validationdata' and TABLE_NAME='Data_Validation_'||VSpokeAlias
+		-- 		union all  
+		-- 		select RecordID,'contains_lookupinclude','Lookup','smallint','ROOT',13 TOrder
+		-- 		from KBSPOKETABLE where SPOKE_ID=VSourcetypeid and Lower(SPOKE_TYPE)='validationdata' and TABLE_NAME='Data_Validation_'||VSpokeAlias
+		-- 		union all  
+		-- 		select RecordID,'contains_lookupexclude','NoLookup','smallint','ROOT',14 TOrder
+		-- 		from KBSPOKETABLE where SPOKE_ID=VSourcetypeid and Lower(SPOKE_TYPE)='validationdata' and TABLE_NAME='Data_Validation_'||VSpokeAlias
+		-- 		union all  
+		-- 		select RecordID,'regex','standardformat','smallint','ROOT',15 TOrder
+		-- 		from KBSPOKETABLE where SPOKE_ID=VSourcetypeid and Lower(SPOKE_TYPE)='validationdata' and TABLE_NAME='Data_Validation_'||VSpokeAlias
+		-- 		union all  
+		-- 		select RecordID,'extendedvalidation','extendedvalidation','smallint','ROOT',16 TOrder
+		-- 		from KBSPOKETABLE where SPOKE_ID=VSourcetypeid and Lower(SPOKE_TYPE)='validationdata' and TABLE_NAME='Data_Validation_'||VSpokeAlias
+		-- 		union all  
+		-- 		select RecordID,'obsoletevalidation','obsoletevalidation','smallint','ROOT',17 TOrder
+		-- 		from KBSPOKETABLE where SPOKE_ID=VSourcetypeid and Lower(SPOKE_TYPE)='validationdata' and TABLE_NAME='Data_Validation_'||VSpokeAlias
+		-- 		union all  
+		-- 		select RecordID,'isfuturedate','isfuturedate','smallint','ROOT',18 TOrder
+		-- 		from KBSPOKETABLE where SPOKE_ID=VSourcetypeid and Lower(SPOKE_TYPE)='validationdata' and TABLE_NAME='Data_Validation_'||VSpokeAlias
+		-- 		union all  
+		-- 		select RecordID,'reasonablecheck','reasonablecheck','smallint','ROOT',19 TOrder
+		-- 		from KBSPOKETABLE where SPOKE_ID=VSourcetypeid and Lower(SPOKE_TYPE)='validationdata' and TABLE_NAME='Data_Validation_'||VSpokeAlias
+		-- 		union all  
+		-- 		select RecordID,'nonnormalform','NoNormalForm','smallint','ROOT',20 TOrder
+		-- 		from KBSPOKETABLE where SPOKE_ID=VSourcetypeid and Lower(SPOKE_TYPE)='validationdata' and TABLE_NAME='Data_Validation_'||VSpokeAlias
+		-- 		union all  
+		-- 		select RecordID,'basicvalidation','basic','smallint','ROOT',21 TOrder
+		-- 		from KBSPOKETABLE where SPOKE_ID=VSourcetypeid and Lower(SPOKE_TYPE)='validationdata' and TABLE_NAME='Data_Validation_'||VSpokeAlias
+		-- 		union all  
+		-- 		select RecordID,'BasicGroup','BasicGroup','smallint','ROOT',22 TOrder
+		-- 		from KBSPOKETABLE where SPOKE_ID=VSourcetypeid and Lower(SPOKE_TYPE)='validationdata' and TABLE_NAME='Data_Validation_'||VSpokeAlias
+		-- 		union all  
+		-- 		select RecordID,'format','nino','smallint','ROOT',23 TOrder
+		-- 		from KBSPOKETABLE where SPOKE_ID=VSourcetypeid and Lower(SPOKE_TYPE)='validationdata' and TABLE_NAME='Data_Validation_'||VSpokeAlias
+		-- 		union all
+		-- 		select RecordID,'null','null','smallint','ROOT',24 TOrder
+		-- 		from KBSPOKETABLE where SPOKE_ID=VSourcetypeid and Lower(SPOKE_TYPE)='validationdata' and TABLE_NAME='Data_Validation_'||VSpokeAlias
+		-- 		union all
+		-- 		select RecordID,'referencelookup','referencelookup','smallint','ROOT',25 TOrder
+		-- 		from KBSPOKETABLE where SPOKE_ID=VSourcetypeid and Lower(SPOKE_TYPE)='validationdata' and TABLE_NAME='Data_Validation_'||VSpokeAlias
+		-- 		union all
+		-- 		select RecordID,'moduluscheck','moduluscheck','smallint','ROOT',26 TOrder
+		-- 		from KBSPOKETABLE where SPOKE_ID=VSourcetypeid and Lower(SPOKE_TYPE)='validationdata' and TABLE_NAME='Data_Validation_'||VSpokeAlias
+		-- 		union all
+		-- 		select RecordID,'createdby','loginid','int','ROOT',27 TOrder
+		-- 		from KBSPOKETABLE where SPOKE_ID=VSourcetypeid and Lower(SPOKE_TYPE)='validationdata' and TABLE_NAME='Data_Validation_'||VSpokeAlias
+		-- 		union all  
+		-- 		select RecordID,'createdate','RECORDDATEUTC','datetime','ROOT',28 TOrder
+		-- 		from KBSPOKETABLE where SPOKE_ID=VSourcetypeid and Lower(SPOKE_TYPE)='validationdata' and TABLE_NAME='Data_Validation_'||VSpokeAlias
+		-- 		) A
+		-- 		Order by Torder
+
+				-- Insert into KBSPOKETABLEDETAILS(TABLE_ID,TABLE_COLUMNS,ATTRIBUTES,DATATYPE,XPATH)
+		-- 		Select TABLE_ID,TABLE_COLUMNS,ATTRIBUTES,DATATYPE,XPATH
+		-- 		From
+		-- 		(
+		-- 			select RecordID TABLE_ID,'Profile' TABLE_COLUMNS,'profileid' ATTRIBUTES,'varchar(255)' DATATYPE,'ROWS/ROW' XPATH,1 Torder
+		-- 			from KBSPOKETABLE where SPOKE_ID=VSourcetypeid and Lower(SPOKE_TYPE)='validationdata' and TABLE_NAME='Data_ValidationAggregate'
+		-- 			union all  
+		-- 			select RecordID,'ruleid','ruleid','varchar(255)','ROWS/ROW' ,2 Torder
+		-- 			from KBSPOKETABLE where SPOKE_ID=VSourcetypeid and Lower(SPOKE_TYPE)='validationdata' and TABLE_NAME='Data_ValidationAggregate'
+		-- 			union
+		-- 			select RecordID,'Metricname','Metricname','varchar(255)','' ,3 Torder
+		-- 			from KBSPOKETABLE where SPOKE_ID=VSourcetypeid and Lower(SPOKE_TYPE)='validationdata' and TABLE_NAME='Data_ValidationAggregate'
+		-- 			union all  
+		-- 			select RecordID,'sourceid','sourceid','int','' ,4 Torder
+		-- 			from KBSPOKETABLE where SPOKE_ID=VSourcetypeid and Lower(SPOKE_TYPE)='validationdata' and TABLE_NAME='Data_ValidationAggregate'
+		-- 			union all
+		-- 			select RecordID,'PassPercentage','PassPercentage','decimal(18,3)','' ,5 Torder
+		-- 			from KBSPOKETABLE where SPOKE_ID=VSourcetypeid and Lower(SPOKE_TYPE)='validationdata' and TABLE_NAME='Data_ValidationAggregate'
+		-- 			union all  
+		-- 			select RecordID,'FailPercentage','FailPercentage','decimal(18,3)','' ,6 Torder
+		-- 			from KBSPOKETABLE where SPOKE_ID=VSourcetypeid and Lower(SPOKE_TYPE)='validationdata' and TABLE_NAME='Data_ValidationAggregate'
+		-- 			union all  
+		-- 			select RecordID,'Records','Records','int','' ,7 Torder
+		-- 			from KBSPOKETABLE where SPOKE_ID=VSourcetypeid and Lower(SPOKE_TYPE)='validationdata' and TABLE_NAME='Data_ValidationAggregate'
+		-- 		)A
+		-- 		Order by Torder;
+		-- 
+		-- 		/* meta data for creating metric table with all strings*/
+		--   
+		-- 		INSERT INTO DBKPIFactTABLES
+		-- 		select VSourcetypeid,'FACT_'||VSpokeAlias||'metricdetails_string','RecordID','recordid',cast('0' as bit),cast('0' as bit),'BIGINT',1,'ROWS/ROW'
+		-- 		UNION all
+		-- 		select VSourcetypeid,'FACT_'||VSpokeAlias||'metricdetails_string','seq','seq',cast('0' as bit),cast('0' as bit),'varchar(100)',1,'ROWS/ROW'
+		-- 		UNION all
+		-- 		select VSourcetypeid,'FACT_'||VSpokeAlias||'metricdetails_string','Call_UID','Call_UID',cast('0' as bit),cast('0' as bit),'varchar(50)',1,'ROWS/ROW'
+		-- 		UNION all
+		-- 		select VSourcetypeid,'FACT_'||VSpokeAlias||'metricdetails_string','RECORDDATEUTC','RECORDDATEUTC',cast('0' as bit),cast('0' as bit),'DateTime',1,'ROWS/ROW'
+		-- 		UNION all
+		-- 		select VSourcetypeid,'FACT_'||VSpokeAlias||'metricdetails_string','CreatedBy','CreatedBy',cast('0' as bit),cast('0' as bit),'BIGINT',1,'ROWS/ROW'
+		-- 		UNION all
+		-- 		select VSourcetypeid,'FACT_'||VSpokeAlias||'metricdetails_string','CreatedDate','CreatedDate',cast('0' as bit),cast('0' as bit),'DateTime',1,'ROWS/ROW'
+		-- 		UNION all
+		-- 		select VSourcetypeid,'FACT_'||VSpokeAlias||'metricdetails_string','ModifiedBy','ModifiedBy',cast('0' as bit),cast('0' as bit),'BIGINT',1,'ROWS/ROW'
+		-- 		UNION all
+		-- 		select VSourcetypeid,'FACT_'||VSpokeAlias||'metricdetails_string','ModifiedDate','ModifiedDate',cast('0' as bit),cast('0' as bit),'DateTime',1,'ROWS/ROW'
+		-- 		UNION all
+		-- 		select VSourcetypeid,'FACT_'||VSpokeAlias||'metricdetails_string','LOCATIONDIMENSIONID','LOCATIONDIMENSIONID',cast('0' as bit),cast('0' as bit),'BIGINT',1,'ROWS/ROW'
+		-- 		UNION all
+		-- 
+		-- 		select VSourcetypeid,'FACT_'||VSpokeAlias||'metricdetails_string','EntityId','entityid',cast('0' as bit),cast('0' as bit),'bigint',1,'ROWS/ROW'
+		-- 		UNION all
+		-- 
+		-- 		select VSourcetypeid,'FACT_'||VSpokeAlias||'metricdetails_string','EntityLocationId','Locationid',cast('0' as bit),cast('0' as bit),'bigint',1,'ROWS'
+		-- 		UNION all
+		-- 
+		-- 		select VSourcetypeid,'FACT_'||VSpokeAlias||'metricdetails_string','operating_id','operating_id',cast('0' as bit),cast('0' as bit),'bigint',1,'ROWS'
+		-- 
+		-- 		UNION all
+		-- 
+		-- 		select VSourcetypeid,'FACT_'||VSpokeAlias||'metricdetails_string','source_id','source_id',cast('0' as bit),cast('0' as bit),'bigint',1,'ROWS/ROW'
+		-- 
+		-- 
+		-- 		UNION all
+		-- 
+		-- 		SELECT VSourcetypeid,'FACT_'||VSpokeAlias||'metricdetails_string',
+		-- 		 INPUT.metricname , INPUT.metricname ,INPUT.ISREQUIRED,INPUT.ISPRIMARYKEY,'varchar(500)',1,'ROWS/ROW'
+		-- 		FROM @INPUTMETRICDATA INPUT
+		-- 
+		-- 		UNION all
+		-- 
+		-- 		select VSourcetypeid,'FACT_'||VSpokeAlias||'metricdetails_string','profileid','profileid',cast('0' as bit),cast('0' as bit),'bigint',1,'ROWS'
+		-- 
+		-- 		UNION all
+		-- 		select VSourcetypeid,'FACT_'||VSpokeAlias||'metricdetails_string','validationstatus','validationstatus',cast('0' as bit),cast('0' as bit),'varchar(50)',1,'ROWS' ;
+		-- 		end;
+
+		  /* Profilind part ends */ 
+  
+ 
+
+		INSERT INTO DBKPIFactTABLES(SPOKE_ID,TABLE_NAME,TABLE_COLUMNS,ATTRIBUTES,IS_NULLABLE,IS_PRIMARY,DATATYPE,iTYPE,XPATH) 
+		VALUES(VSourcetypeid,'DBKPIFact','source_id','sourcetypeid',cast('0' as bit),cast('0' as bit),'bigint',1,'ROWS')
+		,(VSourcetypeid,'DBKPIFact','KPIFactID','kpifactid',cast('0' as bit),cast('0' as bit),'BIGINT',1,'ROWS/ROW/KPIS/KPI')
+		,(VSourcetypeid,'DBKPIFact','KPIID','id',cast('0' as bit),cast('0' as bit),'BIGINT',1,'ROWS/ROW/KPIS/KPI')
+		,(VSourcetypeid,'DBKPIFact','AlertID','alertid',cast('0' as bit),cast('0' as bit),'BIGINT',1,'ROWS/ROW/KPIS/KPI')
+		,(VSourcetypeid,'DBKPIFact','KPIStatus','status',cast('0' as bit),cast('0' as bit),'BIGINT',1,'ROWS/ROW/KPIS/KPI')
+		,(VSourcetypeid,'DBKPIFact','EntityId','entityid',cast('0' as bit),cast('0' as bit),'bigint',1,'ROWS')
+		,(VSourcetypeid,'DBKPIFact','Seq','seq',cast('0' as bit),cast('0' as bit),'varchar',1,'ROWS/ROW/KPIS/KPI')
+		,(VSourcetypeid,'DBKPIFact','EntityLocationID','Locationid',cast('0' as bit),cast('0' as bit),'bigint',1,'ROWS')
+		,(VSourcetypeid,'DBKPIFact','ConditionStatusName','statusname',cast('0' as bit),cast('0' as bit),'varchar(100)',1,'ROWS/ROW/KPIS/KPI')
+		,(VSourcetypeid,'DBKPIFact','ConditionGroupingName','groupingname',cast('0' as bit),cast('0' as bit),'varchar(100)',1,'ROWS/ROW/KPIS/KPI');
+
+		--UNION ALL
+		INSERT INTO DBKPIFactTABLES(SPOKE_ID,TABLE_NAME,TABLE_COLUMNS,ATTRIBUTES,IS_NULLABLE,IS_PRIMARY,DATATYPE,iTYPE,XPATH) 
+		VALUES(VSourcetypeid,'DBKPIFactDetails','source_id','sourcetypeid',cast('0' as bit),cast('0' as bit),'bigint',1,'ROWS')
+		,(VSourcetypeid,'DBKPIFactDetails','KPIFactDetailsID','kpifactdetailsid',cast('0' as bit),cast('0' as bit),'BIGINT',1,'ROWS/ROW/Measures/Measure')
+		,(VSourcetypeid,'DBKPIFactDetails','MeasureName','id',cast('0' as bit),cast('0' as bit),'varchar',1,'ROWS/ROW/Measures/Measure')
+		,(VSourcetypeid,'DBKPIFactDetails','MeasureValue','val',cast('0' as bit),cast('0' as bit),'varchar',1,'ROWS/ROW/Measures/Measure')
+		,(VSourcetypeid,'DBKPIFactDetails','Seq','seq',cast('0' as bit),cast('0' as bit),'varchar',1,'ROWS/ROW/Measures/Measure')
+		,(VSourcetypeid,'DBKPIFactDetails','EntityId','entityid',cast('0' as bit),cast('0' as bit),'bigint',1,'ROWS')
+		,(VSourcetypeid,'DBKPIFactDetails','EntityLocationID','Locationid',cast('0' as bit),cast('0' as bit),'bigint',1,'ROWS');
+
+ 
+		if((VIsFormulaexists=0 AND VHasNLegsNMachine!='1:0,') and (VIsFormulaexists=0 and VHasNLegsNMachine!='1:1,')) Then
+		Begin
+     		INSERT INTO DBKPIFactTABLES(SPOKE_ID,TABLE_NAME,TABLE_COLUMNS,ATTRIBUTES,IS_NULLABLE,IS_PRIMARY,DATATYPE,iTYPE,XPATH)
+		
+		select VSourcetypeid,'FACT_'||VSpokeAlias||'metricdetails','RECORDDATEUTC','RECORDDATEUTC',cast('0' as bit),cast('0' as bit),'DateTime',1,'ROWS/ROW'
+		UNION all
+		select VSourcetypeid,'FACT_'||VSpokeAlias||'metricdetails','LOCATIONDIMENSIONID','LOCATIONDIMENSIONID',cast('0' as bit),cast('0' as bit),'BIGINT',1,'ROWS/ROW'
+		UNION all
+		select VSourcetypeid,'FACT_'||VSpokeAlias||'metricdetails','EntityId','entityid',cast('0' as bit),cast('0' as bit),'bigint',1,'ROWS/ROW'
+		UNION all
+		select VSourcetypeid,'FACT_'||VSpokeAlias||'metricdetails','EntityLocationId','Locationid',cast('0' as bit),cast('0' as bit),'bigint',1,'ROWS'
+		UNION all
+		select VSourcetypeid,'FACT_'||VSpokeAlias||'metricdetails','operating_id','operating_id',cast('0' as bit),cast('0' as bit),'bigint',1,'ROWS'
+		UNION all
+		select VSourcetypeid,'FACT_'||VSpokeAlias||'metricdetails','source_id','source_id',cast('0' as bit),cast('0' as bit),'bigint',1,'ROWS/ROW'
+		UNION all
+		select VSourcetypeid,'FACT_'||VSpokeAlias||'metricdetails','seq','seq',cast('0' as bit),cast('0' as bit),'varchar(100)',1,'ROWS/ROW'
+		UNION all
+		select VSourcetypeid,'FACT_'||VSpokeAlias||'metricdetails','Call_UID','call_uid',cast('0' as bit),cast('0' as bit),'varchar(50)',1,'ROWS/ROW'
+		-- UNION all
+-- 		select VSourcetypeid,'FACT_'||VSpokeAlias||'metricdetails','Call_UID','Call_UID',cast('0' as bit),cast('0' as bit),'varchar(50)',1,'ROWS/ROW'
+-- 		UNION all
+-- 		select VSourcetypeid,'FACT_'||VSpokeAlias||'metricdetails','RecordID','recordid',cast('0' as bit),cast('0' as bit),'BIGINT',1,'ROWS/ROW'
+-- 		UNION all
+-- 		select VSourcetypeid,'FACT_'||VSpokeAlias||'metricdetails','CreatedBy','CreatedBy',cast('0' as bit),cast('0' as bit),'BIGINT',1,'ROWS/ROW'
+-- 		UNION all
+-- 		select VSourcetypeid,'FACT_'||VSpokeAlias||'metricdetails','CreatedDate','CreatedDate',cast('0' as bit),cast('0' as bit),'DateTime',1,'ROWS/ROW'
+-- 		UNION all
+-- 		select VSourcetypeid,'FACT_'||VSpokeAlias||'metricdetails','ModifiedBy','ModifiedBy',cast('0' as bit),cast('0' as bit),'BIGINT',1,'ROWS/ROW'
+-- 		
+-- 		select VSourcetypeid,'FACT_'||VSpokeAlias||'metricdetails','ModifiedDate','ModifiedDate',cast('0' as bit),cast('0' as bit),'DateTime',1,'ROWS/ROW'
+ 		UNION all
+		
+		SELECT VSourcetypeid,'FACT_'||VSpokeAlias||'metricdetails',
+		metricname , metricname ,ISREQUIRED,ISPRIMARYKEY,METRICDATATYPENAME,1,'ROWS/ROW'
+		FROM 
+		INPUTMETRICDATA;
+		
+		if(select count(1) from InputMetricRulesData)>0 then
+		Begin
+		Insert into DBKPIFactTABLES(SPOKE_ID,TABLE_NAME,TABLE_COLUMNS,ATTRIBUTES,IS_NULLABLE,IS_PRIMARY,DATATYPE,iTYPE,XPATH)
+		select distinct VSourcetypeid,'FACT_'||VSpokeAlias||'metricdetails',Fuzzy.MetricName||'Fuzzy',Fuzzy.MetricName||'Fuzzy',cast('0' as bit),cast('0' as bit)
+		,Fuzzy.TransformActualDataType,1,'ROWS/ROW'
+		from  InputMetricRulesData Fuzzy
+		JOIN INPUTMETRICDATA Metrics on Fuzzy.MetricName=Metrics.MetricName;
+		END;
+		End if;
+		END;
+  
+		ELSE
+		BEGIN
+  
+	 
+		INSERT INTO DBKPIFactTABLES(SPOKE_ID,TABLE_NAME,TABLE_COLUMNS,ATTRIBUTES,IS_NULLABLE,IS_PRIMARY,DATATYPE,iTYPE,XPATH)
+		
+		select VSourcetypeid,'FACT_'||VSpokeAlias||'metricdetails','RECORDDATEUTC','RECORDDATEUTC',cast('0' as bit),cast('0' as bit),'DateTime',1,'ROWS/ROW'
+		UNION all
+		select VSourcetypeid,'FACT_'||VSpokeAlias||'metricdetails','LOCATIONDIMENSIONID','LOCATIONDIMENSIONID',cast('0' as bit),cast('0' as bit),'BIGINT',1,'ROWS/ROW'
+		UNION all
+
+		select VSourcetypeid,'FACT_'||VSpokeAlias||'metricdetails','EntityId','entityid',cast('0' as bit),cast('0' as bit),'bigint',1,'ROWS/ROW'
+		UNION all
+
+		select VSourcetypeid,'FACT_'||VSpokeAlias||'metricdetails','EntityLocationId','Locationid',cast('0' as bit),cast('0' as bit),'bigint',1,'ROWS'
+		UNION all
+
+		select VSourcetypeid,'FACT_'||VSpokeAlias||'metricdetails','operating_id','operating_id',cast('0' as bit),cast('0' as bit),'bigint',1,'ROWS'
+
+		UNION all
+
+		select VSourcetypeid,'FACT_'||VSpokeAlias||'metricdetails','source_id','source_id',cast('0' as bit),cast('0' as bit),'bigint',1,'ROWS/ROW'
+
+		
+		UNION all
+		select VSourcetypeid,'FACT_'||VSpokeAlias||'metricdetails','seq','seq',cast('0' as bit),cast('0' as bit),'varchar(100)',1,'ROWS/ROW'
+		UNION all
+		select VSourcetypeid,'FACT_'||VSpokeAlias||'metricdetails','Call_UID','Call_UID',cast('0' as bit),cast('0' as bit),'varchar(50)',1,'ROWS/ROW'
+		-- UNION all
+-- 		select VSourcetypeid,'FACT_'||VSpokeAlias||'metricdetails','RecordID','recordid',cast('0' as bit),cast('0' as bit),'BIGINT',1,'ROWS/ROW'
+-- 		UNION all
+-- 		select VSourcetypeid,'FACT_'||VSpokeAlias||'metricdetails','CreatedBy','CreatedBy',cast('0' as bit),cast('0' as bit),'BIGINT',1,'ROWS/ROW'
+-- 		UNION all
+-- 		select VSourcetypeid,'FACT_'||VSpokeAlias||'metricdetails','CreatedDate','CreatedDate',cast('0' as bit),cast('0' as bit),'DateTime',1,'ROWS/ROW'
+-- 		UNION all
+-- 		select VSourcetypeid,'FACT_'||VSpokeAlias||'metricdetails','ModifiedBy','ModifiedBy',cast('0' as bit),cast('0' as bit),'BIGINT',1,'ROWS/ROW'
+-- 		UNION all
+-- 		select VSourcetypeid,'FACT_'||VSpokeAlias||'metricdetails','ModifiedDate','ModifiedDate',cast('0' as bit),cast('0' as bit),'DateTime',1,'ROWS/ROW'
+		
+		
+		UNION all
+		SELECT VSourcetypeid,'FACT_'||VSpokeAlias||'metricdetails',
+		metricname , metricname ,ISREQUIRED,ISPRIMARYKEY,METRICDATATYPENAME,1,'ROWS/ROW'
+		FROM INPUTMETRICDATA;
+
+		
+		INSERT INTO DBKPIFactTABLES(SPOKE_ID,TABLE_NAME,TABLE_COLUMNS,ATTRIBUTES,IS_NULLABLE,IS_PRIMARY,DATATYPE,iTYPE,XPATH)
+
+		select VSourcetypeid,'FACT_'||VSpokeAlias||'metricdetails','RECORDDATEUTC','RECORDDATEUTC',cast('0' as bit),cast('0' as bit),'DateTime',1,'ROWS/ROW'
+		
+		--select VSourcetypeid,'FACT_'||VSpokeAlias||'AGGREGATE','RecordID','recordid',cast('0' as bit),cast('0' as bit),'BIGINT',1,'ROWS/ROW'
+		
+		UNION all
+
+		select VSourcetypeid,'FACT_'||VSpokeAlias||'AGGREGATE','seq','seq',cast('0' as bit),cast('0' as bit),'varchar(100)',1,'ROWS/ROW'
+
+		UNION all
+		
+		select VSourcetypeid,'FACT_'||VSpokeAlias||'AGGREGATE','Call_UID','call_uid',cast('0' as bit),cast('0' as bit),'varchar(50)',1,'ROWS/ROW'
+		
+		--UNION ALL
+		--select VSourcetypeid,'FACT_'||VSpokeAlias||'AGGREGATE','CreatedBy','CreatedBy',cast('0' as bit),cast('0' as bit),'BIGINT',1,'ROWS/ROW'
+		--UNION all
+		--select VSourcetypeid,'FACT_'||VSpokeAlias||'AGGREGATE','CreatedDate','CreatedDate',cast('0' as bit),cast('0' as bit),'DateTime',1,'ROWS/ROW'
+		--UNION all
+		--select VSourcetypeid,'FACT_'||VSpokeAlias||'AGGREGATE','ModifiedBy','ModifiedBy',cast('0' as bit),cast('0' as bit),'BIGINT',1,'ROWS/ROW'
+		--UNION all
+		--select VSourcetypeid,'FACT_'||VSpokeAlias||'AGGREGATE','ModifiedDate','ModifiedDate',cast('0' as bit),cast('0' as bit),'DateTime',1,'ROWS/ROW'
+		--union all
+		union all
+		
+		SELECT VSourcetypeid,'FACT_'||VSpokeAlias||'AGGREGATE',
+		metricname,metricname,ISREQUIRED,ISPRIMARYKEY,METRICDATATYPENAME,1,'ROWS/ROW'
+		FROM INPUTMETRICDATA 
+		where cast(FORMULA as smallint)>0 or ISPRIMARYKEY='1';
+		
+		INSERT INTO DBKPIFactTABLES(SPOKE_ID,TABLE_NAME,TABLE_COLUMNS,ATTRIBUTES,IS_NULLABLE,IS_PRIMARY,DATATYPE,iTYPE,XPATH)
+		--select VSourcetypeid,'DBKPIFACTMST'||VSpokeAlias,'RecordID','recordid',cast('0' as bit),cast('0' as bit),'varchar(100)',1,'ROWS/ROW'
+		
+		--Union all   
+		
+		  
+		
+		  
+			
+		--select VSourcetypeid,'DBKPIFACTMST'||VSpokeAlias,'CreatedBy','CreatedBy',cast('0' as bit),cast('0' as bit),'BIGINT',1,'ROWS/ROW'
+		
+		--UNION all
+		
+		--select VSourcetypeid,'DBKPIFACTMST'||VSpokeAlias,'CreatedDate','CreatedDate',cast('0' as bit),cast('0' as bit),'DateTime',1,'ROWS/ROW'
+		
+		--UNION all
+		
+		--select VSourcetypeid,'DBKPIFACTMST'||VSpokeAlias,'ModifiedBy','ModifiedBy',cast('0' as bit),cast('0' as bit),'BIGINT',1,'ROWS/ROW'
+		
+		--UNION all
+		--select VSourcetypeid,'DBKPIFACTMST'||VSpokeAlias,'ModifiedDate','ModifiedDate',cast('0' as bit),cast('0' as bit),'DateTime',1,'ROWS/ROW'
+		
+		--UNION ALL
+			
+		select VSourcetypeid,'DBKPIFACTMST'||VSpokeAlias,'EntityId','entityid',cast('0' as bit),cast('0' as bit),'bigint',1,'ROWS'
+		
+		Union all   
+		
+		select VSourcetypeid,'DBKPIFACTMST'||VSpokeAlias,'EntityLocationId','Locationid',cast('0' as bit),cast('0' as bit),'bigint',1,'ROWS'
+		
+		Union all   
+		
+		select VSourcetypeid,'DBKPIFACTMST'||VSpokeAlias,'operating_id','operating_id',cast('0' as bit),cast('0' as bit),'bigint',1,'ROWS/ROW'
+	
+		Union all 
+		
+		select VSourcetypeid,'DBKPIFACTMST'||VSpokeAlias,'source_id','source_id',cast('0' as bit),cast('0' as bit),'BIGINT',1,'ROWS/ROW'
+		Union all 
+		select VSourcetypeid,'DBKPIFACTMST'||VSpokeAlias,'SEQ','seq',cast('0' as bit),cast('0' as bit),'varchar(100)',1,'ROWS/ROW'
+		Union all 
+		select VSourcetypeid,'DBKPIFACTMST'||VSpokeAlias,'Call_UID','call_uid',cast('0' as bit),cast('0' as bit),'varchar(100)',1,'ROWS/ROW'
+		
+		union all
+		
+		SELECT VSourcetypeid,'DBKPIFACTMST'||VSpokeAlias,
+		metricname,metricname,ISREQUIRED,ISPRIMARYKEY,METRICDATATYPENAME,1,'ROWS/ROW'
+		FROM INPUTMETRICDATA 
+		where ISPRIMARYKEY='1';
+			
+			
+		if(select count(1) from InputMetricRulesData)>0 then
+		Begin
+		Insert into DBKPIFactTABLES(SPOKE_ID,TABLE_NAME,TABLE_COLUMNS,ATTRIBUTES,IS_NULLABLE,IS_PRIMARY,DATATYPE,iTYPE,XPATH)
+		select distinct VSourcetypeid,'FACT_'||VSpokeAlias||'metricdetails',Fuzzy.MetricName||'Fuzzy',Fuzzy.MetricName||'Fuzzy'
+		,cast('0' as bit),cast('0' as bit),fuzzy.TransformActualDataType,1,'ROWS/ROW'
+		from  InputMetricRulesData Fuzzy
+		JOIN INPUTMETRICDATA Metrics on Fuzzy.MetricName=Metrics.MetricName;
+		END;
+		End if;
+		END;
+		End if;
+		if ((VIsFormulaexists=0 AND VHasNLegsNMachine!='1:0,') and (VIsFormulaexists=0 and VHasNLegsNMachine!='1:1,')) Then
+		Begin
+		  
+			INSERT INTO KBSPOKETABLE(SPOKE_ID,SPOKE_TYPE,TABLE_NAME,TABLE_TYPE,XPATH,TYPE)
+			VALUES
+			(VSourcetypeid,'NORMAL','DBKPIFact','KPI','ROWS/ROW/KPIS/KPI',1)
+			,(VSourcetypeid,'NORMAL','DBKPIFactDetails','measures','ROWS/ROW/Measures/Measure',1)
+			,(VSourcetypeid,'NORMAL','DBKPIFactDetails','kpimetrics','ROWS/ROW/KPIS/KPI',1)
+			,(VSourcetypeid,'NORMAL','Fact_'|| VSpokeAlias||'metricdetails','Metrics','ROWS/ROW',1)
+			--,(VSourcetypeid,'NORMAL','Fact_'|| VSpokeAlias||'metricdetails_string','Metrics','ROWS/ROW',1)
+
+			;
+		END;
+		ELSE
+		BEGIN
+		INSERT INTO KBSPOKETABLE(SPOKE_ID,SPOKE_TYPE,TABLE_NAME,TABLE_TYPE,XPATH,TYPE)
+		VALUES
+		(VSourcetypeid,'AGGREGATE','DBKPIFact','KPI','ROWS/ROW/KPIS/KPI',1)
+		,(VSourcetypeid,'AGGREGATE','DBKPIFactDetails','measures','ROWS/ROW/Measures/Measure',1)
+		,(VSourcetypeid,'AGGREGATE','DBKPIFactDetails','kpimetrics','ROWS/ROW/KPIS/KPI',1)
+		,(VSourcetypeid,'AGGREGATE','Fact_'|| VSpokeAlias||'metricdetails','Metrics','ROWS/ROW',1)
+		,(VSourcetypeid,'AGGREGATE','FACT_'|| VSpokeAlias||'Aggregate','AGGREGATETABLE','ROWS/ROW',1)
+		,(VSourcetypeid,'AGGREGATE','DBKPIFACTMST'|| VSpokeAlias,'Master','ROWS/ROW',1);
+		END;
+		End if;
+
+		INSERT INTO DBKPIFactTABLES(SPOKE_ID,TABLE_NAME,TABLE_COLUMNS,ATTRIBUTES,IS_NULLABLE,IS_PRIMARY,DATATYPE,iTYPE,XPATH)
+		/*Time Related*/
+		SELECT SPOKE_ID,TABLE_NAME,TABLE_COLUMNS||'ID',ATTRIBUTES||'ID',IS_NULLABLE,IS_PRIMARY,'BIGINT',iTYPE,XPATH
+		FROM DBKPIFactTABLES 
+		where lower(DATATYPE) IN ('datetime','year','time','date') and lower(TABLE_NAME) ='fact_'|| lower(vspokealias)||'metricdetails'
+		and lower(TABLE_COLUMNS) not in('recorddateutc','createddate','modifieddate')
+		UNION ALL
+		/*Location related*/
+		SELECT SPOKE_ID,TABLE_NAME,TABLE_COLUMNS||'ID',ATTRIBUTES||'ID',IS_NULLABLE,IS_PRIMARY,'BIGINT',iTYPE,XPATH
+		FROM DBKPIFactTABLES 
+		where lower(DATATYPE) IN ('latitude','longitude') and lower(TABLE_NAME) ='fact_'|| lower(vspokealias)||'metricdetails';
+
+		INSERT INTO KBSPOKETABLEDETAILS(TABLE_ID,TABLE_COLUMNS,ATTRIBUTES,IS_PRIMARY,IS_NULLABLE,DATATYPE,XPATH)
+		SELECT RECORDID,FACT.TABLE_COLUMNS,FACT.ATTRIBUTES,cast(FACT.IS_PRIMARY as int),cast(FACT.IS_NULLABLE as int),FACT.DATATYPE,FACT.xpath
+		FROM DBKPIFactTABLES FACT 
+		JOIN KBSPOKETABLE MAIN
+		ON MAIN.SPOKE_ID=FACT.SPOKE_ID AND upper(MAIN.TABLE_NAME)=Upper(FACT.TABLE_NAME)
+		where main.TABLE_TYPE!='kpimetrics'
+		order by FACT.ID;	
+
+		
+		INSERT INTO KBSPOKETABLEDETAILS(TABLE_ID,TABLE_COLUMNS,ATTRIBUTES,IS_PRIMARY,IS_NULLABLE,DATATYPE,XPATH)
+		SELECT RECORDID,FACT.TABLE_COLUMNS,FACT.ATTRIBUTES,cast(FACT.IS_PRIMARY as int),cast(FACT.IS_NULLABLE as int),FACT.DATATYPE,FACT.xpath
+		from
+		(
+			Select 1 id, VSourcetypeid SPOKE_ID,'DBKPIFactDetails' table_name,'source_id' table_columns,'sourcetypeid' attributes,0 is_primary, 0 is_nullable,'bigint' datatype,'ROWS' xpath
+			union
+			Select 2, VSourcetypeid,'DBKPIFactDetails','KPIFactDetailsID','kpifactdetailsid',0,0,'BIGINT','ROWS/ROW/KPIS/KPI/kpimetrics/kpimetric'
+			union
+			Select 3, VSourcetypeid,'DBKPIFactDetails','MeasureName','name',0,0,'varchar','ROWS/ROW/KPIS/KPI/kpimetrics/kpimetric'
+			union
+			Select 4, VSourcetypeid,'DBKPIFactDetails','MeasureValue','value',0,0,'varchar','ROWS/ROW/KPIS/KPI/kpimetrics/kpimetric'
+			union
+			Select 5, VSourcetypeid,'DBKPIFactDetails','Seq','seq',0,0,'varchar','ROWS/ROW'
+			union
+			Select 6, VSourcetypeid,'DBKPIFactDetails','EntityId','entityid',0,0,'bigint','ROWS'
+			union
+			Select 7, VSourcetypeid,'DBKPIFactDetails','EntityLocationID','Locationid',0,0,'bigint','ROWS'
+			union
+			Select 8, VSourcetypeid,'DBKPIFactDetails','kpiid','id',0,0,'bigint','ROWS/ROW/KPIS/KPI'
+		) fact
+		JOIN KBSPOKETABLE MAIN
+		ON MAIN.SPOKE_ID=FACT.SPOKE_ID AND upper(MAIN.TABLE_NAME)=Upper(FACT.TABLE_NAME)
+		where main.TABLE_TYPE='kpimetrics'
+		order by FACT.ID				
+		;
+		
+		/*Metadata insertion complete*/
+
+		end;
+		end if;
+	
+		/* Sending the xml formatted back to the UI */
+ 
+
+	UPDATE KBSPOKETABLE
+		SET ISACTIVE='1'
+		WHERE SPOKE_ID=VSourcetypeid;
+ 
+		Return(
+		Select Row_to_json(output)
+		from
+		(
+			Select Row_to_json(spk) "SPOKE"
+			From
+			(
+			SELECT Visactive as isactive,SpokeName as "SPOKENAME",Replace(SpokeName,' ','') "ALIAS",VTRAN as "TRANSTYPE",SPOKEDESCRIPTION "SPOKEDESCRIPTION",'' "SourceURL",SourceType "SourceType"
+			,HASNLEGSNMACHINE "HASNLEGSNMACHINE",CREATEDBY "CREATEDBY",ConnectionType "ConnectionType",
+			ServerName "ServerName",AuthenticationType "AuthenticationType",UserName "UserName",Password "Password",FilePath "MDFPath"
+			,CollectionName "CollectionName",DataFormat "DataFormat",MainSeparator "MainSeparator",SubSeparator "SubSeparator"
+			,PRIMARYKEY "PRIMARYKEY",CUSTOMERIDENTIFIER "CUSTOMERIDENTIFIER"
+                ,TIMEZONEID "TIMEZONEID",VSourcetypeid "SPOKEID"
+			,VSource "Source"
+			,VID "VID",masterspokeid "MASTERSPOKEID"
+                , sourceguid "SOURCEGUID",VMQTTURL "MQTTURL",VMQTTTopic "MQTTTopic"
+                , VMQTTUsername "MQTTUsername", VMQTTPassword "MQTTPassword"
+			,
+			(
+				Select Row_to_json(Mdet) "METRICS"
+				from
+				(
+					Select Array_to_json(Array_Agg(Row_to_json(mets))) as "METRIC"
+					from
+					(
+						select METRICID as "METRICID",MetricName "NAME", MetricDataTypeName "DATATYPE",Metricdatatype as  "DataTypeName" 
+						,FORMULA "FormulaId",MetricAlias "MetricAlias",IsRequired "IsRequired",IsType "IsType",RuleType "Type"
+						, RuleDelimeter "Delimeter",Coalesce(isreasonablecheck,'0') "IsReasonablecheck"
+						,xpath "Path"
+						 ,(
+							Select Row_to_json(inpd) "FuzzyLogic"
+							From
+							(
+								Select Array_to_json(Array_agg(Row_to_json(inp))) as "Rule"
+								from	
+								(
+									Select AA.MetricName "MetricName",AA.RuleID "RuleID",AA.Priority "Priority" 
+									,AA.TransformActualDataType "TransformActualDataType"
+									
+									,TransformationDataTypeAlias "TransformDataType"
+									,
+									(
+										Select Row_to_json(inpd) "Values"
+										From
+										(
+										Select Array_to_json(Array_agg(Row_to_json(inp))) as "Input"
+										from	
+										(
+										Select BB.Value "Value" 
+										from InputMetricRulesData BB 
+										where AA.MetricName=BB.MetricName and AA.RuleID=BB.RuleID
+										--For XML RAW('Input'),Root('Values')
+										)as inp
+										)inpd
+									 )
+									from InputMetricRulesData AA 
+									where A.MetricName=AA.MetricName
+									Group By AA.MetricName,AA.RuleID,AA.Priority ,AA.TransformActualDataType,TransformationDataTypeAlias
+									--For xml RAW('Rule'),Root('FuzzyLogic')
+								)inp
+							)as inpd
+						)
+						,
+						(
+							Select Array_to_json(Array_Agg(Row_to_json(forms))) "NewFormula"
+							from
+							(
+							Select FormulaMeasure 
+							from
+							(
+								Select iparams->'Metric'->>'NAME'  as MetricName,iparams->'Metric'->>'NewFormula' FormulaMeasure
+								,iparams->'Metric'->>'DATATYPE' DATATYPE,iparams->'Metric'->>'FormulaId' FormulaId
+								from
+								(
+									select json_array_elements(sparams) as iparams
+									from
+									(
+									select ivalue->'SPOKE'->'METRICS'->'METRIC' as sparams
+									From
+									temps limit 1
+									)a
+									)params
+								)mets	
+								where A.MetricName=mets.MetricName
+								--For XML Path('') 
+							)forms
+						)
+						,
+						(
+							Select Array_to_json(Array_Agg(Row_to_json(val))) as "VRules"
+							from
+							( 
+							Select 
+							(
+								Select Row_to_json(vrule) as "ValidationRules"
+								from
+								(
+									select Array_to_json(Array_Agg(Row_to_json(val))) as "Rules"
+									from
+									(
+									Select BB.RuleID "RuleId",BB.ExpectedDatatype "ExpectedDataType",BB.RuleType "Ruletype"
+									,BB.RegExpression "Regexpression",BB.TOrder "TOrder" 
+									from RuleExtraction BB 
+									where AA.torder=BB.TOrder
+									--For XML PATH('Rules'),Root('ValidationRules')
+									)as val
+								)Vrule	
+							)
+							from ValidationMetricExtraction AA 
+							where A.MetricName=AA.MetricName
+							Group By AA.MetricName, AA.DBDatatype, AA.Torder
+							--For xml PATH('')
+							)as val
+						)
+						from 
+						InputMetricData A 
+						--for xml raw('METRIC'),root('METRICS')
+					) as mets
+				) Mdet	
+			) 
+			,
+			(
+				Select Row_to_json(measure) as "MEASURES"
+				from
+				( 
+					Select Array_to_json(Array_Agg(Row_to_json(meas))) "MEASURE"
+					from
+					(
+					select Measureid as "MEASUREID",MetricName "MEASURENAME",MEASUREUNIT_ID "MEASUREUNIT_ID",IsActive "IsActive",
+					Coalesce(SOURCE_ID,0) "SOURCE_ID"
+					,Coalesce(MEASURE_DESC,'') "MEASUREDESCRIPTION"
+					,Coalesce(FORMULATITLE,'') "FORMULATITLE"
+					,Coalesce(FORMULAMEASURE,'') "FORMULAMEASURE"
+					,Coalesce(FORMULA_CHK,0) "FORMULA_CHK"
+					,Coalesce(MEASURE_MINMAX,0) "MEASURE_MINMAX"
+					,Coalesce(TEMPLATE_ID,0) "TEMPLATE_ID"
+					from InputMetricData A 
+					JOIN kbmeasureMst B ON A.MeasureId=B.MEASURE_ID 
+					--for xml raw('MEASURE'),root('MEASURES')
+					) meas
+				) as measure
+			)	
+		
+			from InputData 
+			)spk	
+		--FOR XML  path('SPOKE')
+		)output
+		);
+	
+	End;
+	Elseif Lower(VTran)='update' then
+	begin
+	
+	
+ 	/* Inserting the metric details into the temporary table used in insertion  into the KBMetricmst and the KBMeasuremst tables */ 
+		 
+		Insert into InputMetricData(Sourceid,MetricName,MetricId,MetricDataType,IsRequired,FORMULA,IsType,METRICALIAS,ConstantValue,IsCustomerIdentifier,IsPrimaryKey
+			,NewlyAdded,RuleType,RuleDelimeter,isreasonablecheck,isNewFormula,entitydefid,EntityMetric,xpath)
+		select A.SourceID,MetricName,MetricID,DataType,IsRequired,FormulaID,IsType
+		,case when MetricAlias='' then NULL else MetricAlias end metricalias
+		,ConstantValue,CustomerIdentifier,PrimaryKey,
+			Case when MetricID IS null or MEtricId =0 then cast('1' as bit) Else cast('0' as bit) End NewlyAdded,RuleType,Delimeter,IsReasonableCheck,isNewFormula
+			,ENTITYDEFID,ENTITYMETRIC, xpath
+		from
+		(
+			select  VSourcetypeid		SourceID
+			,imetrics->'Metric'->>'NAME'	MetricName	
+			,imetrics->'Metric'->>'DATATYPE'	DataType
+			,Cast(imetrics->'Metric'->>'METRICID' as bigint) METRICID
+			,cast(imetrics->'Metric'->>'IsRequired' as bit)	IsRequired
+			,imetrics->'Metric'->>'FormulaId'		FormulaID
+			,imetrics->'Metric'->>'IsType'		IsType
+			,imetrics->'Metric'->>'MetricAlias'	MetricAlias
+			,imetrics->'Metric'->>'ConstantValue'	ConstantValue
+			,Cast(imetrics->'Metric'->>'CUSTOMERIDENTIFIER'  as bit)	CustomerIdentifier
+			,Cast(imetrics->'Metric'->>'PRIMARYKEY' as bit)	PrimaryKey
+			,Cast(imetrics->'Metric'->>'ENTITYDEFID' as bigint)	ENTITYDEFID
+			,imetrics->'Metric'->>'ENTITYMETRIC'	ENTITYMETRIC
+			,imetrics->'Metric'->>'Type'	RuleType
+			,imetrics->'Metric'->>'Delimiter'	Delimeter
+			,Cast(imetrics->'Metric'->>'IsReasonablecheck'  as bit)	IsReasonableCheck
+			,Cast(imetrics->'Metric'->>'IsNewFormula'  as bit)	IsNewFormula
+			,Cast(imetrics->'Metric'->>'IsNewlyAdded' as smallint) newlyadded
+			,imetrics->'Metric'->>'Path' xpath
+			FROM 
+			(
+				Select json_array_elements(imetric) as imetrics
+				From
+				(
+				select ivalue->'SPOKE'-> 'METRICS'->'METRIC' as imetric
+				from temps limit 1
+				)a
+			)mets
+		)A
+		--where newlyadded=1
+
+		;
+
+	
+
+		Update InputMetricData set IsRequired='1' where IsPrimaryKey='1';
+
+		VIsFormulaexists:=(select count(1) from InputMetricData where cast(FORMULA as smallint)>0 and cast(FORMULA as smallint) in(1,3,4,5));
+		
+		--UPdating InputMetricData with Datatype Based on DataTypeAlias---
+
+		Update InputMetricData set MetricDataTypeName=Datatypes.DataTypeName
+		from  
+		KBMasterDataTypes Datatypes
+		where Datatypes.DataTypeAlias=InputMetricData.MetricDataType;
+
+		Insert into InputMetricRulesData(Sourceid, MetricName,RuleID,Value,Priority,TransformActualDataType,TransformationDataTypeAlias)
+		select spokeid,MetricName,RuleID,TE,priority,TransformActualDataType,TransformationDataTypeAlias
+		from
+		(
+		select  VSourcetypeid spokeid
+			,imetrics->'Metric'->>'NAME' MetricName
+			,cast(-100 as int) RuleID
+			,imetrics->'Metric'->>'TransformExpression' TE
+			,cast(NULL  as smallint)priority
+			,imetrics->'Metric'->>'TransformActualDataType' TransformActualDataType
+			,imetrics->'Metric'->>'TransformDataType' TransformationDataTypeAlias
+			FROM 
+			(
+			Select json_array_elements(imetric) as imetrics
+			From
+			(
+			select ivalue->'SPOKE'-> 'METRICS'->'METRIC' as imetric
+			from temps limit 1
+			)a
+			)mets
+		)INPUTS
+		where INPUTs.TE is not null ;
+
+ 
+		Insert into ExistingSourceTemplates(SourceID, TemplateID)
+		Select Distinct  Vsourcetypeid SourceID,TEMPLATE_ID
+		from KBMetricMst 
+		where SOURCE_ID=Vsourcetypeid and TEMPLATE_ID!=1;
+
+		-- Insert into InputMetricRulesData(Sourceid, MetricName,RuleID,Value,Priority,TransformActualDataType,TransformationDataTypeAlias)
+-- 		select spokeid,MetricName,RuleID,TE,priority,TransformActualDataType,TransformationDataTypeAlias
+-- 		from
+-- 		(
+-- 		select  VSourcetypeid spokeid
+-- 			,imetrics->'Metric'->>'NAME' MetricName
+-- 			,cast(-100 as int) RuleID
+-- 			,imetrics->'Metric'->>'TransformExpression' TE
+-- 			,cast(NULL  as smallint)priority
+-- 			,imetrics->'Metric'->>'TransformActualDataType' TransformActualDataType
+-- 			,imetrics->'Metric'->>'TransformDataType' TransformationDataTypeAlias
+-- 			FROM 
+-- 			(
+-- 			Select json_array_elements(imetric) as imetrics
+-- 			From
+-- 			(
+-- 			select ivalue->'SPOKE'-> 'METRICS'->'METRIC' as imetric
+-- 			from temps limit 1
+-- 			)a
+-- 			)mets
+-- 		)INPUTS
+-- 		where INPUTs.TE is not null ;
+
+		/* Inserting into the Metric mst table */ 
+
+		Insert into KBMetricMst(SOURCE_ID,METRICNAME,TEMPLATE_ID,METRICDATATYPE,CREATEDBY,ModifiedBy,AGG_FORMULA,IsType,METRICALIAS,ConstantValue,IscustomerIdentifier,IsPrimaryKey
+		,RuleType,RuleDelimeter,IsReasonableCheck)
+		select  VSourcetypeid,MetricName,1 "Template",MetricDataTypeName,VCreated_By,VCreated_By,FORMULA,IsType,METRICALIAS,ConstantValue,IsCustomerIdentifier
+		,IsPrimaryKey,RuleType,RuleDelimeter,isreasonablecheck
+		FROM  InputMetricData 
+		where newlyadded='1'
+		Union
+		select  A.Sourceid,A.MetricName||'Fuzzy',1 "Template",MetricDataTypeName,VCreated_By,VCreated_By,FORMULA,IsType,METRICALIAS
+		,ConstantValue,IsCustomerIdentifier,IsPrimaryKey,RuleType,RuleDelimeter,isreasonablecheck
+		FROM  InputMetricData  A
+		Join InputMetricRulesData B on A.MetricName=B.MetricName
+		where B.Metricname is not null and newlyadded='1'
+		;
+
+		Update KBMetricMst set AGG_FORMULA=inputs.FORMULA,IscustomerIdentifier=inputs.IsCustomerIdentifier,modifiedby=Vcreated_by
+		from
+		InputMetricData inputs
+		where  inputs.MetricName= KBMetricMst.METRICNAME and KBMetricMst.TEMPLATE_ID=1;
+
+		---------------Updating the @InputMetricData Temp Table with Metric Ids------------------
+		Update InputMetricData set MetricId=B.METRIC_ID
+		from
+		KBMetricMst B 
+		where InputMetricData.Sourceid=B.SOURCE_ID
+		and InputMetricData.MetricName=B.METRICNAME and B.TEMPLATE_ID=1;
+
+		Update  InputMetricRulesData set MetricId=B.METRIC_ID
+		from   
+		KBMetricMst B 
+		where InputMetricRulesData.Sourceid=B.SOURCE_ID
+		and InputMetricRulesData.MetricName=B.METRICNAME and B.TEMPLATE_ID=1;
+
+		/* Inserting the Fuzzy rules created on a metric */
+	 
+	 
+		Insert into KBMetricRules(TEMPLATE_ID,METRIC_ID,RULEID,SOURCEID,VALUE,PRIORITY,ISACTIVE,Torder,TransformationDataType,TransformationDataTypeAlias,CREATEDBY)
+		Select 1 TemplateID, MetricId,RuleID,VSourcetypeid,Value,Priority,'1' IsActive, RecordID,TransformActualDataType,TransformationDataTypeAlias,Vcreated_by CreatedBy
+		From
+		InputMetricRulesData;
+
+		Insert into KBMeasureMst(SOURCE_ID,MEASURE_NAME,MEASURE_DESC,MEASUREUNIT_ID,FORMULATITLE,FORMULAMEASURE,FORMULA_CHK,MEASURE_MINMAX,
+		TEMPLATE_ID,CREATEDBY,CREATEDDATE,IsActive)
+		select  VSourcetypeid
+		,MetricName||'_Measure'
+		,MetricName||'_Measure'
+		,DTypes.DaTaTypeID
+		,NULL
+		,NULL
+		,cast(NULL as smallint)
+		,cast(NULL as smallint)
+		,1
+		,VCreated_By
+		,VActiondate
+		,0
+		FROM  InputMetricData A
+		Join KBMasterDataTypes DTypes on A.MetricDataType= DTypes.DataTypeAlias
+		where cast(Formula as int) Not in (9,10) and newlyadded='1'
+		/* Inserting the Fuzzy Metrics into Measure mst. 24072014. Azeem.*/
+		Union
+		select  A.Sourceid
+		,A.MetricName||'Fuzzy'||'_Measure'
+		,A.MetricName||'Fuzzy'||'_Measure'
+		,DTypes.DaTaTypeID
+		,NULL
+		,NULL
+		,cast(NULL as smallint)
+		,cast(NULL as smallint)
+		,1
+		,VCreated_By
+		,VActiondate
+		,0
+		FROM  InputMetricData  A
+		Join InputMetricRulesData B on A.MetricName=B.MetricName
+		Join KBMasterDataTypes DTypes on A.MetricDataType= DTypes.DataTypeAlias
+		where newlyadded='1';
+
+		/* Inserting into the Measuremst table the Metrics that have got rules defined*/
+
+		Insert into KBMeasureMst(SOURCE_ID,MEASURE_NAME,MEASURE_DESC,MEASUREUNIT_ID,FORMULATITLE,FORMULAMEASURE,FORMULA_CHK,MEASURE_MINMAX,
+		TEMPLATE_ID,CREATEDBY,CREATEDDATE,IsActive)
+		select  VSourcetypeid
+		,MetricName ||'_Measure'
+		,MetricName ||'_Measure'
+		,DTypes.DaTaTypeID
+		,A.Formulatitle
+		,A.FormulaMeasure
+		,case when A.Formulatitle is not null or A.Formulatitle!='' then 1 else NULL END
+		,NULL
+		,1
+		,VCreated_By
+		,VActiondate
+		,1
+		FROM  
+		(
+		select  VSourcetypeid Sourceid
+		,imetrics->'Metric'->>'NAME' MetricName
+		,imetrics->'Metric'->>'NewFormula'  Formulatitle
+		,imetrics->'Metric'->>'ServiceFormula' FormulaMeasure
+		,imetrics->'Metric'->>'DATATYPE'	MetricDataType
+		,cast(imetrics->'Metric'->>'FormulaId' as int)	Formula
+		FROM  
+		(
+			Select json_array_elements(imetric) as imetrics
+			From
+			(
+			select ivalue->'SPOKE'-> 'METRICS'->'METRIC' as imetric
+			from temps limit 1
+			)a
+			)mets
+		)A
+		Join KBMasterDataTypes DTypes on A.MetricDataType= DTypes.DataTypeAlias
+		where Formula in (9,10);
+
+		---------------Updateing the @InputMetricData Temp Table with Measure Ids------------------
+
+		Update  InputMetricData set MeasureId=B.MEASURE_ID
+		from 
+		KBMeasureMst B 
+		where InputMetricData.Sourceid=B.SOURCE_ID
+		and InputMetricData.MetricName=B.MEASURE_NAME and B.TEMPLATE_ID=1;
+
+		if lower(VTran)='update' then
+		begin
+		
+			delete from kbsourceurlmst  where sourceid=VSourcetypeid and lower(objecttype)='source';
+		
+		end;
+		end if;
+ 
+
+		if (select SourceType from InputData  A)=1 then
+		Begin 
+		VSource:=(select cast(ivalue->'SPOKE'->'SourceURL'->> 'Source' as smallint) from temps limit 1);
+		/* Inserting the url's master information. */
+		if(VSource=1) Then
+		BEGIN
+		
+			INSERT INTO KBSOURCEURLMST(SOURCEID,URL,USERNAME,"password",DATA_RETRIEVAL_TIME,DATA_RETRIEVAL_UOM,ISACTIVE,DataSourceID,ServerName
+			,DatabaseName,DBQuery,TableQuery,DBAuthType,DATABASETYPE,InitialPullType,InitialPullFromDate,InitialPullToDate,IntialPullTimePeriod
+			,InitialPullTimePeriodUOM,DATA_FETCH_TYPE,ParameterAppender,HasPaging,PagingColumn,NoofRecords,CREATEDBY,DBIDColumn,DBIDColumnDataType
+			,concatenation_operator,concatenation_rule,uploadtype)
+			SELECT VSourcetypeid
+			,ivalue->'SPOKE'->'SourceURL'->> 'URL' 
+			,ivalue->'SPOKE'->'SourceURL'->> 'DBUsername' 
+			,ivalue->'SPOKE'->'SourceURL'->> 'DBPassword' 
+			,ivalue->'SPOKE'->'SourceURL'->> 'TIMEPERIOD' 
+			,ivalue->'SPOKE'->'SourceURL'->> 'TIMEPERIODUOM' 
+			,'1'
+			,cast(ivalue->'SPOKE'->'SourceURL'->> 'Source' as smallint)
+			,ivalue->'SPOKE'->'SourceURL'->> 'DBServerName' 
+			,ivalue->'SPOKE'->'SourceURL'->> 'Database' 	
+			,ivalue->'SPOKE'->'SourceURL'->> 'DBQuery' 	
+			,ivalue->'SPOKE'->'SourceURL'->> 'TableQuery' 	
+			,cast(ivalue->'SPOKE'->'SourceURL'->> 'Source' as smallint) 		
+			,cast(ivalue->'SPOKE'->'SourceURL'->> 'SelectedDatabaseType' as smallint) 
+			,cast(ivalue->'SPOKE'->'SourceURL'->> 'InitialPullType' as smallint) 
+			,case when cast(ivalue->'SPOKE'->'SourceURL'->>'InitialPullFromDate' as  timestamp)  is not null						
+						Then Cast(ivalue->'SPOKE'->'SourceURL'->>'InitialPullFromDate' as  timestamp)
+						Else Cast('1900-01-01' as Timestamp) End
+			,case when cast(ivalue->'SPOKE'->'SourceURL'->>'InitialPullToDate' as  timestamp) is not null 					
+					Then Cast(ivalue->'SPOKE'->'SourceURL'->>'InitialPullToDate' as  timestamp)
+					Else Cast('1900-01-01' as Timestamp) End
+			,cast(ivalue->'SPOKE'->'SourceURL'->> 'InitialPullTimePeriod' as smallint) 
+			,ivalue->'SPOKE'->'SourceURL'->> 'InitialPullTimePeriodUOM' 
+			,'CurrentData'
+			,ivalue->'SPOKE'->'SourceURL'->> 'ParameterAppender' 
+			,cast(ivalue->'SPOKE'->'SourceURL'->> 'HasPaging' as smallint) 
+			,ivalue->'SPOKE'->'SourceURL'->> 'PagingColumn' 
+			,cast(ivalue->'SPOKE'->'SourceURL'->> 'NoofRecords' as smallint) 
+			,VCreated_By
+			,ivalue->'SPOKE'->'SourceURL'->> 'DBIDColumn' 
+			,ivalue->'SPOKE'->'SourceURL'->> 'DBIDColumnDataType' 
+			,ivalue->'SPOKE'->'SourceURL'->> 'ConcatenationOperator' ConcatenationOperator
+			,ivalue->'SPOKE'->'SourceURL'->> 'ConcatenationRule' ConcatenationRule  
+			,cast(ivalue->'SPOKE'->'SourceURL'->> 'EXACTTIME' as smallint) 
+			From
+			temps limit 1;
+
+	  	 	Begin 
+	  			
+				VQuery:=(select ivalue->'SPOKE'->'SourceURL'->'ImportSettingsDetails' ->>'TableQuery'
+				From
+				temps limit 1);
+				insert into queries(Query)
+				Select item 
+				from 
+				(select regexp_split_to_table(VQuery,';') item)a;
+				VQuery=(Select query from queries where id=1);
+				VQuery_MaxRecord=(Select query from queries where id=2);
+
+				if (select cast(ivalue->'SPOKE'->'SourceURL'->'ImportSettingsDetails' ->>'Source' as smallint) From temps limit 1) is not null then
+				begin
+				
+				Insert into KBSOURCEURLMST(SOURCEID,USERNAME,"password",DATA_RETRIEVAL_TIME,DATA_RETRIEVAL_UOM,DataSourceID,DATABASETYPE,ServerName,DBAuthType,DatabaseName
+				,DBQuery,TableQuery,InitialPullType,IntialPullTimePeriod,InitialPullTimePeriodUOM,DATA_FETCH_TYPE,Parameter,HasPaging,PagingColumn,NoofRecords,CREATEDBY
+				,DBIDColumn,DBIDColumnDataType,Query_Maxrecord,URL,IsRestBased
+				,PortNumber,Organisation,"group")
+				select VSourcetypeid
+
+,case when cast(ivalue->'SPOKE'->'SourceURL'->'ImportSettingsDetails'->>'DBUsername' as varchar(255)) IS not null 
+	then cast(ivalue->'SPOKE'->'SourceURL'->'ImportSettingsDetails'->>'DBUsername' as varchar(255))
+	when cast(ivalue->'SPOKE'->'SourceURL'->'ImportSettingsDetails'->>'WSUSERNAME' as varchar(255)) is not null 
+	then cast(ivalue->'SPOKE'->'SourceURL'->'ImportSettingsDetails'->>'WSUSERNAME' as varchar(255))
+	Else cast(ivalue->'SPOKE'->'SourceURL'->'ImportSettingsDetails'->>'LDAPUSERNAME'  as varchar(255))
+	End Username
+
+,Case when cast(ivalue->'SPOKE'->'SourceURL'->'ImportSettingsDetails'->>'DBPassword' as varchar(255)) IS not null 
+		Then cast(ivalue->'SPOKE'->'SourceURL'->'ImportSettingsDetails'->>'DBPassword' as varchar(255))
+	when Cast(ivalue->'SPOKE'->'SourceURL'->'ImportSettingsDetails'->>'WSPASSWORD' as varchar(255)) IS not null 
+		Then Cast(ivalue->'SPOKE'->'SourceURL'->'ImportSettingsDetails'->>'WSPASSWORD' as varchar(255)) 
+	When Cast(ivalue->'SPOKE'->'SourceURL'->'ImportSettingsDetails'->>'LDAPPASSWORD' as varchar(255)) is not null 
+		Then Cast(ivalue->'SPOKE'->'SourceURL'->'ImportSettingsDetails'->>'LDAPPASSWORD' as varchar(255))
+Else Cast(ivalue->'SPOKE'->'SourceURL'->'ImportSettingsDetails'->>'Password' as varchar(255)) 
+				End "Password"
+
+,ivalue->'SPOKE'->'SourceURL'->> 'TIMEPERIOD' 
+,ivalue->'SPOKE'->'SourceURL'->>'TIMEPERIODUOM' 
+,cast(ivalue->'SPOKE'->'SourceURL'->'ImportSettingsDetails' ->>'Source' as smallint)
+,cast(ivalue->'SPOKE'->'SourceURL'->'ImportSettingsDetails' ->>'SelectedDatabaseType' as smallint)
+,case when cast(ivalue->'SPOKE'->'SourceURL'->'ImportSettingsDetails' ->>'Source' as smallint) =3 
+	then ivalue->'SPOKE'->'SourceURL'->'ImportSettingsDetails' ->>'LDAPServerName' 
+	else ivalue->'SPOKE'->'SourceURL'->'ImportSettingsDetails' ->>'DBServerName' End as DBServerName
+,cast(ivalue->'SPOKE'->'SourceURL'->'ImportSettingsDetails' ->>'DBAuthType' as smallint)
+,ivalue->'SPOKE'->'SourceURL'->'ImportSettingsDetails' ->>'Database'
+,ivalue->'SPOKE'->'SourceURL'->'ImportSettingsDetails' ->>'DBQuery'
+,VQuery tablequery
+,cast(ivalue->'SPOKE'->'SourceURL'->>'InitialPullType'  as smallint)
+,cast(ivalue->'SPOKE'->'SourceURL'->>'InitialPullTimePeriod'  as smallint)
+,ivalue->'SPOKE'->'SourceURL'->>'InitialPullTimePeriodUOM'
+,'HistoricalData'
+,ivalue->'SPOKE'->'SourceURL'->'ImportSettingsDetails' ->>'Parameter'
+,cast(ivalue->'SPOKE'->'SourceURL'->'ImportSettingsDetails' ->>'HasPaging' as smallint)  
+,ivalue->'SPOKE'->'SourceURL'->'ImportSettingsDetails' ->>'PagingColumn'  
+,cast(ivalue->'SPOKE'->'SourceURL'->'ImportSettingsDetails' ->>'NoofRecords' as smallint)  
+,VCreated_By
+,ivalue->'SPOKE'->'SourceURL'->'ImportSettingsDetails' ->>'DBIDColumn'
+,ivalue->'SPOKE'->'SourceURL'->'ImportSettingsDetails' ->>'DBIDColumnDataType'  
+,VQuery_MaxRecord Query_maxrecord
+,ivalue->'SPOKE'->'SourceURL'->'ImportSettingsDetails' ->>'URL'  
+,cast(ivalue->'SPOKE'->'SourceURL'->'ImportSettingsDetails' ->>'IsRestBased' as bit)  
+,case when (
+(ivalue->'SPOKE'->'SourceURL'->>'LDAPPortNumber') !='' and cast(ivalue->'SPOKE'->'SourceURL'->>'LDAPPortNumber' as int) is not null )
+then cast(ivalue->'SPOKE'->'SourceURL'->>'LDAPPortNumber' as int) else null end
+,ivalue->'SPOKE'->'SourceURL'->'ImportSettingsDetails' ->>'LDAPOrg'
+,ivalue->'SPOKE'->'SourceURL'->'ImportSettingsDetails' ->>'LDAPGroup'
+From temps limit 1;
+end;
+				end if;
+				 
+			End;
+     		END;
+		ELSEIF(VSource=2) or (VSource=10) Then
+		BEGIN
+        
+INSERT INTO KBSOURCEURLMST(SOURCEID,URL,USERNAME,PASSWORD,DATA_RETRIEVAL_TIME,DATA_RETRIEVAL_UOM,ISACTIVE,DataSourceID
+,WSDLURL,WSDLClassName,WSDLAction,IsRestBased,InitialPullType,InitialPullFromDate,InitialPullToDate,IntialPullTimePeriod,InitialPullTimePeriodUOM,DATA_FETCH_TYPE,ParameterAppender,CREATEDBY,DBIDColumn,DBIDColumnDataType,concatenation_operator,concatenation_rule,uploadtype)
+SELECT VSourcetypeid,ivalue->'SPOKE'->'SourceURL'->> 'URL',ivalue->'SPOKE'->'SourceURL'->>'WSUSERNAME',ivalue->'SPOKE'->'SourceURL'->>'WSPASSWORD'
+,ivalue->'SPOKE'->'SourceURL'->> 'TIMEPERIOD' 
+,ivalue->'SPOKE'->'SourceURL'->> 'TIMEPERIODUOM','1'
+,cast(ivalue->'SPOKE'->'SourceURL'->> 'Source' as smallint)
+,ivalue->'SPOKE'->'SourceURL'->>'WSDLURL'	
+,ivalue->'SPOKE'->'SourceURL'->>'SelectedWSDLClassName'	
+,ivalue->'SPOKE'->'SourceURL'->>'SelectedWSDLAction'	
+,cast(ivalue->'SPOKE'->'SourceURL'->>'IsRestBased' as bit)	 
+,cast(ivalue->'SPOKE'->'SourceURL'->> 'InitialPullType' as smallint)
+,case when cast(ivalue->'SPOKE'->'SourceURL'->>'InitialPullFromDate' as  timestamp)  is not null	
+	Then Cast(ivalue->'SPOKE'->'SourceURL'->>'InitialPullFromDate' as  timestamp)
+	Else Cast('1900-01-01' as Timestamp) End
+,case when cast(ivalue->'SPOKE'->'SourceURL'->>'InitialPullToDate' as  timestamp) is not null 					
+	Then Cast(ivalue->'SPOKE'->'SourceURL'->>'InitialPullToDate' as  timestamp)
+	Else Cast('1900-01-01' as Timestamp) End
+,cast(ivalue->'SPOKE'->'SourceURL'->> 'InitialPullTimePeriod' as smallint)
+,ivalue->'SPOKE'->'SourceURL'->> 'InitialPullTimePeriodUOM'
+,'CurrentData'
+,ivalue->'SPOKE'->'SourceURL'->> 'ParameterAppender'
+,VCreated_By
+,ivalue->'SPOKE'->'SourceURL'->> 'DBIDColumn'  
+,ivalue->'SPOKE'->'SourceURL'->> 'DBIDColumnDataType'  
+,ivalue->'SPOKE'->'SourceURL'->> 'ConcatenationOperator' ConcatenationOperator
+,ivalue->'SPOKE'->'SourceURL'->> 'ConcatenationRule' ConcatenationRule  
+,cast(ivalue->'SPOKE'->'SourceURL'->> 'EXACTTIME' as smallint) 
+From temps limit 1;
+			
+Begin 
+VQuery:=(select ivalue->'SPOKE'->'SourceURL'->'ImportSettingsDetails' ->>'TableQuery' From temps limit 1 );
+insert into queries(Query) Select item  from  (select regexp_split_to_table(VQuery,';') as item)a ;
+VQuery=(Select query from queries where id=1);
+VQuery_MaxRecord=(Select query from queries where id=2);
+				
+if (select cast(ivalue->'SPOKE'->'SourceURL'->'ImportSettingsDetails' ->>'Source' as smallint) From temps limit 1) is not null then
+begin
+insert into KBSOURCEURLMST(SOURCEID,USERNAME,PASSWORD,DATA_RETRIEVAL_TIME,DATA_RETRIEVAL_UOM,DataSourceID,DATABASETYPE,ServerName,DBAuthType,DatabaseName,DBQuery,TableQuery,InitialPullType,IntialPullTimePeriod,InitialPullTimePeriodUOM,DATA_FETCH_TYPE,Parameter,HasPaging,PagingColumn,NoofRecords,CREATEDBY,DBIDColumn,DBIDColumnDataType,Query_Maxrecord,URL,IsRestBased
+,PortNumber,Organisation,"group",wsdlclassname)
+select VSourcetypeid
+,case when cast(ivalue->'SPOKE'->'SourceURL'->'ImportSettingsDetails'->>'DBUsername' as varchar(255)) IS not null 
+	then cast(ivalue->'SPOKE'->'SourceURL'->'ImportSettingsDetails'->>'DBUsername' as varchar(255))
+     when cast(ivalue->'SPOKE'->'SourceURL'->'ImportSettingsDetails'->>'WSUSERNAME' as varchar(255)) is not null 
+	then cast(ivalue->'SPOKE'->'SourceURL'->'ImportSettingsDetails'->>'WSUSERNAME' as varchar(255))
+    Else cast(ivalue->'SPOKE'->'SourceURL'->'ImportSettingsDetails'->>'LDAPUSERNAME'  as varchar(255)) 
+	end Username
+,Case when cast(ivalue->'SPOKE'->'SourceURL'->'ImportSettingsDetails'->>'DBPassword' as varchar(255)) IS not null 
+	Then cast(ivalue->'SPOKE'->'SourceURL'->'ImportSettingsDetails'->>'DBPassword' as varchar(255))
+      when Cast(ivalue->'SPOKE'->'SourceURL'->'ImportSettingsDetails'->>'WSPASSWORD' as varchar(255)) IS not null 
+	Then Cast(ivalue->'SPOKE'->'SourceURL'->'ImportSettingsDetails'->>'WSPASSWORD' as varchar(255)) 
+      When Cast(ivalue->'SPOKE'->'SourceURL'->'ImportSettingsDetails'->>'LDAPPASSWORD' as varchar(255)) is not null 
+	Then Cast(ivalue->'SPOKE'->'SourceURL'->'ImportSettingsDetails'->>'LDAPPASSWORD' as varchar(255))
+     Else Cast(ivalue->'SPOKE'->'SourceURL'->'ImportSettingsDetails'->>'Password' as varchar(255)) 
+	End "Password"
+,ivalue->'SPOKE'->'SourceURL'->> 'TIMEPERIOD' 
+,ivalue->'SPOKE'->'SourceURL'->>'TIMEPERIODUOM' 
+,cast(ivalue->'SPOKE'->'SourceURL'->'ImportSettingsDetails' ->>'Source' as smallint)
+,cast(ivalue->'SPOKE'->'SourceURL'->'ImportSettingsDetails' ->>'SelectedDatabaseType' as smallint)
+,case when cast(ivalue->'SPOKE'->'SourceURL'->'ImportSettingsDetails' ->>'Source' as smallint) =3 
+	then ivalue->'SPOKE'->'SourceURL'->'ImportSettingsDetails' ->>'LDAPServerName' 
+	else ivalue->'SPOKE'->'SourceURL'->'ImportSettingsDetails' ->>'DBServerName' End as DBServerName
+,cast(ivalue->'SPOKE'->'SourceURL'->'ImportSettingsDetails' ->>'DBAuthType' as smallint)
+,ivalue->'SPOKE'->'SourceURL'->'ImportSettingsDetails' ->>'Database'
+,ivalue->'SPOKE'->'SourceURL'->'ImportSettingsDetails' ->>'DBQuery'
+,VQuery tablequery
+,cast(ivalue->'SPOKE'->'SourceURL'->>'InitialPullType'  as smallint)
+,cast(ivalue->'SPOKE'->'SourceURL'->>'InitialPullTimePeriod'  as smallint)
+,ivalue->'SPOKE'->'SourceURL'->>'InitialPullTimePeriodUOM'
+,'HistoricalData'
+,ivalue->'SPOKE'->'SourceURL'->'ImportSettingsDetails' ->>'Parameter'
+,cast(ivalue->'SPOKE'->'SourceURL'->'ImportSettingsDetails' ->>'HasPaging' as smallint)  
+,ivalue->'SPOKE'->'SourceURL'->'ImportSettingsDetails' ->>'PagingColumn'  
+,cast(ivalue->'SPOKE'->'SourceURL'->'ImportSettingsDetails' ->>'NoofRecords' as smallint)  
+,VCreated_By
+,ivalue->'SPOKE'->'SourceURL'->'ImportSettingsDetails' ->>'DBIDColumn'
+,ivalue->'SPOKE'->'SourceURL'->'ImportSettingsDetails' ->>'DBIDColumnDataType'  
+,VQuery_MaxRecord Query_maxrecord
+,ivalue->'SPOKE'->'SourceURL'->'ImportSettingsDetails' ->>'URL'  
+,cast(ivalue->'SPOKE'->'SourceURL'->'ImportSettingsDetails' ->>'IsRestBased' as bit)  
+,case when (
+(ivalue->'SPOKE'->'SourceURL'->>'LDAPPortNumber') !='' and cast(ivalue->'SPOKE'->'SourceURL'->>'LDAPPortNumber' as int) is not null )
+then cast(ivalue->'SPOKE'->'SourceURL'->>'LDAPPortNumber' as int) else null end
+,ivalue->'SPOKE'->'SourceURL'->'ImportSettingsDetails' ->>'LDAPOrg'
+,ivalue->'SPOKE'->'SourceURL'->'ImportSettingsDetails' ->>'LDAPGroup'
+,ivalue->'SPOKE'->'SourceURL'->'ImportSettingsDetails' ->>'SelectedWSDLClassName'
+From temps limit 1;
+				end;
+				end if;
+			End;
+		END;
+		Elseif(VSource=6) or (VSource=7) or VSource=4 or VSource=5 or VSource=9 Then
+		BEGIN
+			INSERT INTO KBSOURCEURLMST(SOURCEID,URL,USERNAME,PASSWORD,DATA_RETRIEVAL_TIME,DATA_RETRIEVAL_UOM,ISACTIVE,DataSourceID,ServerName
+			,DatabaseName,DBQuery,TableQuery,DBAuthType,DATABASETYPE,InitialPullType,InitialPullFromDate,InitialPullToDate
+			,IntialPullTimePeriod,InitialPullTimePeriodUOM,DATA_FETCH_TYPE,ParameterAppender,CreatedBy ,DBIDColumn,DBIDColumnDataType,concatenation_operator,concatenation_rule,uploadtype)
+			SELECT VSourcetypeid
+			,ivalue->'SPOKE'->'SourceURL'->> 'URL'
+			,ivalue->'SPOKE'->'SourceURL'->> 'DBUsername'
+			,ivalue->'SPOKE'->'SourceURL'->> 'DBPassword'
+			,ivalue->'SPOKE'->'SourceURL'->> 'TIMEPERIOD' 
+			,ivalue->'SPOKE'->'SourceURL'->> 'TIMEPERIODUOM'
+			,'1'
+			,cast(ivalue->'SPOKE'->'SourceURL'->> 'Source' as smallint)
+			,ivalue->'SPOKE'->'SourceURL'->> 'DBServerName'
+			,ivalue->'SPOKE'->'SourceURL'->> 'Database'
+			,ivalue->'SPOKE'->'SourceURL'->> 'DBQuery'
+			,ivalue->'SPOKE'->'SourceURL'->> 'TableQuery'
+			,cast(ivalue->'SPOKE'->'SourceURL'->> 'DBAuthType' as smallint)	
+			,cast(ivalue->'SPOKE'->'SourceURL'->> 'SelectedDatabaseType' as smallint)
+			,cast(ivalue->'SPOKE'->'SourceURL'->> 'InitialPullType' as smallint)
+			,case when cast(ivalue->'SPOKE'->'SourceURL'->>'InitialPullFromDate' as  timestamp)  is not null						
+						Then Cast(ivalue->'SPOKE'->'SourceURL'->>'InitialPullFromDate' as  timestamp)
+						Else Cast('1900-01-01' as Timestamp) End
+			,case when cast(ivalue->'SPOKE'->'SourceURL'->>'InitialPullToDate' as  timestamp) is not null 					
+					Then Cast(ivalue->'SPOKE'->'SourceURL'->>'InitialPullToDate' as  timestamp)
+					Else Cast('1900-01-01' as Timestamp) End
+			,cast(ivalue->'SPOKE'->'SourceURL'->> 'InitialPullTimePeriod' as smallint)
+			,ivalue->'SPOKE'->'SourceURL'->> 'InitialPullTimePeriodUOM'
+			,'CurrentData'
+			,ivalue->'SPOKE'->'SourceURL'->> 'ParameterAppender'  
+			,VCreated_By
+			,ivalue->'SPOKE'->'SourceURL'->> 'DBIDColumn'  
+			,ivalue->'SPOKE'->'SourceURL'->> 'DBIDColumnDataType' 
+			,ivalue->'SPOKE'->'SourceURL'->> 'ConcatenationOperator' ConcatenationOperator
+			,ivalue->'SPOKE'->'SourceURL'->> 'ConcatenationRule' ConcatenationRule 
+			,cast(ivalue->'SPOKE'->'SourceURL'->> 'EXACTTIME' as smallint)   
+			From
+			temps limit 1;
+
+			Begin 
+
+				VQuery:=(select ivalue->'SPOKE'->'SourceURL'->'ImportSettingsDetails' ->>'TableQuery'
+					From
+					temps limit 1
+					);
+				insert into queries(Query)
+				Select item 
+				from 
+				(select regexp_split_to_table(VQuery,';') as item)a ;
+				VQuery=(Select query from queries where id=1);
+				VQuery_MaxRecord=(Select query from queries where id=2);
+
+				if (select cast(ivalue->'SPOKE'->'SourceURL'->'ImportSettingsDetails' ->>'Source' as smallint) From temps limit 1) is not null then
+				begin
+Insert into KBSOURCEURLMST(SOURCEID,USERNAME,PASSWORD,DATA_RETRIEVAL_TIME,DATA_RETRIEVAL_UOM,DataSourceID,DATABASETYPE,ServerName,DBAuthType,DatabaseName,DBQuery,TableQuery,InitialPullType,IntialPullTimePeriod,InitialPullTimePeriodUOM,DATA_FETCH_TYPE,Parameter,HasPaging,PagingColumn,NoofRecords,CREATEDBY,DBIDColumn,DBIDColumnDataType,Query_Maxrecord,URL,IsRestBased,PortNumber,Organisation,"group"
+				)
+select VSourcetypeid
+,case when cast(ivalue->'SPOKE'->'SourceURL'->'ImportSettingsDetails'->>'DBUsername' as varchar(255)) IS not null 
+	then cast(ivalue->'SPOKE'->'SourceURL'->'ImportSettingsDetails'->>'DBUsername' as varchar(255))
+      when cast(ivalue->'SPOKE'->'SourceURL'->'ImportSettingsDetails'->>'WSUSERNAME' as varchar(255)) is not null 
+	then cast(ivalue->'SPOKE'->'SourceURL'->'ImportSettingsDetails'->>'WSUSERNAME' as varchar(255))
+      Else cast(ivalue->'SPOKE'->'SourceURL'->'ImportSettingsDetails'->>'LDAPUSERNAME'  as varchar(255)) 
+	End Username
+,Case when cast(ivalue->'SPOKE'->'SourceURL'->'ImportSettingsDetails'->>'DBPassword' as varchar(255)) IS not null 
+	Then cast(ivalue->'SPOKE'->'SourceURL'->'ImportSettingsDetails'->>'DBPassword' as varchar(255))
+     when Cast(ivalue->'SPOKE'->'SourceURL'->'ImportSettingsDetails'->>'WSPASSWORD' as varchar(255)) IS not null 
+	Then Cast(ivalue->'SPOKE'->'SourceURL'->'ImportSettingsDetails'->>'WSPASSWORD' as varchar(255)) 
+     When Cast(ivalue->'SPOKE'->'SourceURL'->'ImportSettingsDetails'->>'LDAPPASSWORD' as varchar(255)) is not null 
+	Then Cast(ivalue->'SPOKE'->'SourceURL'->'ImportSettingsDetails'->>'LDAPPASSWORD' as varchar(255))
+     Else Cast(ivalue->'SPOKE'->'SourceURL'->'ImportSettingsDetails'->>'Password' as varchar(255)) 
+	End "Password"
+	,ivalue->'SPOKE'->'SourceURL'->> 'TIMEPERIOD' 
+,ivalue->'SPOKE'->'SourceURL'->>'TIMEPERIODUOM' 
+,cast(ivalue->'SPOKE'->'SourceURL'->'ImportSettingsDetails' ->>'Source' as smallint)
+,cast(ivalue->'SPOKE'->'SourceURL'->'ImportSettingsDetails' ->>'SelectedDatabaseType' as smallint)
+,case when cast(ivalue->'SPOKE'->'SourceURL'->'ImportSettingsDetails' ->>'Source' as smallint) =3 
+	then ivalue->'SPOKE'->'SourceURL'->'ImportSettingsDetails' ->>'LDAPServerName' 
+	else ivalue->'SPOKE'->'SourceURL'->'ImportSettingsDetails' ->>'DBServerName' End as DBServerName
+,cast(ivalue->'SPOKE'->'SourceURL'->'ImportSettingsDetails' ->>'DBAuthType' as smallint)
+,ivalue->'SPOKE'->'SourceURL'->'ImportSettingsDetails' ->>'Database'
+,ivalue->'SPOKE'->'SourceURL'->'ImportSettingsDetails' ->>'DBQuery'
+				,VQuery tablequery
+				,cast(ivalue->'SPOKE'->'SourceURL'->>'InitialPullType'  as smallint)
+				,cast(ivalue->'SPOKE'->'SourceURL'->>'InitialPullTimePeriod'  as smallint)
+				,ivalue->'SPOKE'->'SourceURL'->>'InitialPullTimePeriodUOM'
+				,'HistoricalData'
+				,ivalue->'SPOKE'->'SourceURL'->'ImportSettingsDetails' ->>'Parameter'
+				,cast(ivalue->'SPOKE'->'SourceURL'->'ImportSettingsDetails' ->>'HasPaging' as smallint)  
+				,ivalue->'SPOKE'->'SourceURL'->'ImportSettingsDetails' ->>'PagingColumn'  
+				,cast(ivalue->'SPOKE'->'SourceURL'->'ImportSettingsDetails' ->>'NoofRecords' as smallint)  
+				,VCreated_By
+				,ivalue->'SPOKE'->'SourceURL'->'ImportSettingsDetails' ->>'DBIDColumn'
+				,ivalue->'SPOKE'->'SourceURL'->'ImportSettingsDetails' ->>'DBIDColumnDataType'  
+				,VQuery_MaxRecord Query_maxrecord
+				,ivalue->'SPOKE'->'SourceURL'->'ImportSettingsDetails' ->>'URL'  
+				,cast(ivalue->'SPOKE'->'SourceURL'->'ImportSettingsDetails' ->>'IsRestBased' as bit)  
+				,case when (
+(ivalue->'SPOKE'->'SourceURL'->>'LDAPPortNumber') !='' and cast(ivalue->'SPOKE'->'SourceURL'->>'LDAPPortNumber' as int) is not null )
+then cast(ivalue->'SPOKE'->'SourceURL'->>'LDAPPortNumber' as int) else null end
+				,ivalue->'SPOKE'->'SourceURL'->'ImportSettingsDetails' ->>'LDAPOrg'
+				,ivalue->'SPOKE'->'SourceURL'->'ImportSettingsDetails' ->>'LDAPGroup'
+				From
+				temps limit 1;
+				end;
+				end if;
+			
+			End;
+		END;
+ 		ELSE
+		BEGIN
+				INSERT INTO KBSOURCEURLMST(SOURCEID,URL,USERNAME,PASSWORD,DATA_RETRIEVAL_TIME,DATA_RETRIEVAL_UOM,ISACTIVE,DataSourceID,ServerName
+				,PortNumber,"group",Organisation,DBAuthType,InitialPullType,InitialPullFromDate,InitialPullToDate,DATA_FETCH_TYPE,ParameterAppender
+				,HasPaging,PagingColumn,NoofRecords,CREATEDBY ,DBIDColumn,DBIDColumnDataType,concatenation_operator,concatenation_rule,uploadtype)
+				
+				SELECT VSourcetypeid
+				,ivalue->'SPOKE'->'SourceURL'->> 'URL'
+				,ivalue->'SPOKE'->'SourceURL'->>'LDAPUSERNAME'
+				,ivalue->'SPOKE'->'SourceURL'->>'LDAPPASSWORD'
+				,ivalue->'SPOKE'->'SourceURL'->> 'TIMEPERIOD' 
+				,ivalue->'SPOKE'->'SourceURL'->> 'TIMEPERIODUOM'
+				,'1'
+				,cast(ivalue->'SPOKE'->'SourceURL'->> 'Source' as smallint)
+				,ivalue->'SPOKE'->'SourceURL'->>'LDAPServerName'
+				,case when (
+(ivalue->'SPOKE'->'SourceURL'->>'LDAPPortNumber') !='' and cast(ivalue->'SPOKE'->'SourceURL'->>'LDAPPortNumber' as int) is not null )
+then cast(ivalue->'SPOKE'->'SourceURL'->>'LDAPPortNumber' as int) else null end
+				,ivalue->'SPOKE'->'SourceURL'->>'LDAPOrg'
+				,ivalue->'SPOKE'->'SourceURL'->>'LDAPGroup'
+				,cast(ivalue->'SPOKE'->'SourceURL'->>'LDAPAuthType' as smallint)
+				,cast(ivalue->'SPOKE'->'SourceURL'->> 'InitialPullType' as smallint)
+				,case when cast(ivalue->'SPOKE'->'SourceURL'->>'InitialPullFromDate' as  timestamp)  is not null						
+						Then Cast(ivalue->'SPOKE'->'SourceURL'->>'InitialPullFromDate' as  timestamp)
+						Else Cast('1900-01-01' as Timestamp) End
+				,case when cast(ivalue->'SPOKE'->'SourceURL'->>'InitialPullToDate' as  timestamp) is not null 					
+					Then Cast(ivalue->'SPOKE'->'SourceURL'->>'InitialPullToDate' as  timestamp)
+					Else Cast('1900-01-01' as Timestamp) End
+				,'CurrentData'
+				,ivalue->'SPOKE'->'SourceURL'->>'ParameterAppender'
+				,cast(ivalue->'SPOKE'->'SourceURL'->> 'HasPaging' as smallint)  
+				,ivalue->'SPOKE'->'SourceURL'->> 'PagingColumn'  
+				,cast(ivalue->'SPOKE'->'SourceURL'->> 'NoofRecords' as smallint)  
+				,VCreated_By
+				,ivalue->'SPOKE'->'SourceURL'->> 'DBIDColumn'  
+				,ivalue->'SPOKE'->'SourceURL'->> 'DBIDColumnDataType' 
+				,ivalue->'SPOKE'->'SourceURL'->> 'ConcatenationOperator' ConcatenationOperator
+				,ivalue->'SPOKE'->'SourceURL'->> 'ConcatenationRule' ConcatenationRule
+				,cast(ivalue->'SPOKE'->'SourceURL'->> 'EXACTTIME' as smallint)    
+				From
+				temps limit 1;
+	  			Begin 
+	  	  				VQuery:=(select ivalue->'SPOKE'->'SourceURL'->'ImportSettingsDetails' ->>'TableQuery'
+					From
+					temps limit 1
+					);
+				insert into queries(Query)
+				Select item 
+				from 
+				(select regexp_split_to_table(VQuery,';') item)a ;
+				VQuery=(Select query from queries where id=1);
+				VQuery_MaxRecord=(Select query from queries where id=2);
+				
+				if (select cast(ivalue->'SPOKE'->'SourceURL'->'ImportSettingsDetails' ->>'Source' as smallint) From temps limit 1) is not null then
+				begin
+				Insert into KBSOURCEURLMST(SOURCEID,USERNAME,PASSWORD,DATA_RETRIEVAL_TIME,DATA_RETRIEVAL_UOM,DataSourceID,DATABASETYPE,ServerName,DBAuthType,DatabaseName
+				,DBQuery,TableQuery,InitialPullType,IntialPullTimePeriod,InitialPullTimePeriodUOM,DATA_FETCH_TYPE,Parameter,HasPaging,PagingColumn,NoofRecords,CREATEDBY
+				,DBIDColumn,DBIDColumnDataType,Query_Maxrecord,URL,IsRestBased
+				,PortNumber,Organisation,"group"
+				)
+				select VSourcetypeid
+				,case when cast(ivalue->'SPOKE'->'SourceURL'->'ImportSettingsDetails'->>'DBUsername' as varchar(255)) IS not null 
+					 
+						then cast(ivalue->'SPOKE'->'SourceURL'->'ImportSettingsDetails'->>'DBUsername' as varchar(255))
+				when cast(ivalue->'SPOKE'->'SourceURL'->'ImportSettingsDetails'->>'WSUSERNAME' as varchar(255)) is not null 
+					  
+						then cast(ivalue->'SPOKE'->'SourceURL'->'ImportSettingsDetails'->>'WSUSERNAME' as varchar(255))
+				Else cast(ivalue->'SPOKE'->'SourceURL'->'ImportSettingsDetails'->>'LDAPUSERNAME'  as varchar(255)) 
+				End Username
+			   
+			   
+				,Case when cast(ivalue->'SPOKE'->'SourceURL'->'ImportSettingsDetails'->>'DBPassword' as varchar(255)) IS not null 
+						 
+					Then cast(ivalue->'SPOKE'->'SourceURL'->'ImportSettingsDetails'->>'DBPassword' as varchar(255))
+				when Cast(ivalue->'SPOKE'->'SourceURL'->'ImportSettingsDetails'->>'WSPASSWORD' as varchar(255)) IS not null 
+						 
+					Then Cast(ivalue->'SPOKE'->'SourceURL'->'ImportSettingsDetails'->>'WSPASSWORD' as varchar(255)) 
+				When Cast(ivalue->'SPOKE'->'SourceURL'->'ImportSettingsDetails'->>'LDAPPASSWORD' as varchar(255)) is not null 
+						 
+					Then Cast(ivalue->'SPOKE'->'SourceURL'->'ImportSettingsDetails'->>'LDAPPASSWORD' as varchar(255))
+				Else Cast(ivalue->'SPOKE'->'SourceURL'->'ImportSettingsDetails'->>'Password' as varchar(255)) 
+				End "Password"
+				,ivalue->'SPOKE'->'SourceURL'->> 'TIMEPERIOD' 
+				,ivalue->'SPOKE'->'SourceURL'->>'TIMEPERIODUOM' 
+				,cast(ivalue->'SPOKE'->'SourceURL'->'ImportSettingsDetails' ->>'Source' as smallint)
+				,cast(ivalue->'SPOKE'->'SourceURL'->'ImportSettingsDetails' ->>'SelectedDatabaseType' as smallint)
+				,case when cast(ivalue->'SPOKE'->'SourceURL'->'ImportSettingsDetails' ->>'Source' as smallint) =3 
+						then ivalue->'SPOKE'->'SourceURL'->'ImportSettingsDetails' ->>'LDAPServerName' 
+					else ivalue->'SPOKE'->'SourceURL'->'ImportSettingsDetails' ->>'DBServerName' End as DBServerName
+				,cast(ivalue->'SPOKE'->'SourceURL'->'ImportSettingsDetails' ->>'DBAuthType' as smallint)
+				,ivalue->'SPOKE'->'SourceURL'->'ImportSettingsDetails' ->>'Database'
+				,ivalue->'SPOKE'->'SourceURL'->'ImportSettingsDetails' ->>'DBQuery'
+				,VQuery tablequery
+				,cast(ivalue->'SPOKE'->'SourceURL'->>'InitialPullType'  as smallint)
+				,cast(ivalue->'SPOKE'->'SourceURL'->>'InitialPullTimePeriod'  as smallint)
+				,ivalue->'SPOKE'->'SourceURL'->>'InitialPullTimePeriodUOM'
+				,'HistoricalData'
+				,ivalue->'SPOKE'->'SourceURL'->'ImportSettingsDetails' ->>'Parameter'
+				,cast(ivalue->'SPOKE'->'SourceURL'->'ImportSettingsDetails' ->>'HasPaging' as smallint)  
+				,ivalue->'SPOKE'->'SourceURL'->'ImportSettingsDetails' ->>'PagingColumn'  
+				,cast(ivalue->'SPOKE'->'SourceURL'->'ImportSettingsDetails' ->>'NoofRecords' as smallint)  
+				,VCreated_By
+				,ivalue->'SPOKE'->'SourceURL'->'ImportSettingsDetails' ->>'DBIDColumn'
+				,ivalue->'SPOKE'->'SourceURL'->'ImportSettingsDetails' ->>'DBIDColumnDataType'  
+				,VQuery_MaxRecord Query_maxrecord
+				,ivalue->'SPOKE'->'SourceURL'->'ImportSettingsDetails' ->>'URL'  
+				,cast(ivalue->'SPOKE'->'SourceURL'->'ImportSettingsDetails' ->>'IsRestBased' as bit)  
+			  
+				,case when (
+(ivalue->'SPOKE'->'SourceURL'->>'LDAPPortNumber') !='' and cast(ivalue->'SPOKE'->'SourceURL'->>'LDAPPortNumber' as int) is not null )
+then cast(ivalue->'SPOKE'->'SourceURL'->>'LDAPPortNumber' as int) else null end
+				,ivalue->'SPOKE'->'SourceURL'->'ImportSettingsDetails' ->>'LDAPOrg'
+				,ivalue->'SPOKE'->'SourceURL'->'ImportSettingsDetails' ->>'LDAPGroup'
+				From
+				temps limit 1;
+				end;
+				end if;
+			
+			End;
+		END;
+		End if;
+ 
+		VURLID:=(select ID from KBSOURCEURLMST where SOURCEID=VSourcetypeid and lower(objecttype)='source' and Data_Fetch_Type='CurrentData' limit 1);
+		VHistoryURLID:=(select ID from KBSOURCEURLMST where SOURCEID=VSourcetypeid and lower(objecttype)='source' and Data_Fetch_Type='HistoricalData' limit 1);
+ 
+
+		/*Inserting the dynamic parameters values*/
+
+  
+		Insert INTO KBDynamicParameterListMst (URLID,PARAM_NAME,PARAM_VALUE,PARAM_TYPE,SOURCEID,filteroption)
+		SELECT 
+		VURLID  URLID
+		,dparams->>'NAME'
+		,case when dparams->>'VALUE' like '%Latitude%' then 'Latlong' else dparams->>'VALUE' end 
+		,dparams->>'TYPE'
+		,VSourcetypeid spokeid
+		,dparams->>'FilterOption'
+		from
+		(
+		select json_array_elements(dynparams) as dparams
+		from
+		(
+		select ivalue->'SPOKE'->'SourceURL'->'PARAMETERDETAILS'->'DynamicParameters'->'DynamicParameter' as dynparams
+		From
+		temps limit 1
+		)a
+		)params
+		;
+		
+		
+		  /* Inserting the Url's Details in the below tabble */
+		/*
+		 parametertype
+		 0-> existing values
+		 1-> add new values to the parameter list
+
+		*/
+INSERT INTO KBSOURCEURLDETAILS(URLID,PARAM_NAME,PARAM_VALUE,PARAM_TYPE,format,SOURCEID,FORMULA,filteroption,PARAM_VALUETYPE,Operator,EntityDefId,concatenator,parametertype,CREATEDBY,groupname)
+SELECT VURLID  URLID,iparams->>'NAME',iparams->>'VALUE',iparams->>'TYPE',iparams->>'format',VSourcetypeid spokeid,iparams->>'FORMULA' ,iparams->>'FilterOption' ,iparams->>'VALUETYPE',iparams->>'Operator',cast(iparams->>'EntityDefId' as int),iparams->>'Concater'
+,cast(iparams->>'AddParameters'  as smallint),VCreated_By,iparams->>'GroupName'
+from
+(
+select json_array_elements(sparams) as iparams from
+(select ivalue->'SPOKE'->'SourceURL'->'PARAMETERDETAILS'->'PARAMETER' as sparams from temps limit 1)a
+)params
+		;
+
+INSERT INTO KBSOURCEURLDETAILS(URLID,PARAM_NAME,PARAM_VALUE,PARAM_TYPE,format,SOURCEID,FORMULA,filteroption,PARAM_VALUETYPE,Operator,EntityDefId,concatenator,parametertype,CREATEDBY,groupname)
+SELECT  VHistoryURLID  URLID,iparams->>'NAME',iparams->>'VALUE',iparams->>'TYPE',iparams->>'format',VSourcetypeid spokeid,iparams->>'FORMULA' 
+,iparams->>'FilterOption',iparams->>'VALUETYPE',iparams->>'Operator',cast(iparams->>'EntityDefId' as int),iparams->>'Concater'
+,cast(iparams->>'AddParameters'  as smallint),VCreated_By,iparams->>'GroupName'
+ 		from
+ 		(
+ 		select json_array_elements(sparams) as iparams
+ 		from
+ 		(
+		select ivalue->'SPOKE'->'SourceURL'->'ImportSettingsDetails'->'PARAMETERDETAILS'->'PARAMETER' as sparams
+ 		From
+ 		temps limit 1
+ 		)a
+ 		)params
+ 		;
+		End;
+		End if;
+
+VSpokeAlias:=(select Alias from kbsourcetypeMst where SOURCETYPE_ID=VSourcetypeid);
+ 
+		 --if(@IsFormulaexists)=0
+		if((VIsFormulaexists=0 AND VHasNLegsNMachine!='1:0,') and (VIsFormulaexists=0 and VHasNLegsNMachine!='1:1,')) Then
+		begin 
+				--azzu 
+			  INSERT INTO SpokeTable(SPOKE_ID,TABLE_NAME,METRICS,IS_PRIMARY,IS_NULLABLE,DATATYPE)
+			  SELECT VSourcetypeid,'Fact_'||VSpokeAlias||'metricdetails',InputMetricData.MetricName,cast(InputMetricData.IsPrimaryKey as int)
+			  ,cast(InputMetricData.ISREQUIRED as int),InputMetricData.MetricDataTypeName
+			  FROM InputMetricData InputMetricData  
+			  where  InputMetricData.NewlyAdded='1';
+			  
+			  IF(SELECT COUNT(1) FROM SpokeTable)!=0 Then
+			  Begin
+					  INSERT INTO KBSPOKETABLEDETAILS(TABLE_ID,TABLE_COLUMNS,ATTRIBUTES,IS_PRIMARY,IS_NULLABLE,DATATYPE,XPATH)
+					  SELECT B.RECORDID,A.METRICS,A.METRICS,A.IS_PRIMARY,A.IS_NULLABLE,A.DATATYPE,'ROWS/ROW'
+					  FROM SpokeTable A
+					  JOIN KBSPOKETABLE B ON A.SPOKE_ID=B.SPOKE_ID AND A.TABLE_NAME=B.TABLE_NAME;
+			  END;
+			  End if;
+			  
+			if(select count(1) from InputMetricRulesData)>0 then
+			Begin
+			 
+			 	insert into KBSPOKETABLEDETAILS(TABLE_ID,TABLE_COLUMNS,ATTRIBUTES,IS_PRIMARY,IS_NULLABLE,DATATYPE,XPATH)
+				select distinct B.RECORDID,Fuzzy.MetricName+'fuzzy',Fuzzy.MetricName+'Fuzzy','','',Fuzzy.TransformActualDataType,'ROWS/ROW'
+				from  InputMetricRulesData Fuzzy
+				JOIN INPUTMETRICDATA Metrics on Fuzzy.MetricName=Metrics.MetricName
+				join KBSPOKETABLE B on Fuzzy.sourceid=B.SPOKE_ID and B.TABLE_NAME='FACT_'||VSpokeAlias||'metricdetails' and B.type=1 and newlyadded='1';
+			END;
+			End if;
+			  
+		 END;  
+ 		 ELSE
+		 BEGIN
+		 
+			  INSERT INTO SpokeTable(SPOKE_ID,TABLE_NAME,METRICS,IS_PRIMARY,IS_NULLABLE,DATATYPE)
+			  SELECT VSourcetypeid,'Fact_'||VSpokeAlias||'Aggregate',InputMetricData.MetricName,cast(InputMetricData.IsPrimaryKey as int)
+			  ,cast(InputMetricData.ISREQUIRED as int),InputMetricData.MetricDataTypeName
+			  FROM InputMetricData InputMetricData 
+			  where  InputMetricData.NewlyAdded='1';
+			  
+			  
+			 IF(SELECT COUNT(1) FROM SpokeTable)!=0 Then
+			  Begin
+					  INSERT INTO KBSPOKETABLEDETAILS(TABLE_ID,TABLE_COLUMNS,ATTRIBUTES,IS_PRIMARY,IS_NULLABLE,DATATYPE,XPATH)
+					  SELECT B.RECORDID,A.METRICS,A.METRICS,A.IS_PRIMARY,A.IS_NULLABLE,A.DATATYPE,'ROWS/ROW'
+					  FROM SpokeTable A
+					  JOIN KBSPOKETABLE B ON A.SPOKE_ID=B.SPOKE_ID AND A.TABLE_NAME=B.TABLE_NAME;
+			  END;
+			  End if;
+			  
+			if(select count(1) from InputMetricRulesData)>0 then
+			Begin
+			 
+			 	insert into KBSPOKETABLEDETAILS(TABLE_ID,TABLE_COLUMNS,ATTRIBUTES,IS_PRIMARY,IS_NULLABLE,DATATYPE,XPATH)
+				select distinct B.RECORDID,Fuzzy.MetricName||'fuzzy',Fuzzy.MetricName||'Fuzzy',0,0,Fuzzy.TransformActualDataType,'ROWS/ROW'
+				from  InputMetricRulesData Fuzzy
+				JOIN INPUTMETRICDATA Metrics on Fuzzy.MetricName=Metrics.MetricName
+				join KBSPOKETABLE B on Fuzzy.sourceid=B.SPOKE_ID and B.TABLE_NAME='FACT_'||VSpokeAlias||'metricdetails' and B.type=1 and newlyadded='1';
+			END;
+			End if;
+		 END;
+		 End if; 
+  
+  
+		/* Inserting the Spoke related configuration data */
+  
+		update KBSpokeConfigurations set xpath=A.xpath, isentityidentifier=IsCustomerIdentifier
+		,entitydefid=A.entitydefid,entityattribute=A.EntityMetric
+		from
+		InputMetricData A
+		where KBSpokeConfigurations.metricname=A.metricname 
+				and A.Sourceid=KBSpokeConfigurations.SOURCETYPEID  and SOURCETYPEID=VSourcetypeid;
+	  
+		Insert into KBSpokeConfigurations(SOURCETYPEID,NLEG,METRICNAME,METRICORDER,AGG_FORMULA,IsActive,IsType,METRICALIAS,ConstantValue,IsEntityIdentifier,IsPrimaryKey
+		,Buffer1,CreatedBy,EntitydefID,EntityAttribute,xpath)
+		select  VSourcetypeid
+		,1
+		,MetricName
+		,RecordID
+		,FORMULA
+		,case when metricname ='vgeofencestatus' then cast('0' as bit) else Cast('1' as bit) End isactive
+		,IsType
+		,METRICALIAS
+		,ConstantValue
+		,IsCustomerIdentifier
+		,IsPrimaryKey
+		,NULL
+		,VCreated_By
+		,EntitydefId
+		,EntityMetric
+		,xpath
+		FROM  InputMetricData A
+		where A.NewlyAdded='1';
+
+		/* Inserting the source metric information in the below table. this will be used by the Correlation process */
+		
+		insert into CBSourceInfo(SourceID,MSTTableName,MSTTableColumns,MSTTableColumnDataType,MetricId,SourceField,CreatedBy)
+		select VSourcetypeid,'DBKPIFactMSt'||VSourceTypename,MetricData.MetricName,Metricdata.MetricDataType,MetricData.MetricId
+		,Coalesce(MetricData.METRICALIAS,MetricData.MetricName),VCreated_by
+		from InputMetricData MetricData 
+		where newlyadded='1';
+
+		/*concatenating the metrics whose datatype is Lat long*/
+		
+		insert into CBSourceInfo(SourceID,MSTTableName,MSTTableColumns,MSTTableColumnDataType,MetricId,SourceField,CreatedBy)
+		Select VSourcetypeid, TableName, Metricname MetricName,MetricDataType,NULL,NULL,VCreated_By
+		From
+		(
+		Select distinct SOURCEID,'DBKPIFactMSt'||VSourceTypename TableName,
+		(
+			Select String_agg(metrics,'') 
+			from	
+			(
+			Select '#CWT02#'||B.MetricName   metrics
+			from 
+			InputMetricData B
+			where lower(B.MetricDataType)='latitude' or lower(B.MetricDataType)='longitude' and A.Sourceid=B.Sourceid and newlyadded='1'
+			--For xml path('')
+			) as mets
+			
+		)MetricName
+		,'LatitudeLongitude' MetricDataType
+		from InputMetricData A
+		where MetricDataType='Latitude' or MetricDataType='Longitude' and newlyadded='1'
+		) S;
+
+    
+		Update KBSourceTypeMst Set ENTITYIDENTIFIER=VCUSTOMERIDENTIFIER, ENTITYIDENTIFIER_service=VEntityidentifier,customeridentifier=VCUSTOMERIDENTIFIER
+		,TIMEZONEID=vTIMEZONEID,Description=VSpokeDescription,mainseparator=Vmainseperator, primarykeycolumns=VPRIMARYKEY, subseparator=VSubSeparator
+		where SOURCETYPE_ID=VSourcetypeid;
+
+		/* Inserting the spoke information and the metrics created data */
+
+		-- Delete 
+-- 		from KBSpokewiseMetricsInformation
+-- 		where SourceTypeId=VSourcetypeid;  
+
+		insert into KBSpokewiseMetricsInformation(SourceTypeId,MetricID,ISRequired,MetricDataType,CREATEDBY,ModifiedBy)--,AGG_Formula)
+		select SOURCE_ID,METRIC_ID,metricdata.IsRequired,Metricdata.MetricDataType,VCreated_by,VCreated_by --,FORMULA
+		from KBMetricMst Metrics
+		Join InputMetricData MetricData on Metrics.SOURCE_ID=MetricData.Sourceid and Metrics.METRICNAME=MetricData.MetricName
+		where SOURCE_ID=VSourcetypeid and TEMPLATE_ID=1 and metricdata.newlyadded='1';
+
+		Insert into kb_dim_Sourcelink (ID,SOURCEID,METRICID,METRICNAME,DIM_tbl,DIMCol,SurrogateCol,attributename,CreatedBy) 
+		select 1,VSourcetypeid,Metricid,MetricName,'DIM_TimeDimension','AlternateDate','TimeID','TimeID',VCreated_By
+		from InputMetricData  
+		where Lower(MetricDataTypeName)='datetime' and NewlyAdded='1';
+		 
+		Insert into kb_dim_Sourcelink (ID,SOURCEID,METRICID,METRICNAME,DIM_tbl,DIMCol,SurrogateCol,attributename,CreatedBy) 
+		select 2,VSourcetypeid,Metricid,MetricName,'DIM_LocationDimension','LocationID','LocationID','LocationID',VCreated_by
+		from InputMetricData  
+		where lower(MetricDataType) in('latitude' ,'longitude','city','country','state name','post code') and NewlyAdded='1';
+ 
+
+		/* Inserting into the table KBSpokeTypeSourceMappings */
+
+		Insert into  KBSpokeTypeSourceMappings(SourceTypeID,SpokeTypeID,CreatedBy)
+		Select  distinct VSourcetypeid SourceTypeID, cast(substring(Split.item ,1,1) as int)SpokeTypeID,VCreated_By
+		From 
+		InputData Inputs
+		Join (
+			select item
+			from
+			(
+			select regexp_split_to_table(VHasNLegsNMachine,',') as item
+			)a
+			where item is not null and item!=''
+		) Split on 1=1
+		where not exists(select 1 from KBSpokeTypeSourceMappings where SourceTypeID=VSourcetypeid and SpokeTypeID= cast(substring(Split.item ,1,1) as int))
+		
+		;
+
+		
+	Return(
+		Select Row_to_json(output)
+		from
+		(
+			Select Row_to_json(spk) "SPOKE"
+			From
+			(
+			SELECT Visactive  "isactive",SpokeName as "SPOKENAME",VTRAN as "TRANSTYPE",SPOKEDESCRIPTION "SPOKEDESCRIPTION",'' "SourceURL",SourceType "SourceType"
+			,HASNLEGSNMACHINE "HASNLEGSNMACHINE",CREATEDBY "CREATEDBY",ConnectionType "ConnectionType",
+			ServerName "ServerName",AuthenticationType "AuthenticationType",UserName "UserName",Password "Password",FilePath "MDFPath"
+			,CollectionName "CollectionName",DataFormat "DataFormat",MainSeparator "MainSeparator",SubSeparator "SubSeparator"
+			,PRIMARYKEY "PRIMARYKEY",CUSTOMERIDENTIFIER "CUSTOMERIDENTIFIER",TIMEZONEID "TIMEZONEID",VSourcetypeid "SPOKEID"
+			,VSource "Source"
+			,VID "VID"
+			,
+			(
+				Select Row_to_json(Mdet) "METRICS"
+				from
+				(
+					Select Array_to_json(Array_Agg(Row_to_json(mets))) as "METRIC"
+					from
+					(
+						select METRICID as "METRICID",MetricName "NAME", MetricDataTypeName "DATATYPE",Metricdatatype as  "DataTypeName" 
+						,FORMULA "FormulaId",MetricAlias "MetricAlias",IsRequired "IsRequired",IsType "IsType",RuleType "Type"
+						, RuleDelimeter "Delimeter",Coalesce(isreasonablecheck,'0') "IsReasonablecheck", xpath "Path"
+						,newlyadded	"NewlyAdded"
+						 ,(
+							Select Row_to_json(inpd) "FuzzyLogic"
+							From
+							(
+								Select Array_to_json(Array_agg(Row_to_json(inp))) as "Rule"
+								from	
+								(
+									Select AA.MetricName "MetricName",AA.RuleID "RuleID",AA.Priority "Priority" ,AA.TransformActualDataType "TransformActualDataType"
+									,TransformationDataTypeAlias "TransformDataType"
+									,
+									(
+										Select Row_to_json(inpd) "Values"
+										From
+										(
+										Select Array_to_json(Array_agg(Row_to_json(inp))) as "Input"
+										from	
+										(
+										Select BB.Value "Value" 
+										from InputMetricRulesData BB 
+										where AA.MetricName=BB.MetricName and AA.RuleID=BB.RuleID
+										--For XML RAW('Input'),Root('Values')
+										)as inp
+										)inpd
+									 )
+									from InputMetricRulesData AA 
+									where A.MetricName=AA.MetricName
+									Group By AA.MetricName,AA.RuleID,AA.Priority ,AA.TransformActualDataType,TransformationDataTypeAlias
+									--For xml RAW('Rule'),Root('FuzzyLogic')
+								)inp
+							)as inpd
+						)
+						,
+						(
+							Select Array_to_json(Array_Agg(Row_to_json(forms))) "NewFormula"
+							from
+							(
+							Select FormulaMeasure 
+							from
+							(
+								Select iparams->'Metric'->>'NAME'  as MetricName,iparams->'Metric'->>'NewFormula' FormulaMeasure
+								,iparams->'Metric'->>'DATATYPE' DATATYPE,iparams->'Metric'->>'FormulaId' FormulaId
+								from
+								(
+									select json_array_elements(sparams) as iparams
+									from
+									(
+									select ivalue->'SPOKE'->'METRICS'->'METRIC' as sparams
+									From
+									temps limit 1
+									)a
+									)params
+								)mets	
+								where A.MetricName=mets.MetricName
+								--For XML Path('') 
+							)forms
+						)
+						,
+						(
+							Select Array_to_json(Array_Agg(Row_to_json(val))) as "VRules"
+							from
+							( 
+							Select 
+							(
+								Select Row_to_json(vrule) as "ValidationRules"
+								from
+								(
+									select Array_to_json(Array_Agg(Row_to_json(val))) as "Rules"
+									from
+									(
+									Select BB.RuleID "RuleId",BB.ExpectedDatatype "ExpectedDataType",BB.RuleType "Ruletype"
+									,BB.RegExpression "Regexpression",BB.TOrder "TOrder" 
+									from RuleExtraction BB 
+									where AA.torder=BB.TOrder
+									--For XML PATH('Rules'),Root('ValidationRules')
+									)as val
+								)Vrule	
+							)
+							from ValidationMetricExtraction AA 
+							where A.MetricName=AA.MetricName
+							Group By AA.MetricName, AA.DBDatatype, AA.Torder
+							--For xml PATH('')
+							)as val
+						)
+						from 
+						InputMetricData A 
+						
+						--for xml raw('METRIC'),root('METRICS')
+					) as mets
+				) Mdet	
+			) 
+			,
+			(
+				Select Row_to_json(measure) as "MEASURES"
+				from
+				( 
+					Select Array_to_json(Array_Agg(Row_to_json(meas))) "MEASURE"
+					from
+					(
+					select Measureid as "MEASUREID",MetricName "MEASURENAME",MEASUREUNIT_ID "MEASUREUNIT_ID",IsActive "IsActive",
+					Coalesce(SOURCE_ID,0) "SOURCE_ID"
+					,Coalesce(MEASURE_DESC,'') "MEASUREDESCRIPTION"
+					,Coalesce(FORMULATITLE,'') "FORMULATITLE"
+					,Coalesce(FORMULAMEASURE,'') "FORMULAMEASURE"
+					,Coalesce(FORMULA_CHK,0) "FORMULA_CHK"
+					,Coalesce(MEASURE_MINMAX,0) "MEASURE_MINMAX"
+					,Coalesce(TEMPLATE_ID,0) "TEMPLATE_ID"
+					from InputMetricData A 
+					JOIN kbmeasureMst B ON A.MeasureId=B.MEASURE_ID 
+					
+					--for xml raw('MEASURE'),root('MEASURES')
+					) meas
+				) as measure
+			)	
+		
+			from InputData 
+			)spk	
+		--FOR XML  path('SPOKE')
+		)output
+		);
+
+	end;
+	End if; -- if  Create
+End;
+
+ELSEIF Lower(VTRAN) = 'getdetails' then
+BEGIN
+
+/* GETDETAILS is used to show the Source details that is created */
+ 
+select cast(ivalue->'SPOKE'->>'SPOKEID'  as int) Spokeid
+,cast(ivalue->'SPOKE'->>'CREATEDBY'  as int) 
+into
+Vsourcetypeid, VCreated_by
+from temps limit 1;
+
+			 
+Return(
+	Select Row_to_json(outs)
+	from
+	(
+		Select Row_to_json(spk) "SPOKE"
+		from
+		(
+			SELECT 
+            CMT.isactive
+			, Vsourcetypeid "SPOKEID"
+			,SOURCETYPE_NAME as "SPOKENAME"
+			,Description as  "SPOKEDESCRIPTION"
+			,HASNLEGSNMACHINE	"HASNLEGSNMACHINE"
+			,CMT.INPUT	"INPUT"
+			,ISMETRICADDED		"ISMETRICADDED"
+			,CMT.CreatedBy "CREATEDBY"
+			,sourceguid "sourceguid"
+			,IsEntity "IsEntity"
+			,IsEntityType  "IsEntityType"
+			,case when MASTERSPOKEID=0 then Vsourcetypeid else MASTERSPOKEID end "MASTERSPOKEID"
+			, CMT.Input "MQTTTopic", CMT.CollectionName "MQTTUsername", CMT.spokeplaceholders "MQTTPassword",dataseperator "MQTTURL"
+			,(	
+				select array_to_json(array_agg(row_to_json(srcs))) "LINKSOURCES"
+				from 
+					(
+						select sourcetype_id "ID", sourcetype_name "Name" , alias "Alias"
+						from kbsourcetypemst links 
+						where links.masterspokeid= case when CMT.masterspokeid>0 then CMT.masterspokeid else Vsourcetypeid end
+					)srcs
+			) 
+			,
+			(
+				Select Row_to_json(metris) "METRICS"
+				from
+				(
+					Select Array_to_json(Array_agg(Row_to_json(metri))) "METRIC"
+					from
+					( 
+					select   distinct on (KSC.METRICORDER) METRIC_ID METRICID 
+					,KMM.METRICNAME as "NAME"
+					,DataTypes.DataTypeAlias as "DATATYPE" 
+					,MetricsData.ISRequired		as "ISREQUIRED"
+					,Coalesce(KMM.agg_Formula,'') as "FormulaId"
+					,Coalesce(KMM.IsType,'') as "IsType"
+					,Coalesce(kmm.METRICALIAS,'') AS "METRICALIAS"
+					,Coalesce(kmm.ConstantValue,'') AS "CONSTANTVALUE"
+					,Coalesce(KMM.IscustomerIdentifier,'') AS "CUSTOMERIDENTIFIER"
+					,Coalesce(KMM.IsPRIMARYKEY,'') AS "PRIMARYKEY"
+					,Coalesce(KMM.RuleType,'') AS "RuleType"
+					,Coalesce(KMM.RuleDelimeter,'') AS "RuleDelimeter"
+					,Coalesce(KSC.EntitydefID,0) "EntitydefID"
+					,Coalesce(KSC.EntityAttribute,'') "EntityAttribute"
+					, Xpath "Path"
+					,
+					(
+						Select Row_to_json(mrules) "FuzzyLogic"
+						from
+						(
+							Select Array_to_json(Array_agg(Row_to_json(mrul))) "Rule"
+							from
+							(
+		 
+							Select MR.Metric_ID "Metric_ID", MR.RuleID "RuleID", MR.Priority "Priority" ,MR.TransformationDataType "TransformActualDataType"
+							,TransformationDataTypeAlias "TransformDataType"
+							,
+							(
+								Select Row_to_json(rul) "Values"
+								from
+								(
+									Select Array_to_json(Array_agg(Row_to_json(met))) "Input"
+									from
+									(
+										Select VALUE  "Value"
+										From KBMetricRules MRules1 
+										Where MR.Metric_id=MRules1.Metric_ID and MR.SourceID=MRules1.SourceID
+										and MR.RULEID=MRules1.RULEID and MRules1.ISACTIVE='1'
+										--For XML RAW('Input'),Root('Values')
+									) as met
+								) rul	
+							)
+							from kbmetricRules MR 
+							where KMM.METRIC_ID=MR.METRIC_ID and KMM.SOURCE_ID=MR.SOURCEID and MR.Template_Id=1 and MR.ISACTIVE='1'
+							group By MR.Metric_ID, MR.RuleID, MR.Priority ,MR.sourceid, MR.TransformationDataType,TransformationDataTypeAlias
+							--For XML RAW('Rule'),Root('FuzzyLogic')
+							)as mrul
+						) mrules
+					)
+
+					,
+					(
+						Select Measures.FORMULATITLE  
+						from KBMeasureMst Measures 
+						where Measures.IsActive=1 and KMM.METRICNAME=Measures.MEASURE_NAME 
+						and KMM.TEMPLATE_ID=Measures.TEMPLATE_ID and Measures.TEMPLATE_ID=1  and KMM.SOURCE_ID=Measures.SOURCE_ID limit 1
+						--For XML Path('')
+					) "NewFormula"
+					,
+					(
+						Select 
+						(
+							Select Row_to_json(Vrules) "ValidationRules"
+							from
+							(
+								Select Array_to_json(Array_agg(Row_to_json(vrul))) "Rules"
+								from
+								(
+									Select BB.RuleID RuleId,BB.ExpectedDatatype ExpectedDataType,BB.RuleType Ruletype
+									,case when ExpectedDatatype = 'String' and RuleType='Basic' then '' Else BB.RegExpression End Regexpression
+									,BB.ServiceExpressions Serviceexpression,BB.Conditions
+									from KBMetricValidationRules BB 
+									where AA.MetricName=BB.MetricName and AA.SourceId=BB.SourceId 
+									--For XML PATH('Rules'),Root('ValidationRules')
+								)as vrul
+							)Vrules	
+						)
+						from KBMetricValidationRules AA 
+						where KMM.MetricName=AA.MetricName and KMM.SOURCE_ID=AA.SourceId
+						Group By AA.MetricName, AA.SourceId
+						--For xml PATH('')
+					)
+					from KBMetricMst KMM  
+					Inner join KBSpokeConfigurations  KSC on KMM.METRICNAME=KSC.METRICNAME and KMM.SOURCE_ID=KSC.SOURCETYPEID
+					join KBSpokewiseMetricsInformation MetricsData on KMM.SOURCE_ID=MetricsData.SourceTypeId and KMM.METRIC_ID=MetricsData.MetricID
+					Join KBMasterDataTypes DataTypes on KMM.METRICDATATYPE=DataTypes.DataTypeName and MetricsData.MetricDataType=DataTypes.DataTypeAlias
+					where SOURCE_ID=Vsourcetypeid and TEMPLATE_ID=1 and upper(KMM.METRICNAME)!='RECORDDATEUTC'--and datatypes.ISACTIVE=1 
+					order by KSC.METRICORDER
+					--FOR XML RAW('METRIC'),ROOT('METRICS')
+					) as metri
+				) metris
+			)
+
+			,
+			(
+				Select Row_to_json(src) "MetricExtraction"
+				from
+				(	
+					select SOURCEDBID AS "Source"
+					,DATABASETYPE as "SelectedDatabaseType"
+					,DBSERVERNAME as "DBServerName"
+					,DBAUTHTYPE as "DBAuthType"
+					,USERNAME "DBUsername"
+					,"password" "DBPassword"
+					,DBQUERY "DBQuery"
+					,DATABASENAME "Database"
+					,TABLEQUERY "TableQuery"
+					,MAINSEPEREATOR "MainSeperator"
+					,SUBSEPERATOR "SubSeperator" 
+					from KBSpokeMetricExtractionMst 
+					where SPOKEID=Vsourcetypeid
+					--for xml path('MetricExtraction')
+				)as src
+			)
+		 
+
+			,(
+
+				Select Row_to_json(srcs) "SourceURL"
+				from
+				(
+					select DataSourceID as "Source"
+					,URL	"URL"
+					,USERNAME	"USERNAME"
+					,"password"	"PASSWORD"
+					,DATA_RETRIEVAL_TIME as "TIMEPERIOD"
+					,DATA_RETRIEVAL_UOM as "TIMEPERIODUOM"
+					, case when DataSourceID=1 Or DataSourceID=6 Or DataSourceID=7 or DataSourceID=9 or DataSourceID=3 then ServerName END as "DBServerName"
+					,case when DataSourceID=3  then ServerName END as "LDAPServerName"
+					,PortNumber as "LDAPPortNumber"
+					,Organisation as "LDAPOrg"
+					,"group" as "LDAPGroup"
+					,  case when DataSourceID=1  Or DataSourceID=6 Or DataSourceID=7 or DataSourceID=9 or DataSourceID=2 then DBAuthType END as "DBAuthType"
+					,case when DataSourceID=3  then ServerName END as "LDAPAuthType"
+					,Coalesce(DatabaseName,Organisation) as "Database"
+					,DBQuery	"DBQuery"
+					, Coalesce(TableQuery,"group") as "TableQuery"
+					,Coalesce(A.DBIDColumn,'') "DBIDColumn"
+					,Coalesce(A.DBIDColumnDataType,'') "DBIDColumnDataType"
+					,Coalesce(DATABASETYPE ,0)as "SelectedDatabaseType"
+					,WSDLURL	"WSDLURL"
+					,WSDLClassName	"WSDLClassName"
+					,WSDLAction	"WSDLAction"
+					,IsRestBased	"IsRestBased"
+					,(Select InitialPullType from KBSOURCEURLMST AA where A.SOURCEID=AA.SOURCEID and lower(objecttype)='source' and lower(DATA_FETCH_TYPE)='historicaldata' limit 1 ) "InitialPullType"
+					,InitialPullFromDate	"InitialPullFromDate"
+					,InitialPullToDate	"InitialPullToDate"
+					,IntialPullTimePeriod	"IntialPullTimePeriod"
+					,InitialPullTimePeriodUOM	"InitialPullTimePeriodUOM"
+					,uploadtype as "EXACTTIME"
+					,ParameterAppender	"ParameterAppender"
+					,HasPaging	"HasPaging"
+					,PagingColumn	"PagingColumn"
+					,NoofRecords	"NoofRecords"
+					,concatenation_operator "ConcatenationOperator",concatenation_rule "ConcatenationRule"
+					,
+					(
+
+						select row_to_json(imports)	"ImportSettingsDetails"
+						from
+						(
+							select DATABASETYPE as "SelectedDatabaseType"
+							,Coalesce(ServerName,URL) as "DBServerName"
+							,DBAuthType	"DBAuthType"
+							,case when DataSourceID =1 Or DataSourceID=4 Or DataSourceID=6 Or DataSourceID=7 then  USERNAME else '' end as "DBUsername"
+							,case when DataSourceID=2 then USERNAME else '' end as "WSUSERNAME"
+                            ,case when DataSourceID=2 then USERNAME when  DataSourceID=10 then USERNAME end as "USERNAME"
+							,case when DataSourceID=3 then USERNAME else '' end as "LDAPUSERNAME"
+							,case when DataSourceID=1  Or DataSourceID=4 Or DataSourceID=6 Or DataSourceID=7 Or DataSourceID=9  then "password" else '' end as "DBPassword"
+							,case when DataSourceID=2 then "password"  else '' end as "WSPASSWORD"
+                            ,case when DataSourceID=2 then "password" when DataSourceID=10 then "password"  end as "PASSWORD"
+							,case when DataSourceID=3 then "password"  else '' end as "LDAPPASSWORD"               
+							,DBQuery as "DBQuery"
+							,DatabaseName as "Database"
+							, TableQuery || case when Coalesce(Query_Maxrecord,'')!='' then ';' Else '' End || Coalesce(Query_Maxrecord,'') as "TableQuery"
+							, Parameter	"Parameter"
+							,Coalesce(DataSourceID,0) "Source"
+							,HasPaging	"HasPaging"
+							,PagingColumn	"PagingColumn"
+							,NoofRecords	"NoofRecords"
+							,Coalesce(Url.DBIDColumn,'') "DBIDColumn"
+							,Coalesce(Url.DBIDColumnDataType,'') "DBIDColumnDataType"
+							,IsRestBased	"IsRestBased"
+							,URL	"URL"
+							,WSDLURL	"WSDLURL"
+							,WSDLClassName	"WSDLClassName"
+							,WSDLAction	"WSDLAction"
+							,PortNumber	"PortNumber"
+							,Organisation	"Organisation"
+							,"group"	"Group"
+							,
+							(
+								Select Row_to_json(pdets) "PARAMETERDETAILS"
+								from
+								(
+									/*Getting Parameters Values*/
+									select 
+									(
+										select Row_to_json(params) "PARAMETERS"
+										from
+										(
+											Select Array_to_json(Array_agg(Row_to_json(pars))) "PARAMETER"
+											from
+											(
+												select PARAM_NAME as "NAME"
+												,PARAM_VALUE as "VALUE"
+												,PARAM_TYPE as "TYPE"
+                                                ,format as "format"
+												,FORMULA	"FORMULA"
+												,Coalesce(FilterOption,'') "FilterOption" 
+												,Operator	"Operator"
+												,EntityDefId	"EntityDefId"
+												,concatenator "Concater"
+												,parametertype "AddParameters"
+												,groupname "GroupName"
+												FROM kbsourceurldetails B 
+												WHERE B.SOURCEID=Url.SOURCEID and Url.ID=B.URLID
+												and lower(Url.DATA_FETCH_TYPE)='historicaldata'
+                                                and b.type is null
+												
+												--FOR XML RAW('PARAMETER'),ROOT('PARAMETERS')
+											) AS pars
+										) params	
+									)
+												 
+									--for xml path(''),ROOT('PARAMETERDETAILS')
+								)as pdets
+							)
+							from kbsourceurlMst Url 
+							where Url.SOURCEID=A.SOURCEID and lower(Url.DATA_FETCH_TYPE)='historicaldata' and lower(objecttype)='source'
+							--for xml path(''),root('ImportSettingsDetails')
+								
+						) as imports
+					)
+			     
+					,
+					(
+							Select Row_to_json(pdets) "PARAMETERDETAILS"
+							from
+							(
+											/*Getting Parameters Values*/
+								select 
+									(
+										select Row_to_json(params) "PARAMETERS"
+										from
+										(
+											Select Array_to_json(Array_agg(Row_to_json(pars))) "PARAMETER"
+											from
+											(
+												select PARAM_NAME as "NAME"
+												,PARAM_VALUE as "VALUE"
+												,PARAM_TYPE as "TYPE"
+												,format as "format"
+												,FORMULA	"FORMULA"
+												,Coalesce(FilterOption,'') "FilterOption"
+												,Operator	"Operator"
+												,EntityDefId	"EntityDefId"
+												,concatenator "Concater"
+												,parametertype "AddParameters"
+												,groupname "GroupName"
+												FROM kbsourceurldetails B 
+												WHERE B.SOURCEID=A.SOURCEID and A.ID=B.URLID
+												and lower(A.DATA_FETCH_TYPE)='currentdata'
+                                                and b.type is null
+												--FOR XML RAW('PARAMETER'),ROOT('PARAMETERS')
+											) AS pars
+										) params
+									)
+									/*Getting Dynamic Parameters List from Master Table*/
+									,
+									(
+										select Row_to_json(params) "DynamicParameters"
+										from
+										(
+											Select Array_to_json(Array_agg(Row_to_json(pars))) "DynamicParameter"
+											from
+											(
+												SELECT param_name "NAME",filteroption "FilterOption"
+												,param_value "VALUE", param_type "TYPE" 
+												from 
+												KBDynamicParameterListMst PLM
+												where PLM.sourceid=A.SOURCEID   
+												--for xml raw('DynamicParameter'),ROOT('DynamicParameters')
+											) as pars
+										
+										) as params
+									)	
+												 
+								--for xml path(''),ROOT('PARAMETERDETAILS')
+							)as pdets
+					)
+					FROM KBSOURCEURLMst A 
+					WHERE SOURCEID=Vsourcetypeid and lower(DATA_FETCH_TYPE)='currentdata' and lower(objecttype)='source'
+					--FOR XML PATH(''),ROOT('SourceURL')
+				) AS srcs
+			)
+			,
+			(
+				select Row_to_json(IDES) "IDENTIFIERS"
+				from
+				(
+					Select Array_to_json(Array_agg(Row_to_json(IDE))) "IDENTIFIER"
+					from
+					(
+						Select SourceTypeID "SPOKEID"
+						,IDENTIFIERNAMES	"IDENTIFIERNAMES"
+						,IDENTIFIERMETRICS	"IDENTIFIERMETRICS"
+						,IDENTIFIERVALUES	"IDENTIFIERVALUES"  
+						from KBSpokeIndetifierMst
+						where SourceTypeID=Vsourcetypeid 
+						--for XML RAW('IDENTIFIER'),ROOT('IDENTIFIERS')
+					) as IDE
+				)IDES	
+			)
+
+			,PrimaryKeyColumns "PRIMARYKEY"
+			,ENTITYIDENTIFIER "CUSTOMERIDENTIFIER"
+			,ENTITYIDENTIFIER_service "METRICIDENTIFIER"
+			,TIMEZONEID	"TIMEZONEID" 
+			,CMT.DataFormat	"DataFormat"	
+			,Coalesce(CMT.CollectionName,'') as "CollectionName"
+			,Coalesce(CMT.MainSeparator,'') as "MainSeparator"
+			,Coalesce(CMT.SubSeparator,'') as "SubSeparator"
+			,Coalesce(CMT.SourceType,0) as "SourceType"
+			,CMT.SpokeType as "SPOKETYPE"
+			,CASE WHEN CMT.SOURCETYPE=0 THEN Coalesce(CMT.SOURCEURL,'') END as "SourceURI"
+			,
+			(
+				Select Row_to_json(metid) "MetricIdentifier"
+				from
+				(
+					Select
+						(
+							select Row_to_json(ent) "ENTITYIDENTIFIER"
+							from
+							(
+								Select Array_to_json(Array_agg(Row_to_json(rw))) "Row"
+								from
+								(
+									Select SOURCETYPE_ID	"SOURCETYPE_ID",
+									 regexp_split_to_table(CUSTOMERIDENTIFIER,'#CWT01#')  "Identifier"
+									from KBSourceTypeMst Smst1
+									--Cross Apply FNSPLITWITHIDENTITY(CUSTOMERIDENTIFIER,'#CWT01#') as Splits    
+									where Smst1.SOURCETYPE_ID=CMT.SOURCETYPE_ID
+								--FOR XML RAW ('Row'),ROOT('ENTITYIDENTIFIER')
+								)as rw
+							) ent	
+						)
+					
+					,
+					(
+						select Row_to_json(ent) "ENTITYIDENTIFIER"
+						from
+						(
+							Select Array_to_json(Array_agg(Row_to_json(rw))) "Row"
+							from
+							(
+								Select SOURCETYPE_ID	"SOURCETYPE_ID", regexp_split_to_table(CallEndIdentitifer,'#CWT01#')  "Identifier"
+								from KBSourceTypeMst SMSt
+								--Cross Apply FNSPLITWITHIDENTITY(CallEndIdentitifer,'#CWT01#') as Splits  
+								where smst.SOURCETYPE_ID=CMT.SOURCETYPE_ID
+								--FOR XML RAW ('Row'),ROOT('ENDIDENTIFIER')
+							)as rw
+						)ent	
+					)
+					--FOR XML PATH (''),ROOT('MetricIdentifier')
+				)as metid	
+			)
+			FROM KBsourcetypemst CMT 
+			where CMT.SOURCETYPE_ID=Vsourcetypeid
+			--FOR XML PATH('SPOKE')
+		) spk
+	) outs		
+	);
+    end;
+Elseif Lower(VTRAN) = 'getmqttdetails' then
+begin
+
+	Return(
+		Select row_to_json(outp)
+		from
+		(
+			select array_to_json(array_agg(row_to_json(outs))) "SPOKE"
+			from
+			(
+				select  sourcetype_id "ID", CMT.Input "MQTTTopic", CMT.CollectionName "MQTTUsername", CMT.spokeplaceholders "MQTTPassword" ,dataseperator "MQTTURL"
+				,dataformat "DataFormat", mainseparator "MainSeperator", subseparator "SubSeperator"
+				,(select licensekeyid "VID" from kblicensedetails a join kbusercustomermapping b on a.customerid=b.customerid where b.userid=cmt.createdby limit 1 )
+				from kbsourcetypemst CMT
+				where lower(sourceguid)='mqtt'
+				Order by "ID"
+			) outs	
+		) outp	
+	);
+	
+end;
+
+Elseif Lower(VTRAN) = 'addadldetails' then
+
+begin
+
+--return (select count(*) from temps);
+
+VSourcetypeid:= (select cast(ivalue->'SPOKE'->> 'SPOKEID' as int) from temps limit 1);
+VSpokeName:= (select ivalue->'SPOKE'->> 'Name' from temps limit 1);
+VMQTTURL:= (select ivalue->'SPOKE'->> 'FolderPath' from temps limit 1);
+VMQTTTopic:=(select ivalue->'SPOKE'->> 'ContainerPath' from temps limit 1);  
+VMQTTUsername:=(select ivalue->'SPOKE'->> 'TableFolder' from temps limit 1);
+VMQTTPassword:=(select ivalue->'SPOKE'->>'TimeParameter' from temps limit 1);
+VHasNLegsNMachine:=(select ivalue->'SPOKE'->> 'TimePeriodUOM' from temps limit 1);
+VTIMEZONEID:=(select cast(ivalue->'SPOKE'->> 'TimePeriod' as int) from temps limit 1);
+VPRIMARYKEY:=(select ivalue->'SPOKE'->> 'Primarykey'  from temps limit 1);	
+Vmainseperator:=(select ivalue->'SPOKE'->> 'TypeofData'  from temps limit 1);
+VSubSeparator:=(select ivalue->'SPOKE'->> 'Type'  from temps limit 1);
+VSpokeDescription:=(select ivalue->'SPOKE'->> 'offsetinterval'  from temps limit 1);
+VEntityidentifier:=(select ivalue->'SPOKE'->> 'delayinterval'  from temps limit 1);
+
+insert into kbsourceadldetails(sourcetype_id,folderpath ,containerpath ,tablefolder ,timeparameter ,frequency  ,frequencyUOM ,name,createddate,sourceprimarykey,typeofdata,sourcetype,offsetinterval,delayinterval,isactive)
+select VSourcetypeid,VMQTTURL,VMQTTTopic,VMQTTUsername,VMQTTPassword,vTIMEZONEID,VHasNLegsNMachine,VSpokeName,VActiondate,VPRIMARYKEY,Vmainseperator,VSubSeparator,VSpokeDescription,VEntityidentifier,1;
+
+	Return(
+		Select row_to_json(outp)
+		from
+		(
+			select 1 as Result
+		) outp	
+	);
+	
+end;
+
+Elseif Lower(VTRAN) = 'updateadldetails' then
+begin
+VSourcetypeid:= (select cast(ivalue->'SPOKE'->> 'SPOKEID' as int) from temps limit 1);
+VSourceTypename:=(select ivalue->'SPOKE'->> 'DatasourceName' from temps limit 1);
+VSpokeName:= (select ivalue->'SPOKE'->> 'Name' from temps limit 1);
+VMQTTURL:= (select ivalue->'SPOKE'->> 'FolderPath' from temps limit 1);
+VMQTTTopic:=(select ivalue->'SPOKE'->> 'ContainerPath' from temps limit 1);  
+VMQTTUsername:=(select ivalue->'SPOKE'->> 'TableFolder' from temps limit 1);
+VMQTTPassword:=(select ivalue->'SPOKE'->>'TimeParameter' from temps limit 1);
+VHasNLegsNMachine:=(select ivalue->'SPOKE'->> 'TimePeriodUOM' from temps limit 1);
+VTIMEZONEID:=(select cast(ivalue->'SPOKE'->> 'TimePeriod' as int) from temps limit 1);
+VPRIMARYKEY:=(select ivalue->'SPOKE'->> 'Primarykey'  from temps limit 1);	
+Vmainseperator:=(select ivalue->'SPOKE'->> 'TypeofData'  from temps limit 1);
+VSubSeparator:=(select ivalue->'SPOKE'->> 'Type'  from temps limit 1);
+VSpokeDescription:=(select ivalue->'SPOKE'->> 'offsetinterval'  from temps limit 1);
+VEntityidentifier:=(select ivalue->'SPOKE'->> 'delayinterval'  from temps limit 1);
+/*select usp_kbspoke('{"SPOKE":{"SPOKEID":"8828","DatasourceName":"LDAPFULL_2","Name":"LDAPFULL_3",
+                     "FolderPath":"Careys-Provisioned-Data-PreProd",
+                     "ContainerPath":"DS-DS-ActiveDirectory","TableFolder":"FACT_LDAPFULL_2metricdetails",
+                     "TimeParameter":"RecorddateUTC","TimePeriodUOM":"Day","TimePeriod":"1",
+                     "TRANSTYPE":"updateadldetails","Primarykey":"c","TypeofData":"Transactional",
+                     "Type":"source","offsetinterval":"120","delayinterval":"0","id":"0"}}')*/
+
+update kbsourceadldetails
+set 
+name=VSpokeName,folderpath=VMQTTURL,containerpath=VMQTTTopic,
+tablefolder=VMQTTUsername,timeparameter=VMQTTPassword,frequency=VTIMEZONEID,frequencyuom=VHasNLegsNMachine,
+modifieddate=now(),sourceprimarykey=VPRIMARYKEY,typeofdata=Vmainseperator,sourcetype=VSubSeparator,
+delayinterval=VEntityidentifier,offsetinterval=VSpokeDescription,isactive=1
+where sourcetype_id=VSourcetypeid;
+
+Return(
+		Select row_to_json(outp)
+		from
+		(
+			select 1 as Result,VSourcetypeid as "sourceid"
+		) outp	
+	);
+
+end;
+						 
+Elseif Lower(VTRAN) = 'deleteadla' then
+
+begin
+
+VSourcetypeid:= (select cast(ivalue->'SPOKE'->> 'SPOKEID' as int) from temps limit 1);
+VSource:= (select cast(ivalue->'SPOKE'->> 'ADLAID'as int)  from temps limit 1); 
+VCreated_By:= (select cast(ivalue->'SPOKE'->> 'LoginId'as int)  from temps limit 1); 
+
+ Update kbsourceadldetails set isactive=0,modifiedby=VCreated_By,modifieddate=VActiondate 
+ where sourcetype_id=VSourcetypeid and adlid=VSource;
+								 
+ Return(
+		Select row_to_json(outp)
+		from
+		(
+			select 1 as Result
+		) outp	
+	);
+	
+end;
+
+Elseif Lower(VTRAN) = 'getadldetails' then
+begin
+
+select 
+cast(ivalue->'SPOKE'->> 'SPOKEID' as int) into VSourcetypeid from  temps  limit 1;
+
+	Return(
+		Select row_to_json(outp)
+		from
+		(
+			select array_to_json(array_agg(row_to_json(outs))) "SPOKE"
+			from
+			(
+				select 
+				adlid  
+				,name "Name"
+				,folderpath as "FolderPath" 
+				,containerpath as "ContainerPath"
+				,tablefolder as "TableFolder"
+				,timeparameter  "TimeParameter"
+				,frequency "TimePeriod"
+				,frequencyUOM "TimePeriodUOM"
+				,typeofdata "TypeofData"
+				,sourceprimarykey "Primarykey"
+				,sourcetype "Type"
+                ,offsetinterval "offsetinterval"
+				,delayinterval "delayinterval"
+				from kbsourceadldetails CMT
+				where sourcetype_id=VSourcetypeid and (isactive='1' or isactive is null)
+
+				
+			) outs	
+		) outp	
+	);
+	
+end;
+
+End if;
+
+End
+
+$function$;
+
+ALTER FUNCTION public.usp_kbspoke(json)
+    OWNER TO postgres;
+
+
+

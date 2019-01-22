@@ -1,0 +1,2820 @@
+-- FUNCTION: public.usp_dbservgetsourcecommonurljson
+
+-- DROP FUNCTION public.usp_dbservgetsourcecommonurljson;
+
+CREATE OR REPLACE FUNCTION public.usp_dbservgetsourcecommonurl(
+	input json)
+RETURNS json
+    LANGUAGE 'plpgsql'
+    COST 100.0
+    VOLATILE 
+AS $function$
+
+ /*added limit 1 on 29-09-2018 search with added this on */  
+
+DECLARE
+	VTRAN			VARCHAR(30);
+	VCreated_By		int;
+	VID			int;
+	Vsource 		int;
+	VSourceid 		int;
+	Vipaddress 		varchar(255);
+	VResult 		json;
+	VInstanceID 		varchar(255);
+	VConfigid 		bigint;
+	VEngineCount 		int;
+	VTotalUrlCount 		int;
+	VConfigidcount 		int;
+	VConfigUrlIdCount 	int;
+	VSTATUS 		smallint;
+	VURLID 			bigint;
+	VMasterInstanceID 	varchar(100);
+	VMasterInstanceStatus 	bit;
+	VEngineInstanceID 	varchar(200);
+	VRangeStart 		int;
+	VProfileid 		int;
+	VTotalrecordsproccessed int;
+	VProcesstype 		smallint;
+	VprevConfigid 		int;
+	VLimit			int;
+	VResultWeb		json;
+	VResultwebEntity        json;
+	VResultdb		json;
+    VResultdbentity      json;
+    VResultshentity json;
+    VResultFTPentity json;
+	VResultdb1		json;
+	VResultftp		json;
+	VResultsh		json;
+	VResultLDAP		json;
+	Vcallinput		text;
+	Vcallstatus		int;
+	Vcallstatusmessage	varchar(10000);
+	Vlastdata	varchar(8000);
+	VActiondate		timestamp default(current_timestamp at time zone 'utc')	;	
+	Visactive		varchar(20);
+	Vdiffdate		timestamp ;	
+	Vsliceendtime   timestamp ;
+    vtime int;
+    vfromdate timestamp without time zone;
+    vtodate timestamp without time zone;
+    
+	
+Begin
+
+drop table if exists temps;	
+drop table if exists users;
+drop table if exists UrlTemp;
+drop table if exists DynamicParameters;
+drop table if exists EnginePaginDetails;
+drop table if exists tempsInstance;
+
+create temp table temps(id serial,ivalue json);
+create temp table users (id serial,userid int);
+Create temp table UrlTemp(id serial,Configid varchar(255), UrlId bigint,SourceId bigint,DataFetchType varchar(50));
+Create temp table DynamicParameters( id serial,iKey varchar(1000),iValue varchar(1000),groupname varchar(255),operator varchar(100),ptype varchar(100),format varchar(255));
+Create temp table EnginePaginDetails(ID Serial,EngineInstanceID varchar(200),CurrentRangeStart int, CurrentRangeEnd int);
+
+create temp table tempsInstance(EngineInstanceID varchar(200));
+
+insert into temps(ivalue)
+select input;
+
+select ivalue->'INPUT'->> 'TransType'
+,cast(ivalue->'INPUT'->> 'SOURCE' as int)
+,ivalue->'INPUT'->> 'IPADDRESS'
+,ivalue->'INPUT'->> 'PullInstanceKey'
+,cast(ivalue->'INPUT'->> 'URLID' as int)
+,cast(ivalue->'INPUT'->> 'STATUS' as int)
+,cast(ivalue->'INPUT'->> 'SOURCEID' as int)
+,cast(ivalue->'INPUT'->> 'PROFILEID' as int)
+,cast(ivalue->'INPUT'->> 'COUNT' as int)
+,cast(ivalue->'INPUT'->> 'ProcessType' as int)
+,ivalue->'INPUT'->> 'ServiceInstance'
+,ivalue->'INPUT'->> 'callinput'
+,ivalue->'INPUT'->> 'callstatusmessage'
+,cast(ivalue->'INPUT'->> 'callstatus' as int)
+,ivalue->'INPUT'->> 'lastdata'
+,ivalue->'INPUT'->> 'IsActive'
+,cast(ivalue->'INPUT'->> 'VID' as int)
+,cast(ivalue->'INPUT'->> 'count' as int)
+,ivalue->'INPUT'->> 'sliceendtime'
+,ivalue->'INPUT'->> 'fromdate'
+into VTRAN,Vsource,vipaddress,vInstanceId,vURLID,vSTATUS,vSourceid,vProfileid,VTotalrecordsproccessed,VProcesstype
+,VEngineInstanceID,Vcallinput,Vcallstatusmessage,Vcallstatus,Vlastdata,Visactive,VID,VEngineCount,VMasterInstanceID,vfromdate
+from temps limit 1;
+
+if(VMasterInstanceID='0') then
+Vsliceendtime=VActiondate;
+else	
+Vsliceendtime=VMasterInstanceID;
+end if ;
+
+--return(select row_to_json(a) from  (select Vcallstatus)a);
+
+if(VProcesstype is not null and VProcesstype=-100) then
+
+VTRAN='getdetails';
+Vsource=(select sourcetype_id from kbsourcetypemst order by 1 desc limit 1);
+end if ;
+if Lower(VTran)='updateerrorstatus' Then
+begin
+--select * from nmsspperformancelogger
+
+	update nmsspperformancelogger
+	set status=1
+	where sourceid=Vsource and id=vURLID;
+
+Vresult:=(
+		
+			Select Row_to_json(a) as "OUTPUT"
+			from
+			(
+			Select VResult  as "1"
+			)a
+		
+	);
+
+Return(VResult);
+
+end;
+elseif (Lower(VTran)='insertenginedetails' or Lower(VTran)='updateenginedetails') Then
+begin
+
+	if (Lower(VTran)='insertenginedetails') then
+	begin	
+	
+	update KBEnginePagingWorkTable set isactive=null, modifieddate=case when modifieddate is null then now() else modifieddate end
+	where engineinstanceid=vInstanceId;
+	
+	Insert into KBEnginePagingWorkTable(engineinstanceid,enginemode,enginetype,enginepath,isactive,createddate,process_id)
+	select vInstanceId,Vcallinput,VEngineInstanceID,Vcallstatusmessage,1,now(),vipaddress;
+	
+	end;
+	elseif (Lower(VTran)='updateenginedetails') then 
+	begin
+	
+	update KBEnginePagingWorkTable
+	set modifieddate=now()	
+	,enginemode=Vcallinput
+	-- ,isactive=null
+	where engineinstanceid=vInstanceId  and lower(enginemode)='start' and lower(enginetype)=lower(VEngineInstanceID) and isactive=1;
+	end;
+	end if;
+		
+	
+Vresult:=(
+		
+			Select Row_to_json(a) as "OUTPUT"
+			from
+			(
+			Select VResult  as "1"
+			)a
+		
+	);
+
+Return(VResult);	
+
+end;
+
+ElseIf lower(VTran)='pullerror' and vfromdate is null Then
+
+insert into temps(ivalue)
+select input;
+begin	
+select ivalue->'INPUT'->> 'TransType' 
+,cast(ivalue->'INPUT'->> 'SOURCEID' as int)
+into
+VTRAN,VSourceid from temps limit 1;
+
+Vresult:=(
+	
+	Select Array_to_json(Array_agg(Row_to_json(a))) as "OUTPUT"
+	from(	 
+   select distinct callstatus,callinput,lastdata,callstatusmessage,aa.createddate from kbenginewisedatafetchinginformation aa    
+	inner join kbenginepagingworktable bb on aa.engineinstanceid=bb.engineinstanceid 	
+	where callstatus=VSourceid --and callstatusmessage='1'              
+	)a
+		
+	);	
+return  Vresult;   
+End;
+
+ElseIf lower(VTran)='pullerror' and vfromdate is not null Then
+
+insert into temps(ivalue)
+select input;
+begin	
+select ivalue->'INPUT'->> 'TransType' 
+,cast(ivalue->'INPUT'->> 'SOURCEID' as int)
+
+into
+VTRAN,VSourceid from temps limit 1;
+vtodate=vfromdate:: date || ' 23:59:59';
+Vresult:=(
+	
+			Select Array_to_json(Array_agg(Row_to_json(a))) as "OUTPUT"
+			from(	 
+   select distinct callstatus,callinput,lastdata,callstatusmessage,a.createddate,
+                 b.sinput,b.errormesssage,b.sourceid,b.status,b.id,
+		(case 
+	when timespan=1 then 'Pull Engine'
+	when timespan=2 then 'Stream processing Engine'
+	when timespan=4 then 'Datamart Engine'
+	when timespan=3 then 'Correlation Engine' 
+	--when timespan in (1,2,3,4)  then 'all'
+	end)as "enginetype",
+	b.timespan
+	--b.sourcetype_name as sourcename 
+                from kbenginewisedatafetchinginformation a    
+	inner join kbenginepagingworktable bb on a.engineinstanceid=bb.engineinstanceid 
+     inner join nmsspperformancelogger b  on  a.callstatus=b.sourceid        
+	where callstatus=VSourceid --and callstatusmessage='1'
+	and (a.createddate>=vfromdate and a.createddate<=vtodate)                 
+	)a
+		
+	);	
+return  Vresult;   
+End;
+
+elseIf Lower(VTran)='rerun' then
+Begin 
+-- extracting hour from utc time
+vtime:=(SELECT EXTRACT(hour FROM (select now() at time zone 'utc')));
+-- maintaining error history
+insert into kbenginewisedatafetchinginformationhistory
+(engineinstanceid,callinput,callstatus,callstatusmessage,createddate,modifieddate,lastdata,recordcount)
+select engineinstanceid,callinput,callstatus,callstatusmessage,createddate,modifieddate,lastdata,recordcount
+from kbenginewisedatafetchinginformation where id=(select max(id) from kbenginewisedatafetchinginformation where callstatus=VSourceid 
+          and engineinstanceid in (select distinct engineinstanceid from KBEnginePagingWorkTable where lower(enginetype)='pull' ) )
+and callstatus=vSourceid; 
+-- deleting from main error table
+delete from kbenginewisedatafetchinginformation
+where id=(select max(id) from kbenginewisedatafetchinginformation where callstatus=VSourceid 
+          and engineinstanceid in (select distinct engineinstanceid from KBEnginePagingWorkTable where lower(enginetype)='pull' ) )
+and callstatus=vSourceid;
+-- maintaining history for kbsourceurlmst details in history table
+insert into kbsourceurlmsthistory(
+sourceid,url,username,password,data_retrieval_time,data_retrieval_uom,createdby,isactive,createddate,modifiedby,modifieddate,
+datasourceid,servername,portnumber,organisation,databasename,
+dbquery,tablequery,dbauthtype,wsdlurl,wsdlaction,wsdlclassname,isrestbased,initialpulltype,
+initialpullfromdate,initialpulltodate,intialpulltimeperiod,initialpulltimeperioduom,
+objecttype,attributemapping,data_fetch_type,parameter,parameterappender,haspaging,pagingcolumn,
+noofrecords,uploadtype,dbidcolumn,dbidcolumndatatype,query_maxrecord,createurl,
+custom_authenticationtype,urlname,createurltype,pulltype,objectname,concatenation_operator,
+concatenation_rule)
+select sourceid,url,username,password,data_retrieval_time,data_retrieval_uom,createdby,isactive,createddate,modifiedby,modifieddate,
+datasourceid,servername,portnumber,organisation,databasename,
+dbquery,tablequery,dbauthtype,wsdlurl,wsdlaction,wsdlclassname,isrestbased,initialpulltype,
+initialpullfromdate,initialpulltodate,intialpulltimeperiod,initialpulltimeperioduom,
+objecttype,attributemapping,data_fetch_type,parameter,parameterappender,haspaging,pagingcolumn,
+noofrecords,uploadtype,dbidcolumn,dbidcolumndatatype,query_maxrecord,createurl,
+custom_authenticationtype,urlname,createurltype,pulltype,objectname,concatenation_operator,
+concatenation_rule from kbsourceurlmst
+where sourceid=vSourceid;
+-- updating rerun column and time of rerun for a particular source
+update kbsourceurlmst
+set rerun=1,data_retrieval_time='all;'||vtime||';0'
+,data_retrieval_uom=(case when (data_retrieval_uom='daily' or data_retrieval_uom='monthly') then 'daily' end)
+,uploadtype='1'
+where sourceid=vSourceid
+and data_fetch_type='CurrentData';
+
+Vresult:=(
+		
+			Select Row_to_json(a) as "OUTPUT"
+			from
+			(
+			Select vSourceid  as "id", 'successfully rerun' as message
+			)a
+		
+	);
+
+Return(VResult);
+
+end;
+
+elseif (Lower(VTran)='dashboard') Then
+begin
+insert into temps(ivalue)
+select input;
+														 
+select
+ivalue->'INPUT'->> 'pagesize'
+,ivalue->'INPUT'->> 'lastid'
+,ivalue->'INPUT'->> 'firstid'	
+,ivalue->'INPUT'->> 'LoginId'
+,ivalue->'INPUT'->> 'VID'
+into
+VConfigid,VEngineCount,Vsource,Vcallstatus,VID from temps limit 1;
+vfromdate:=(NOW() - INTERVAL '1 DAY');
+vtodate:= vfromdate :: date ;
+
+if(VConfigid=0 or VConfigid is null) then
+ begin
+ VConfigid=50;
+ end;
+ end if;
+-- //pagecount downwards 
+if(VEngineCount is null or VEngineCount=0) then
+ begin
+ VEngineCount=10000;
+ end;
+ end if;
+-- //pagecount upwards
+ if(Vsource is null or Vsource=0) then
+ begin
+ Vsource=0;
+ end;
+ end if;
+ 
+
+   return (
+	Select Row_to_json(outs)
+	from
+	(
+		Select Array_to_json(Array_agg(Row_to_json(spk))) "SPOKE"
+		from
+		(
+			SELECT 
+            SOURCETYPE_NAME as "SPOKENAME"
+            ,mst.CREATEDBY as "CREATEDBY"
+			,SOURCETYPE_ID as "SOURCEID"
+            ,(select  count(sourceid) as "ERRORCOUNT" from nmsspperformancelogger where sourceid=SOURCETYPE_ID and createddate>=vtodate) 
+			,(select data_retrieval_time as "LASTITERATIONTIME" from kbsourceurlmst where sourceid=SOURCETYPE_ID and data_fetch_type='CurrentData' limit 1)
+            ,(select data_retrieval_uom as "LASTITERATIONTYPE" from kbsourceurlmst where sourceid=SOURCETYPE_ID and data_fetch_type='CurrentData' limit 1)
+            ,(select uploadtype as "EXACTTIME" from kbsourceurlmst where sourceid=SOURCETYPE_ID and data_fetch_type='CurrentData' limit 1)
+			,				(
+							
+								( Select Array_to_json(Array_agg(row_to_json(pull))) "pull" From (
+										Select  distinct recordcount ,a.createddate,a.engineinstanceid  
+										from  kbenginewisedatafetchinginformation a inner join KBEnginePagingWorkTable b 
+										on a.engineinstanceid=b.engineinstanceid and b.enginetype='pull'
+										where a.callstatus=mst.sourcetype_id and (a.createddate>=vtodate /*between vtodate and (vtodate||' '||'23:59:59')*/)
+                                    order by a.createddate desc	) pull
+                                ),
+								(Select Array_to_json(Array_agg(row_to_json(cep))) "cep" From (
+									   Select  distinct recordcount,a.createddate,a.engineinstanceid  
+										from  kbenginewisedatafetchinginformation a inner join KBEnginePagingWorkTable b 
+										on a.engineinstanceid=b.engineinstanceid and b.enginetype='cep'
+										where a.callstatus=mst.sourcetype_id and (a.createddate>=vtodate /*between vtodate and (vtodate||' '||'23:59:59')*/)
+                                    order by a.createddate desc ) cep
+                                 ), 
+								(Select Array_to_json(Array_agg(row_to_json(publish))) "publish" From (
+                                    Select distinct recordcount,a.createddate,a.engineinstanceid  
+									from  kbenginewisedatafetchinginformation a inner join KBEnginePagingWorkTable b 
+									on a.engineinstanceid=b.engineinstanceid and b.enginetype='publish'
+									where a.callstatus=mst.sourcetype_id and (a.createddate>=vtodate /*between vtodate and (vtodate||' '||'23:59:59')*/)
+                                    order by a.createddate desc 	) publish 
+                                 )    
+						) engines
+		FROM KBsourcetypemst mst
+            inner join KBUSERCUSTOMERMAPPING b on mst.createdby=b.userid 
+            where  b.customerid=VID and mst.sourcetype_id!=1 and mst.isactive='1'
+            order by mst.createddate asc 
+			
+			
+		) spk
+	) outs		
+	);
+   
+
+ end;
+  
+elseif Lower(VTran)='deleterecord' Then
+begin 
+insert into nmsspperformanceloggerhistory 
+(spname,sinput,starttime,endtime,conversationhandle,timespan,sourceid,errormesssage,status)
+
+select spname,sinput,starttime,endtime,conversationhandle,timespan,sourceid,errormesssage,status 
+from nmsspperformancelogger where id=vURLID limit 1;
+
+delete from nmsspperformancelogger
+where id=vURLID and sourceid=vSourceid;
+Vresult:=(
+		
+			Select Row_to_json(a) as "OUTPUT"
+			from
+			(
+			Select vURLID  as "id",'successfully deleted' as message
+			)a
+		
+	);
+
+Return(VResult);
+
+end;
+/*
+select usp_dbservgetsourcecommonurl('{"INPUT":{"TransType":"geterrors","VID":40,"LoginId":1628,
+                                      "filter":"datamart","pagesize":10,"lastid":0,"sourceid":8587}}')
+                                      
+                                      select * from nmsspperformancelogger  limit 1where timespan='4'
+                                      
+                                    
+*/
+elseif Lower(VTran)='geterrors' Then
+begin
+insert into temps(ivalue)
+select input;													 
+select ivalue->'INPUT'->> 'filter'
+,ivalue->'INPUT'->> 'pagesize'
+,ivalue->'INPUT'->> 'lastid'
+,ivalue->'INPUT'->> 'firstid'
+,ivalue->'INPUT'->> 'sourceid'
+
+into
+VInstanceID,VConfigid,VEngineCount,Vsource,Vcallstatus from temps limit 1;
+
+-- //pagesize 
+if(VConfigid=0 or VConfigid is null) then
+ begin
+ VConfigid=50;
+ end;
+ end if;
+-- //pagecount downwards 
+if(VEngineCount is null or VEngineCount=0) then
+ begin
+ VEngineCount=10000;
+ end;
+ end if;
+-- //pagecount upwards
+ if(Vsource is null or Vsource=0) then
+ begin
+ Vsource=0;
+ end;
+ end if;
+														 
+return ( Select Array_to_json(Array_agg(row_to_json(outs))) as "SPOKE"
+	from
+	(
+	select a.sinput,a.errormesssage,a.sourceid,a.status,a.id,
+		(case 
+	when timespan=1 then 'Pull Engine'
+	when timespan=2 then 'Stream processing Engine'
+	when timespan=4 then 'Datamart Engine'
+	when timespan=3 then 'Correlation Engine' 
+	--when timespan in (1,2,3,4)  then 'all'
+	end)as "enginetype",
+	a.timespan,
+	b.sourcetype_name as sourcename
+         ,a.createddate,
+      (select  count(sourceid) as "errorcount" from nmsspperformancelogger where sourceid=a.sourceid) 
+	from nmsspperformancelogger a
+	inner join kbsourcetypemst b on a.sourceid=b.sourcetype_id	
+	--left join KBUserCustomerMapping c on b.createdby=c.userid	
+	--left join nmsmetadata d on c.customerid=d.customer_start_id 
+		where 
+		(case when VInstanceID='pull' then a.timespan=1 
+	     when VInstanceID='cep' then a.timespan=2
+ 	     when VInstanceID='process' then a.timespan=3 
+    	 when (VInstanceID='datamart' and Vcallstatus is null) then a.timespan=4 
+	  when VInstanceID='all'  then a.timespan in (1,2,3,4)
+      when (Vcallstatus is not null and VInstanceID='datamart')  then (a.sourceid=Vcallstatus and a.timespan=4 )
+      when (Vcallstatus is not null and VInstanceID='pull')  then (a.sourceid=Vcallstatus and a.timespan=1 )
+      when (Vcallstatus is not null and VInstanceID='cep')  then (a.sourceid=Vcallstatus and a.timespan=2 )
+      when (Vcallstatus is not null and VInstanceID='all')  then (a.sourceid=Vcallstatus and a.timespan in (1,2,3,4 ) )   
+      when (Vcallstatus is not null and VInstanceID='process')  then (a.sourceid=Vcallstatus and a.timespan=3)     
+         end
+        )
+        and
+  ((a.id >  VEngineCount )or
+    (a.id  <  Vsource ) )
+	 order by a.id  limit VConfigid
+	) outs
+	);
+	
+ end;
+ 
+-- select usp_dbservgetsourcecommonurl('{"INPUT":{"TransType":"geterrors","VID":40,"LoginId":1628,"filter":"all","pagesize":10,"lastid":0,"sourceid":"9371"}}')
+elseif Lower(VTran)='inserterrors' Then
+begin
+
+--select * from nmsspperformancelogger
+--return input;
+	Insert into nmsspperformancelogger(sourceid,spname,sinput,errormesssage,timespan)
+	select Vsource,VEngineInstanceID,Vcallinput,Vcallstatusmessage,vURLID;
+
+	
+Vresult:=(
+		
+			Select Row_to_json(a) as "OUTPUT"
+			from
+			(
+			Select VResult  as "1"
+			)a
+		
+	);
+
+Return(VResult);	
+
+end;
+
+elseif Lower(VTran)='insertenginecalldetails' Then
+begin
+
+	
+                             
+
+	Vdiffdate=(select max(createddate) from kbenginewisedatafetchinginformation 
+               where callstatus=Vcallstatus and engineinstanceid=VEngineInstanceID 
+			   and callstatusmessage=
+			   (
+	  case when Vcallstatusmessage='process' then Vcallstatusmessage
+	  when Vcallstatusmessage='error' then  Vcallstatusmessage
+     else callstatusmessage end
+			  )
+			  );
+	   if( Vdiffdate is null  ) then 
+	Vdiffdate=current_timestamp at time zone 'utc';
+	VTotalUrlCount=1;
+	VConfigidcount=1;
+	 else	
+	VTotalUrlCount=date_part('day',(current_timestamp at time zone 'utc'-Vdiffdate));-- day
+	VConfigidcount=date_part('hour',(current_timestamp at time zone 'utc'-Vdiffdate));-- Hour
+	VConfigUrlIdCount=date_part('minute',(current_timestamp at time zone 'utc'-Vdiffdate));-- minute
+end if ;
+
+		
+	VprevConfigid=date_part('hour', Vdiffdate);
+	VLimit	= EXTRACT('hour' FROM CURRENT_TIMESTAMP AT TIME ZONE 'UTC')::bigint::int;						   
+	RAISE NOTICE 'Calling % ', Vdiffdate;
+
+	if ( Vcallinput ='cep' or Vcallinput='publish' or Vcallinput='correlation' or Vcallinput='historical') 
+	   and (Vcallstatusmessage ='error' and VTotalUrlCount<1 ) then
+
+		 RAISE NOTICE 'Calling error  % ', VTotalUrlCount;
+
+	 update kbenginewisedatafetchinginformation set recordcount= COALESCE(recordcount,0) + VEngineCount 
+		,modifieddate=current_timestamp at time zone 'utc'  where
+		callstatus=Vcallstatus and  VTotalUrlCount<1  and callstatusmessage=Vcallstatusmessage and engineinstanceid=VEngineInstanceID; 
+									  
+   elseif ( Vcallinput ='cep' or Vcallinput='publish' or Vcallinput='correlation' or Vcallinput='historical') 
+	   and (Vcallstatusmessage ='process' and VTotalUrlCount<1) then
+										  
+							  RAISE NOTICE 'Calling process % ', VTotalUrlCount;			  
+			  
+		update kbenginewisedatafetchinginformation set recordcount= COALESCE(recordcount,0) + VEngineCount 
+		,modifieddate=current_timestamp at time zone 'utc'  where
+		callstatus=Vcallstatus and  VTotalUrlCount<1  and callstatusmessage=Vcallstatusmessage and engineinstanceid=VEngineInstanceID;
+										  
+	elseif (Vdiffdate is not null and VTotalUrlCount<=0 and VConfigidcount<=0 and VConfigUrlIdCount<=15 and VprevConfigid=VLimit ) then 
+		update kbenginewisedatafetchinginformation
+		set recordcount= COALESCE(recordcount,0) + VEngineCount 
+		,modifieddate=current_timestamp at time zone 'utc'
+		where callstatus=Vcallstatus and  createddate=Vdiffdate and VprevConfigid=VLimit and engineinstanceid=VEngineInstanceID;
+	else		
+	
+	Insert into kbenginewisedatafetchinginformation(engineinstanceid,callinput,callstatus,callstatusmessage,lastdata,createddate,modifieddate,recordcount,sliceendtime)
+	select VEngineInstanceID,Vcallinput,Vcallstatus,Vcallstatusmessage,Vlastdata,Vactiondate,Vactiondate,VEngineCount,Vsliceendtime;
+
+	update kbsourceurlmst
+    set isactive=null where sourceid=cast(Vcallstatus as int) 
+    and data_fetch_type='HistoricalData';
+	end if;
+
+	if exists(select 1 from kbsourceurlmst where rerun=1) then 
+	begin
+	update kbsourceurlmst
+	set 
+	data_retrieval_time=(select data_retrieval_time from kbsourceurlmsthistory where sourceid=Vcallstatus order by 1 desc limit 1),
+	data_retrieval_uom=(select data_retrieval_uom from kbsourceurlmsthistory where sourceid=Vcallstatus order by 1 desc limit 1) 
+        ,rerun=0,
+        uploadtype=(select uploadtype from kbsourceurlmsthistory where sourceid=Vcallstatus order by 1 desc limit 1)    
+	where sourceid=Vcallstatus and isactive='1' ;
+        
+        update kbsourceurlmsthistory
+        set rerun=0
+        where sourceid=Vcallstatus
+        and id=(select max(id) from kbsourceurlmsthistory where sourceid=Vcallstatus order by 1 desc limit 1) ;	
+
+	end;	
+	end if;
+    
+	return(select row_to_json(outs) from (select row_to_json(a) "output" from (select 1 code, 'success' message)a)outs);
+	
+
+end;
+elseif Lower(VTran)='activatedatasource' then
+begin
+-- {"SOURCEID":"49","IsActive":1,"LoginId":213,"VID":32,"TransType":"ActivateDataSource"}
+--select * from kbsourcetypemst
+	update kbsourcetypemst set isactive=cast(Visactive as bit), modifieddate=VActiondate where sourcetype_id=vSourceid;
+	update kbsourceurlmst set isactive=cast(Visactive as bit), modifieddate=VActiondate where sourceid=vSourceid;
+
+--select * from kbsourcetypemst
+	--return(select 1 as id);
+	return (
+	Select Row_to_json(outs)
+	from
+	(
+		Select Row_to_json(spk) "SPOKE"
+		from
+		(
+			SELECT 
+            VID as "VID",
+			 vSourceid "SPOKEID"
+			,SOURCETYPE_NAME as "SPOKENAME"
+			,Description as  "SPOKEDESCRIPTION"
+			,HASNLEGSNMACHINE	"HASNLEGSNMACHINE"
+			,CMT.INPUT	"INPUT"
+			,ISMETRICADDED		"ISMETRICADDED"
+			,CMT.CreatedBy "CREATEDBY"
+			,CMT.isactive 
+			,sourceguid "sourceguid"
+			,case when MASTERSPOKEID=0 then vSourceid else MASTERSPOKEID end "MASTERSPOKEID"
+			, CMT.Input "MQTTTopic", CMT.CollectionName "MQTTUsername", CMT.spokeplaceholders "MQTTPassword",dataseperator "MQTTURL"
+			,(	
+				select array_to_json(array_agg(row_to_json(srcs))) "LINKSOURCES"
+				from 
+					(
+						select sourcetype_id "ID", sourcetype_name "Name" , alias "Alias"
+						from kbsourcetypemst links 
+						where links.masterspokeid= case when CMT.masterspokeid>0 then CMT.masterspokeid else vSourceid end
+					)srcs
+			) 
+			,
+			(
+				Select Row_to_json(metris) "METRICS"
+				from
+				(
+					Select Array_to_json(Array_agg(Row_to_json(metri))) "METRIC"
+					from
+					( 
+					select    METRIC_ID METRICID 
+					,KMM.METRICNAME as "NAME"
+					,DataTypes.DataTypeAlias as "DATATYPE" 
+					,MetricsData.ISRequired		as "ISREQUIRED"
+					,Coalesce(KMM.agg_Formula,'') as "FormulaId"
+					,Coalesce(KMM.IsType,'') as "IsType"
+					,Coalesce(kmm.METRICALIAS,'') AS "METRICALIAS"
+					,Coalesce(kmm.ConstantValue,'') AS "CONSTANTVALUE"
+					,Coalesce(KMM.IscustomerIdentifier,'') AS "CUSTOMERIDENTIFIER"
+					,Coalesce(KMM.IsPRIMARYKEY,'') AS "PRIMARYKEY"
+					,Coalesce(KMM.RuleType,'') AS "RuleType"
+					,Coalesce(KMM.RuleDelimeter,'') AS "RuleDelimeter"
+					,Coalesce(KSC.EntitydefID,0) "EntitydefID"
+					,Coalesce(KSC.EntityAttribute,'') "EntityAttribute"
+					, Xpath "Path"
+					,
+					(
+						Select Row_to_json(mrules) "FuzzyLogic"
+						from
+						(
+							Select Array_to_json(Array_agg(Row_to_json(mrul))) "Rule"
+							from
+							(
+		 
+							Select MR.Metric_ID "Metric_ID", MR.RuleID "RuleID", MR.Priority "Priority" ,MR.TransformationDataType "TransformActualDataType"
+							,TransformationDataTypeAlias "TransformDataType"
+							,
+							(
+								Select Row_to_json(rul) "Values"
+								from
+								(
+									Select Array_to_json(Array_agg(Row_to_json(met))) "Input"
+									from
+									(
+										Select VALUE  "Value"
+										From KBMetricRules MRules1 
+										Where MR.Metric_id=MRules1.Metric_ID and MR.SourceID=MRules1.SourceID
+										and MR.RULEID=MRules1.RULEID and MRules1.ISACTIVE='1'
+										--For XML RAW('Input'),Root('Values')
+									) as met
+								) rul	
+							)
+							from kbmetricRules MR 
+							where KMM.METRIC_ID=MR.METRIC_ID and KMM.SOURCE_ID=MR.SOURCEID and MR.Template_Id=1 and MR.ISACTIVE='1'
+							group By MR.Metric_ID, MR.RuleID, MR.Priority ,MR.sourceid, MR.TransformationDataType,TransformationDataTypeAlias
+							--For XML RAW('Rule'),Root('FuzzyLogic')
+							)as mrul
+						) mrules
+					)
+
+					,
+					(
+						Select Measures.FORMULATITLE  
+						from KBMeasureMst Measures 
+						where Measures.IsActive=1 and KMM.METRICNAME=Measures.MEASURE_NAME 
+						and KMM.TEMPLATE_ID=Measures.TEMPLATE_ID and Measures.TEMPLATE_ID=1  and KMM.SOURCE_ID=Measures.SOURCE_ID
+						--For XML Path('')
+					) "NewFormula"
+					,
+					(
+						Select 
+						(
+							Select Row_to_json(Vrules) "ValidationRules"
+							from
+							(
+								Select Array_to_json(Array_agg(Row_to_json(vrul))) "Rules"
+								from
+								(
+									Select BB.RuleID RuleId,BB.ExpectedDatatype ExpectedDataType,BB.RuleType Ruletype
+									,case when ExpectedDatatype = 'String' and RuleType='Basic' then '' Else BB.RegExpression End Regexpression
+									,BB.ServiceExpressions Serviceexpression,BB.Conditions
+									from KBMetricValidationRules BB 
+									where AA.MetricName=BB.MetricName and AA.SourceId=BB.SourceId 
+									--For XML PATH('Rules'),Root('ValidationRules')
+								)as vrul
+							)Vrules	
+						)
+						from KBMetricValidationRules AA 
+						where KMM.MetricName=AA.MetricName and KMM.SOURCE_ID=AA.SourceId
+						Group By AA.MetricName, AA.SourceId
+						--For xml PATH('')
+					)
+					from KBMetricMst KMM  
+					Inner join KBSpokeConfigurations  KSC on KMM.METRICNAME=KSC.METRICNAME and KMM.SOURCE_ID=KSC.SOURCETYPEID
+					join KBSpokewiseMetricsInformation MetricsData on KMM.SOURCE_ID=MetricsData.SourceTypeId and KMM.METRIC_ID=MetricsData.MetricID
+					Join KBMasterDataTypes DataTypes on KMM.METRICDATATYPE=DataTypes.DataTypeName and MetricsData.MetricDataType=DataTypes.DataTypeAlias
+					where SOURCE_ID=vSourceid and TEMPLATE_ID=1 and upper(KMM.METRICNAME)!='RECORDDATEUTC'--and datatypes.ISACTIVE=1 
+					order by KSC.METRICORDER
+					--FOR XML RAW('METRIC'),ROOT('METRICS')
+					) as metri
+				) metris
+			)
+
+			,
+			(
+				Select Row_to_json(src) "MetricExtraction"
+				from
+				(	
+					select SOURCEDBID AS "Source"
+					,DATABASETYPE as "SelectedDatabaseType"
+					,DBSERVERNAME as "DBServerName"
+					,DBAUTHTYPE as "DBAuthType"
+					,USERNAME "DBUsername"
+					,"password" "DBPassword"
+					,DBQUERY "DBQuery"
+					,DATABASENAME "Database"
+					,TABLEQUERY "TableQuery"
+					,MAINSEPEREATOR "MainSeperator"
+					,SUBSEPERATOR "SubSeperator" 
+					from KBSpokeMetricExtractionMst 
+					where SPOKEID=vSourceid limit 1
+					--for xml path('MetricExtraction')
+				)as src
+			)
+		 
+
+			,(
+
+				Select Row_to_json(srcs) "SourceURL"
+				from
+				(
+					select DataSourceID as "Source"
+					,URL	"URL"
+					,USERNAME	"USERNAME"
+					,"password"	"PASSWORD"
+					,DATA_RETRIEVAL_TIME as "TIMEPERIOD"
+					,DATA_RETRIEVAL_UOM as "TIMEPERIODUOM"
+					, case when DataSourceID=1 Or DataSourceID=6 Or DataSourceID=7  then ServerName END as "DBServerName"
+					,case when DataSourceID=3  then ServerName END as "LDAPServerName"
+					,PortNumber as "LDAPPortNumber"
+					,Organisation as "LDAPOrg"
+					,"group" as "LDAPGroup"
+					,  case when DataSourceID=1  Or DataSourceID=6 Or DataSourceID=7 then DBAuthType END as "DBAuthType"
+					,case when DataSourceID=3  then ServerName END as "LDAPAuthType"
+					,DatabaseName as "Database"
+					,DBQuery	"DBQuery"
+					, TableQuery	"TableQuery"
+					,Coalesce(A.DBIDColumn,'') "DBIDColumn"
+					,Coalesce(A.DBIDColumnDataType,'') "DBIDColumnDataType"
+					,Coalesce(DATABASETYPE ,0)as "SelectedDatabaseType"
+					,WSDLURL	"WSDLURL"
+					,WSDLClassName	"WSDLClassName"
+					,WSDLAction	"WSDLAction"
+					,IsRestBased	"IsRestBased"
+					,(Select InitialPullType from KBSOURCEURLMST AA where A.SOURCEID=AA.SOURCEID and lower(objecttype)='source' and lower(DATA_FETCH_TYPE)='historicaldata' limit 1 ) "InitialPullType"
+					,InitialPullFromDate	"InitialPullFromDate"
+					,InitialPullToDate	"InitialPullToDate"
+					,IntialPullTimePeriod	"IntialPullTimePeriod"
+					,InitialPullTimePeriodUOM	"InitialPullTimePeriodUOM"
+					,ParameterAppender	"ParameterAppender"
+					,HasPaging	"HasPaging"
+					,PagingColumn	"PagingColumn"
+					,NoofRecords	"NoofRecords"
+					,concatenation_operator "ConcatenationOperator",concatenation_rule "ConcatenationRule"
+					,
+					(
+
+						select row_to_json(imports)	"ImportSettingsDetails"
+						from
+						(
+							select DATABASETYPE as "SelectedDatabaseType"
+							,ServerName as "DBServerName"
+							,DBAuthType	"DBAuthType"
+							,case when DataSourceID =1 Or DataSourceID=4 Or DataSourceID=6 Or DataSourceID=7 then  USERNAME else '' end as "DBUsername"
+							,case when DataSourceID=2 then USERNAME else '' end as "WSUSERNAME"
+							,case when DataSourceID=3 then USERNAME else '' end as "LDAPUSERNAME"
+							,case when DataSourceID=1  Or DataSourceID=4 Or DataSourceID=6 Or DataSourceID=7 then "password" else '' end as "DBPassword"
+							,case when DataSourceID=2 then "password"  else '' end as "WSPASSWORD"
+							,case when DataSourceID=3 then "password"  else '' end as "LDAPPASSWORD"
+							,DBQuery as "DBQuery"
+							,DatabaseName as "Database"
+							, TableQuery || case when Coalesce(Query_Maxrecord,'')!='' then ';' Else '' End || Coalesce(Query_Maxrecord,'') as "TableQuery"
+							, Parameter	"Parameter"
+							,Coalesce(DataSourceID,0) "Source"
+							,HasPaging	"HasPaging"
+							,PagingColumn	"PagingColumn"
+							,NoofRecords	"NoofRecords"
+							,Coalesce(Url.DBIDColumn,'') "DBIDColumn"
+							,Coalesce(Url.DBIDColumnDataType,'') "DBIDColumnDataType"
+							,IsRestBased	"IsRestBased"
+							,URL	"URL"
+							,PortNumber	"PortNumber"
+							,Organisation	"Organisation"
+							,"group"	"Group"
+							,
+							(
+								Select Row_to_json(pdets) "PARAMETERDETAILS"
+								from
+								(
+									/*Getting Parameters Values*/
+									select 
+									(
+										select Row_to_json(params) "PARAMETERS"
+										from
+										(
+											Select Array_to_json(Array_agg(Row_to_json(pars))) "PARAMETER"
+											from
+											(
+												select PARAM_NAME as "NAME"
+												,PARAM_VALUE as "VALUE"
+												,PARAM_TYPE as "TYPE"
+												,FORMULA	"FORMULA"
+												,Coalesce(FilterOption,'') "FilterOption" 
+												,Operator	"Operator"
+												,EntityDefId	"EntityDefId"
+												,concatenator "Concater"
+												,parametertype "AddParameters"
+												,groupname "GroupName"
+												FROM Kbsourceurldetails B 
+												WHERE B.SOURCEID=Url.SOURCEID and Url.ID=B.URLID
+												--FOR XML RAW('PARAMETER'),ROOT('PARAMETERS')
+											) AS pars
+										) params	
+									)
+												 
+									--for xml path(''),ROOT('PARAMETERDETAILS')
+								)as pdets
+							)
+							from KbsourceurlMst Url 
+							where Url.SOURCEID=A.SOURCEID and lower(Url.DATA_FETCH_TYPE)='historicaldata' and lower(objecttype)='source'
+							--for xml path(''),root('ImportSettingsDetails')
+								
+						) as imports
+					)
+			     
+					,
+					(
+							Select Row_to_json(pdets) "PARAMETERDETAILS"
+							from
+							(
+											/*Getting Parameters Values*/
+								select 
+									(
+										select Row_to_json(params) "PARAMETERS"
+										from
+										(
+											Select Array_to_json(Array_agg(Row_to_json(pars))) "PARAMETER"
+											from
+											(
+												select PARAM_NAME as "NAME"
+												,PARAM_VALUE as "VALUE"
+												,PARAM_TYPE as "TYPE"
+												,FORMULA	"FORMULA"
+												,Coalesce(FilterOption,'') "FilterOption"
+												,Operator	"Operator"
+												,EntityDefId	"EntityDefId"
+												,concatenator "Concater"
+												,parametertype "AddParameters"
+												,groupname "GroupName"
+												FROM Kbsourceurldetails B 
+												WHERE B.SOURCEID=A.SOURCEID and A.ID=B.URLID
+												--FOR XML RAW('PARAMETER'),ROOT('PARAMETERS')
+											) AS pars
+										) params
+									)
+									/*Getting Dynamic Parameters List from Master Table*/
+									,
+									(
+										select Row_to_json(params) "DynamicParameters"
+										from
+										(
+											Select Array_to_json(Array_agg(Row_to_json(pars))) "DynamicParameter"
+											from
+											(
+												SELECT param_name "NAME",filteroption "FilterOption"
+												,param_value "VALUE", param_type "TYPE" 
+												from 
+												KBDynamicParameterListMst PLM
+												where PLM.sourceid=A.SOURCEID   
+												--for xml raw('DynamicParameter'),ROOT('DynamicParameters')
+											) as pars
+										
+										) as params
+									)	
+												 
+								--for xml path(''),ROOT('PARAMETERDETAILS')
+							)as pdets
+					)
+					FROM KbsourceurlMst A 
+					WHERE SOURCEID=vSourceid and lower(DATA_FETCH_TYPE)='currentdata' and lower(objecttype)='source'
+					--FOR XML PATH(''),ROOT('SourceURL')
+				) AS srcs
+			)
+			,
+			(
+				select Row_to_json(IDES) "IDENTIFIERS"
+				from
+				(
+					Select Array_to_json(Array_agg(Row_to_json(IDE))) "IDENTIFIER"
+					from
+					(
+						Select SourceTypeID "SPOKEID"
+						,IDENTIFIERNAMES	"IDENTIFIERNAMES"
+						,IDENTIFIERMETRICS	"IDENTIFIERMETRICS"
+						,IDENTIFIERVALUES	"IDENTIFIERVALUES"  
+						from KBSpokeIndetifierMst
+						where SourceTypeID=vSourceid 
+						--for XML RAW('IDENTIFIER'),ROOT('IDENTIFIERS')
+					) as IDE
+				)IDES	
+			)
+
+			,PrimaryKeyColumns "PRIMARYKEY"
+			,ENTITYIDENTIFIER "CUSTOMERIDENTIFIER"
+			,ENTITYIDENTIFIER_service "METRICIDENTIFIER"
+			,TIMEZONEID	"TIMEZONEID" 
+			,CMT.DataFormat	"DataFormat"	
+			,Coalesce(CMT.CollectionName,'') as "CollectionName"
+			,Coalesce(CMT.MainSeparator,'') as "MainSeparator"
+			,Coalesce(CMT.SubSeparator,'') as "SubSeparator"
+			,Coalesce(CMT.SourceType,0) as "SourceType"
+			,CMT.SpokeType as "SPOKETYPE"
+           --,Coalesce(CMT.DataSourceID,0) as "Source"
+			,CASE WHEN CMT.SOURCETYPE=0 THEN Coalesce(CMT.SOURCEURL,'') END as "SourceURI"
+			,
+			(
+				Select Row_to_json(metid) "MetricIdentifier"
+				from
+				(
+					Select
+						(
+							select Row_to_json(ent) "ENTITYIDENTIFIER"
+							from
+							(
+								Select Array_to_json(Array_agg(Row_to_json(rw))) "Row"
+								from
+								(
+									Select SOURCETYPE_ID	"SOURCETYPE_ID",
+									 regexp_split_to_table(CUSTOMERIDENTIFIER,'#CWT01#')  "Identifier"
+									from KBSourceTypeMst Smst1
+									--Cross Apply FNSPLITWITHIDENTITY(CUSTOMERIDENTIFIER,'#CWT01#') as Splits    
+									where Smst1.SOURCETYPE_ID=CMT.SOURCETYPE_ID
+								--FOR XML RAW ('Row'),ROOT('ENTITYIDENTIFIER')
+								)as rw
+							) ent	
+						)
+					
+					,
+					(
+						select Row_to_json(ent) "ENTITYIDENTIFIER"
+						from
+						(
+							Select Array_to_json(Array_agg(Row_to_json(rw))) "Row"
+							from
+							(
+								Select SOURCETYPE_ID	"SOURCETYPE_ID", regexp_split_to_table(CallEndIdentitifer,'#CWT01#')  "Identifier"
+								from KBSourceTypeMst SMSt
+								--Cross Apply FNSPLITWITHIDENTITY(CallEndIdentitifer,'#CWT01#') as Splits  
+								where smst.SOURCETYPE_ID=CMT.SOURCETYPE_ID
+								--FOR XML RAW ('Row'),ROOT('ENDIDENTIFIER')
+							)as rw
+						)ent	
+					)
+					--FOR XML PATH (''),ROOT('MetricIdentifier')
+				)as metid	
+			)
+			FROM KBsourcetypemst CMT 
+			where CMT.SOURCETYPE_ID=vSourceid
+			--FOR XML PATH('SPOKE')
+		) spk
+	) outs		
+	);
+
+end;
+elseif Lower(VTran)='getlookuprules' Then
+Begin
+
+	Insert into UrlTemp(UrlId,SourceId,DataFetchType)
+	Select 
+	ID,A.SOURCEID ,DATA_FETCH_TYPE
+	from kbsourceurlmst A 
+	Join KBMetricValidationRules B on A.SOURCEID=B.SourceId
+	Where Lower(ObjectType)='source' and DATA_FETCH_TYPE='HistoricalData' and B.SOURCEID=VSourceid and B.RuleType like '%Lookup%'
+	limit 1;
+			
+ 
+VResult:= (
+
+	Select Row_to_json(output)
+	From
+	(
+	Select Array_to_json(Array_agg(row_to_json(rules))) "URL"
+	From
+	(
+		SELECT  
+		DATASOURCENAME "DATASOURCENAME"
+		, '&' "CONCATS"
+		,urls.ID AS "URLID"
+		,MainSeparator "MainSeparator"
+		,SPOKETYPE "SPOKETYPE"
+		,SubSeparator "SubSeparator"
+		,Sources.SOURCETYPE_ID AS "SOURCEID"
+		,Sources.SOURCETYPE_NAME AS "SOURCENAME"
+		,TIMEOFFSETS.TIMEZONENAME AS "TIMEZONENAME"
+		,TIMEOFFSETS.UTCDurationinMinutes as "UTCOFFSET"
+		,TIMEOFFSETS.TIMEZONEID AS "TIMEZONEID"
+		,DATA_FETCH_TYPE "DATA_FETCH_TYPE"
+		,dsdetails.DSADetailName "DATABASETYPE"
+		,'' "PORTNUMBER"
+,(Case 
+when (lower(DATA_RETRIEVAL_UOM) ='mins' or lower(DATA_RETRIEVAL_UOM) ='min' or lower(DATA_RETRIEVAL_UOM)='minutes') and (uploadtype is  null or uploadtype=0)
+			Then  (cast( DATA_RETRIEVAL_TIME as int) * 60 )
+when (lower(DATA_RETRIEVAL_UOM)='hours' or lower(DATA_RETRIEVAL_UOM)='hour') and  (uploadtype is  null or uploadtype=0) 
+		Then (( cast(  DATA_RETRIEVAL_TIME as int) * 60)*60 )
+
+when (lower(DATA_RETRIEVAL_UOM)='days'  or lower(DATA_RETRIEVAL_UOM)='day') and (uploadtype is  null or uploadtype=0)
+		Then (( cast(  DATA_RETRIEVAL_TIME as int) * 24) * 60)*60 
+		End ) * 1000  as  "TIMEINTERVAL"
+		,'Milliseconds' "UOM"
+		,ksdf.FORMATTYPE as "TYPE"
+
+		,(
+			Select Array_to_json(Array_Agg(row_tojson(a))) as "CUSTOMER"
+			from
+			(
+				select DISTINCT kcp.ENTITY_ID as "ID" , kcp.Location_id as "LOCATIONID" ,'' "PHONENO"
+				--, (Select DBfnCustomerTemplateSpokeDetailsPhoneNO(kcp.ENTITY_ID,kcp.Location_id,';',SM.SourceName,sm.SOURCETYPE_ID))AS "PHONENO"
+				,'LOCATIONID,PHONENO' as "Attribute_list"
+ 				from 
+				KBSOURCEMST SM
+				Join KBEntityPhone kcp ON kcp.ENTITY_ID = sm.entity_id and kcp.Location_ID = Sm.Location_id 
+				and kcp.SOURCETYPEID = SM.SOURCETYPE_ID
+				where   Sources.SOURCETYPE_ID=Sm.SOURCETYPE_ID
+				--for XML raw('CUSTOMER')
+			) a
+
+		  )
+
+		,
+		(
+
+			select Row_to_json(params) as "PARAMETERS"
+			From
+			(
+			Select Array_to_json(Array_Agg(row_tojson(param))) as "PARAMETER"
+			from
+			(	
+			Select distinct PARAM_NAME "Key",PARAM_VALUE "Value" ,PARAM_TYPE "Type" ,FORMULA "Formula"
+			,'Key,Type,Formula,Value'	"Attribute_list"
+			From KBSOURCEURLDETAILS UrlDetails 
+			where  urls.id=urldetails.URLID 
+			--For XML RAW('PARAMETER'),ROOT('PARAMETERS')
+			)param
+			) params
+		)
+		,USERNAME "USERNAME"
+		,PASSWORD "PASSWORD"
+		,DBAuthType "DBAUTHTYPE" 
+		,SERVERNAME  "SERVERNAME" 
+		,DATABASENAME "DATABASENAME"
+		,DBQUERY  "DBQUERY"
+		,TABLEQUERY "METRICQUERY"	
+		,CC.RuleType "RuleType"
+		,CC.RegExpression "RegExpression"
+		,Case when RuleType='Lookup' or RuleType='NoLookup'  
+		then 'Select '|| Conditions  ||' from '|| RegExpression 	
+		When RuleType='referenceLookup' then 'Select * from '|| RegExpression End as "ServiceExpressions"
+		,HasPaging "HASPAGING"
+		,PagingColumn "PAGINGCOLUMN"
+		,NoofRecords "NOOFRECORDS"
+		,
+		(
+			Select row_to_json(mets)  "METRICDETAILS"
+			from
+			(
+			Select Array_to_json(Array_agg(row_to_json(a))) as "METRIC"
+			from
+			(
+			Select Metrics.METRIC_ID "METRIC_ID",Metrics.METRICNAME "METRICNAME" ,'METRIC_ID,METRICNAME' as "Attribute_list"
+			from 
+			kbmetricmst Metrics 
+			Join kbspokeconfigurations Config on Metrics.source_id=Config.SourceTypeid and Metrics.MetricName=Config.MetricName
+			where Sources.SourceType_ID=Metrics.SOURCE_ID and Metrics.TEMPLATE_ID=1
+			Order by MetricOrder
+			--for xml RAW('METRIC'),Root('METRICDETAILS')
+			)a
+			) mets
+		)
+
+		,
+		(Select licensekeyid from kblicensedetails Maps where Customerid= (Select CustomerId from kbusercustomermapping where userid= Sources.CreatedBy limit 1)
+		) "VID"
+		,'' "DBIDColumn"
+		,'' "DBIDColumnDataType"
+		,case when coalesce(Sources.masterspokeid,0) > 0 then Sources.masterspokeid when coalesce(Sources.masterspokeid,0)=0 then sources.sourcetype_id end "MASTERSPOKEID"
+		,'DATASOURCENAME,CONCATS,URLID,MainSeparator,SPOKETYPE,SubSeparator,SOURCEID,SOURCENAME,TIMEZONENAME,UTCOFFSET,TIMEZONEID,DATA_FETCH_TYPE'
+		 ||',DATABASETYPE,PORTNUMBER,TIMEINTERVAL,UOM,TYPE,USERNAME,PASSWORD,DBAUTHTYPE,SERVERNAME,DATABASENAME,DBQUERY,METRICQUERY,RuleType,RegExpression'
+		 ||',ServiceExpressions,HASPAGING,PAGINGCOLUMN,NOOFRECORDS,VID,DBIDColumn,DBIDColumnDataType,MASTERSPOKEID' as "Attribute_list"
+		FROM  
+		kbsourcetypemst Sources
+		Join kbsourceurlmst urls on Sources.SOURCETYPE_ID=urls.SOURCEID and urls.IsActive='1'
+		JOIN KBTIMEZONEOFFSETS AS TIMEOFFSETS ON Sources.TIMEZONEID = TIMEOFFSETS.TIMEZONEID
+		Left Outer Join KbSpokeDataFormats DataFormats on Sources.DataFormat=Dataformats.ID
+		join  KbSpokeDataFormats ksdf on Sources.DataFormat=ksdf.ID
+		Join KBDataSourceMst DataSources on Urls.DataSourceID=DataSources.DataSourceID
+		join KBDataSourceAttributes dsatt on dsatt.DataSourceID=DataSources.DataSourceID   --newlyadded
+		join KBDataSourceAttributeDetails dsdetails on dsatt.DSAttributeID=dsdetails.DSAttributeID and   dsdetails.DSAttributeDetailID=urls.DATABASETYPE  --newlyadded
+		join KBMetricValidationRules CC on Sources.SOURCETYPE_ID=CC.SourceId and CC.SourceId=VSourceid  and RuleType like '%Lookup%'
+		Join UrlTemp AA on urls.ID=AA.UrlId
+		where Sources.SOURCETYPE=1 and Urls.DataSourceID=1  and Lower(ObjectType)='source' and Urls.DATA_FETCH_TYPE='HistoricalData' and Sources.IsActive='1'
+		Group BY Sources.SOURCETYPE_ID,DataSourceName,TIMEOFFSETS.TIMEZONENAME ,TIMEOFFSETS.UTCDurationinMinutes 
+		,TIMEOFFSETS.TIMEZONEID,Sources.TIMEZONEID,DATA_RETRIEVAL_TIME,DATA_RETRIEVAL_UOM
+		,ksdf.FORMATTYPE,urls.SOURCEID,urls.ID,USERNAME,PASSWORD,SERVERNAME,DATABASENAME,DBQUERY,TABLEQUERY	,SPOKETYPE
+		,MainSeparator,SubSeparator,DATA_FETCH_TYPE,HasPaging ,PagingColumn ,NoofRecords  ,dsdetails.DSADetailName,Sources.CreatedBy,urls.DBIDColumn,DBIDColumnDataType
+		,DBAuthType,Sources.SOURCETYPE_NAME ,CC.RuleType,CC.RegExpression, CC.ServiceExpressions,Conditions,MASTERSPOKEID
+		--FOR XML RAW('URL')
+		)rules
+	) output
+
+);
+
+VResult:=(
+	Select row_to_json(aa)
+	from
+	(
+	Select wor_to_json(a) as "OUTPUT"
+	from
+	(
+		Select VResult
+
+	)a
+	)aa
+);
+
+Return(VResult);
+
+End;
+ElseIf Lower(VTran)='getactiveprofile' Then
+Begin  
+
+VResult:=(
+		Select Row_to_json(output)
+		From
+		(
+			Select Row_to_json(profdet) as "PROFILEDETAILS"
+			From
+			(
+				Select row_to_json(prof) as "PROFILE"
+				From
+				(
+					Select ProfileID "ProfileID"
+					,(
+						Select LicenseKeyId 
+						from KBUserCustomerMapping Users 
+						Join KBLicenseDetails Licenses on Users.CustomerID=Licenses.CustomerId 
+						where UserID!=1 and users.UserID=sources.CreatedBy
+						Limit 1
+					) "VID",
+
+					(
+						Select Array_to_json(Array_agg(row_to_json(eng))) as "ENGINE"
+						from
+						(
+							Select ID "ID",'ID' "Attribute_list"
+							From
+							(
+								Select VInstanceID ID
+								Union 
+								Select EngineInstanceID "ID" 
+								from PullEngineConfigMst Engineconfig
+								where IsActive='1'
+							)A
+							--for XML RAW ('ENGINE')
+						) as eng
+					)
+					from 
+					(
+						Select ProfileID,DataSourceID 
+						From KBDataProfileDetails 
+						where coalesce(IsProfileComplete,0)=0
+						limit 1
+					) AA
+					Join kbsourcetypemst sources on AA.DataSourceID=sources.SOURCETYPE_ID
+				)prof	
+			)profdet
+		)output		
+--for xml Path('PROFILE'),ROOT('PROFILEDETAILS')
+);
+
+Return(VResult);
+End;
+Elseif Lower(VTran)='getdynamicparamval' Then
+begin  
+
+insert into DynamicParameters(iKey,iValue,groupname,operator,ptype,format)
+SELECT distinct Param_Name ,Param_Value ,groupname,operator,PARAM_TYPE,format
+FROM KBSOURCEURLDETAILS 
+where 
+PARAM_TYPE in ('Dynamic' ,'Formula')
+and SOURCEID=VSourceid and urlid=vURLID;
+ 
+VResult:= (
+		Select Array_to_json(Array_agg(row_to_json(params))) as "ParameterValue"
+		From
+		(
+		select id "id",iKey "Key",iValue "Value",operator as "Operator",ptype "ptype",format as "format"
+
+		,groupname	"group"	
+		,( select lastdata from kbenginewisedatafetchinginformation a where id=(select max(b.id) 
+		from kbenginewisedatafetchinginformation b where a.callstatus=b.callstatus and cast(callstatus as integer)=VSourceid )) lastdata
+         ,( 
+		select max(coalesce(sliceendtime,createddate)) from kbenginewisedatafetchinginformation where callstatus=VSourceid 
+          and engineinstanceid in (select distinct engineinstanceid from KBEnginePagingWorkTable where lower(enginetype)='pull' )
+          ) createddate
+		,'id,Key,Value,group,Operator,ptype,lastdata,createddate,format' "Attribute_list"	
+		 from DynamicParameters dyn
+		 order by iKey 
+		 )params
+		 --FOR XML RAW('ParameterValue')
+ );
+
+Vresult:=(
+		Select row_to_json(output)
+		from
+		(
+			Select Row_to_json(a) as "OUTPUT"
+			from
+			(
+			Select VResult  as "ParameterValue"
+			)a
+		)output	
+	);
+
+Return(VResult);
+
+end ;
+Elseif Lower(VTran)='getlastdata' Then
+begin  
+
+ 
+VResult:= (
+		Select Array_to_json(Array_agg(row_to_json(params))) 
+		as "ParameterValue"
+		From
+		(
+ select lastdata,coalesce(sliceendtime,createddate) as "createddate",recordcount from kbenginewisedatafetchinginformation a where id=
+(
+select max(b.id) from kbenginewisedatafetchinginformation b where a.callstatus=b.callstatus 
+and callstatus =vSourceid  and engineinstanceid in 
+(select distinct engineinstanceid from KBEnginePagingWorkTable where lower(enginetype)='pull'))		 
+		 )params
+		 
+ );
+
+Vresult:=(
+		Select row_to_json(output)
+		from
+		(
+			Select Row_to_json(a) as "OUTPUT"
+			from
+			(
+			Select VResult  as "ParameterValue"
+			)a
+		)output	
+	);
+
+Return(VResult);
+
+end ;
+elseIf Lower(VTran)='delete' then
+Begin 
+
+	VConfigid:=(Select configId from  PullEngineConfigMst  where EngineInstanceID=VInstanceID and IsActive='1');
+
+	Delete from PullEngineConfigDetails where ConfigID=VConfigid;
+
+	Update PullEngineConfigMst Set IsActive='0'
+	Where  EngineInstanceID=VInstanceID and IsActive='1';
+
+	-- Update KBDataProfileMst set ProfileEndDatetime=VActiondate,IsActive='0' 
+-- 	where ProfileID=VProfileid;
+
+Vresult:=(
+		
+			Select Row_to_json(a) as "OUTPUT"
+			from
+			(
+			Select VResult  as "1"
+			)a
+		
+	);
+
+Return(VResult);
+
+	
+End;
+ElseIf Lower(VTran)='getactiveinstances' Then
+Begin 
+
+insert into tempsInstance(EngineInstanceID)
+select distinct engineinstanceid from KBEnginePagingWorkTable;
+
+VResult:=(
+   Select Row_to_json(output)
+   From
+   (
+    Select Row_to_json(engs) as "ENGINES"
+    From 
+    ( 
+     Select Array_to_json(array_agg(row_to_json(eng))) as "ENGINE"
+     From
+     (
+      Select n.engineinstanceid "EngineInstanceID",N.createddate "EngineStarttime" 
+      ,enginemode "EngineMode",enginetype "EngineType",enginepath "EnginePath"
+    ,(select count(engineinstanceid) as "ProcessCount" from kbenginewisedatafetchinginformation
+      where engineinstanceid=n.engineinstanceid )
+	,(select count(sourceid) as "ErrorCount" from nmsspperformancelogger
+      where case when N.engineinstanceid='79069d37-953b-4d00-a344-bdd896d6e6b2' then 'E25907C2-6C64-4F39-9CDC-BEF4D4ADF52C' else 
+      engineinstanceid=n.engineinstanceid end),			         
+      (case when enginemode='start' then N.createddate else N.modifieddate end) as "EngineTime"
+        from    KBEnginePagingWorkTable N LEFT JOIN tempsInstance T ON N.EngineInstanceID=T.EngineInstanceID
+         	--inner join kbenginewisedatafetchinginformation kbe on T.EngineInstanceID=kbe.EngineInstanceID
+         where isactive=1 and enginepath is not null and enginepath!='0'
+     --and id=(select id from KBEnginePagingWorkTable order by id desc limit 1 )Limit 1
+                   ) eng
+				) engs
+			)output
+		--for XMl RAW('ENGINE'),Root('ENGINES')
+		);
+
+		--select * from KBEnginePagingWorkTable
+
+Return(VResult);
+End;
+ElseIf Lower(VTran)='getdetails' then
+Begin 
+
+	VConfigid:=(Select configId from  PullEngineConfigMst  where EngineInstanceID=VInstanceID and IsActive='1');
+
+	Insert into UrlTemp(UrlId,SourceId,Configid)
+	Select 
+	ID,SOURCEID ,B.EngineInstanceID
+	from 
+	PullEngineConfigDetails B
+	Join kbsourceurlmst A On A.ID=B.URLID
+	Where Lower(ObjectType)='source' and B.EngineInstanceID=VInstanceID;
+
+	--Goto Output;
+
+End;
+ElseIf Lower(VTran)='getallinstancesdetails' then
+Begin 
+
+	Insert into UrlTemp(Configid,UrlId,SourceId)
+	Select 
+	B.configid,ID,SOURCEID 
+	from 
+	PullEngineConfigDetails B
+	Join kbsourceurlmst A On A.ID=B.URLID and EngineInstanceID Is not Null
+	Where Lower(ObjectType)='source' ;
+
+	--Goto Output;
+End;
+ElseIf Lower(VTran)='updateurlstatus' then
+Begin 
+	
+	Update PullEngineConfigDetails Set IsActive=VSTATUS
+	where URLID=VURLID;
+
+	/* updating the profiling status */
+
+	-- Update KBDataProfileDetails  
+-- 		set IsProfileComplete=VSTATUS,ModifiedDate=VActiondate,TotalRecordsProcessed=VTotalrecordsproccessed
+-- 	where profileid=VProfileid and   DataSourceID=(Select SOURCEID from KBSOURCEURLMST where ID=VURLID );
+
+	-- If (Select COUNT(1) from KBDataProfileDetails where ProfileID=VProfileid and IsActive=1)=0
+-- 	Begin
+-- 
+-- 	Exec [usp_GeneratedataforAggregateDrilldown] VProfileid,3
+-- 
+-- 	Update KBDataProfileMst set ProfileEndDatetime=VActiondate,IsActive=0 where ProfileID=VProfileid
+-- 
+-- 	End
+	
+	Return(1);
+
+End;
+ElseIf Lower(VTran)='updatepaginationdetails' Then
+Begin 
+ 
+
+Insert into EnginePaginDetails (EngineInstanceID,CurrentRangeStart, CurrentRangeEnd)
+select 
+	VEngineInstanceID EngineInstanceID
+	,cast(ivalue->'INPUT'->'PaginationDetails'->> 'ProcessType' as int)
+	,cast(ivalue->'INPUT'->'ToRecord'->> 'ProcessType' as int)
+	from temps limit 1;
+
+If Exists(Select 1 from KBEnginePagingWorkTable where EngineInstanceID=VEngineInstanceID) then
+Begin
+
+		If VRangeStart=0 Then
+		Begin
+			Delete from KBEnginePagingWorkTable where EngineInstanceID=VEngineInstanceID;
+		End;
+		Else
+		Begin
+			Update Engines Set Engines.CurrentRangeStart=Input.CurrentRangeStart, Engines.CurrentRangeEnd=Input.CurrentRangeEnd
+			From
+			KBEnginePagingWorkTable Engines
+			Join EnginePaginDetails Input on Engines.EngineInstanceID=Input.EngineInstanceID;
+		End;
+		End if;
+
+End;
+Else
+Begin
+
+	Insert into KBEnginePagingWorkTable (EngineInstanceID,CurrentRangeStart, CurrentRangeEnd,CreatedBy)
+	select A.EngineInstanceID,A.CurrentRangeStart,A.CurrentRangeEnd,VCreated_by
+	from EnginePaginDetails A;
+End;
+End if;
+
+Return(1);
+
+End ;
+ElseIf Lower(VTran)='getpaginationdetails' then
+Begin 
+		
+	VResult:=(	
+			Select Row_to_json(outp) 
+			from
+			(
+				Select Row_to_json(inst) "OUTPUT"
+				from
+				(	
+				Select
+				VEngineInstanceID "ServiceInstance"
+				,	(
+						Select row_to_json(pag) as "PaginationDetails"
+						from
+						(
+							Select CurrentRangeStart "FromRecord",CurrentRangeEnd  "ToRecord"
+							from KBEnginePagingWorkTable 
+							where EngineInstanceid=VEngineInstanceID
+							--For xml Path('PaginationDetails')
+						)pag
+					)
+				)inst	
+			)outp
+				--for Xml Path(''),Root('OUTPUT')
+		);
+
+Return(VResult);		
+End;
+End if;
+
+If lower(coalesce(VTran,''))!='getdetails' or lower(coalesce(VTran,''))!='getallinstancesdetails'  Then
+Begin
+
+	If (Select COUNT(1) From kbsourceurlmst Where Lower(ObjectType)='source')>=1 Then
+	Begin        
+	
+		If coalesce(VProfileid,0)!=0 Then
+		Begin
+ 			VEngineCount:=(Select COUNT(1) From PullEngineConfigMst where IsActive='1');
+			IF VProcesstype=0 then
+			Begin
+				VTotalUrlCount:=(
+						Select COUNT(1) 
+						From kbsourceurlmst A 
+						Join KBDataProfileDetails B on A.SOURCEID=B.DataSourceID and B.ProfileID=VProfileid 
+						Where Lower(ObjectType)='source' and DATA_FETCH_TYPE='HistoricalData' and Coalesce(B.IsProfileComplete,0)=0 and A.DATABASETYPE!=6
+						);
+			End;
+			Else
+			Begin
+				VTotalUrlCount:=(
+						Select COUNT(1) 
+						From kbsourceurlmst A 
+						Join KBDataProfileDetails B on A.SOURCEID=B.DataSourceID and B.ProfileID=VProfileid 
+						Where Lower(ObjectType)='source' and DATA_FETCH_TYPE='HistoricalData' and Coalesce(B.IsProfileComplete,0)=0 and A.DATABASETYPE=6
+						);
+			End;
+			End if;
+			
+
+			VConfigidcount:=(Select	COUNT(Distinct ConfigID) From PullEngineConfigDetails);
+
+			VConfigUrlIdCount:=(Select COUNT(Distinct URLID) From PullEngineConfigDetails where IsActive='1');
+		End;
+		Else
+		Begin
+ 
+			VEngineCount:=(Select COUNT(1) From PullEngineConfigMst where IsActive='1');
+
+			VTotalUrlCount:=(Select COUNT(1) From kbsourceurlmst Where Lower(ObjectType)='source');
+
+			VConfigidcount:=(Select	COUNT(Distinct ConfigID) From PullEngineConfigDetails);
+
+			VConfigUrlIdCount:=(Select COUNT(Distinct URLID) From PullEngineConfigDetails);
+            
+            
+			
+		End;
+		End if;
+	
+	If ((Coalesce(vProfileid,0)=0 and (((VConfigidcount/VTotalUrlCount)<1) Or VTotalUrlCount =0 or VConfigUrlIdCount<VTotalUrlCount))
+			or (VProfileid>0 and VTotalUrlCount>0 ) ) then
+	Begin  
+																																																																													Begin
+	If (Select count(1) from PullEngineConfigMst where EngineInstanceID=VInstanceID and IsActive='1')=0 Then
+	Begin 
+	 
+ 
+			Insert into PullEngineConfigMst(EngineInstanceID,EngineStarttime,IsActive,CreatedBy)
+			Select VInstanceID,VActiondate,'1',VCreated_by;
+
+			VConfigid:=(SELECT currval(pg_get_serial_sequence('PullEngineConfigMst','configid')));
+			
+			VEngineCount:=(Select COUNT(1) From PullEngineConfigMst where IsActive='1');
+			
+			VLimit:=(Select case when (((VTotalUrlCount/VEngineCount)%2)=0 Or (VTotalUrlCount/VEngineCount)=1 ) then (VTotalUrlCount/VEngineCount)
+						Else (VTotalUrlCount/VEngineCount)+1 End);
+
+			
+			If Coalesce(VProfileid,0)>0 Then
+			Begin
+
+				If VProcesstype=0 Then
+				Begin
+				
+				Insert into UrlTemp(UrlId,SourceId,DataFetchType)
+				Select ID,SOURCEID ,DATA_FETCH_TYPE
+				from kbsourceurlmst A
+				Where Lower(ObjectType)='source' and DATA_FETCH_TYPE='HistoricalData' and DATABASETYPE!=6
+				and Not exists (Select 1 from PullEngineConfigDetails B where A.ID=B.urlid and (IsActive='1' ))
+				and exists (Select 1 from KBDataProfileDetails AA 
+							where A.SOURCEID=Coalesce(AA.DataSourceID,A.sourceid) and  ProfileID=VProfileid and Coalesce(IsProfileComplete,0)=0)
+				Limit 1;			
+				End;
+				Else
+				Begin
+				
+				Insert into UrlTemp(UrlId,SourceId,DataFetchType)
+				Select ID,SOURCEID ,DATA_FETCH_TYPE
+				from kbsourceurlmst A
+				Where Lower(ObjectType)='source' and DATA_FETCH_TYPE='HistoricalData' and DATABASETYPE=6
+				and Not exists (Select 1 from PullEngineConfigDetails B where A.ID=B.urlid and (IsActive='1' ))
+				and exists (Select 1 from KBDataProfileDetails AA 
+							where A.SOURCEID=Coalesce(AA.DataSourceID,A.sourceid) and  ProfileID=VProfileid and Coalesce(IsProfileComplete,0)=0)
+				Limit 1;			
+				End;
+				End if;
+			
+			End;
+			Else
+			Begin 
+
+			Insert into UrlTemp(UrlId,SourceId,DataFetchType)
+			Select 
+			ID,SOURCEID ,DATA_FETCH_TYPE
+			from kbsourceurlmst A
+			Where Lower(ObjectType)='source' 
+			and Not exists (Select 1 from PullEngineConfigDetails B where A.ID=B.urlid  and (IsActive=2 or IsActive=1 ))
+			limit VLimit	 
+			;
+
+			End;
+			End if;
+			
+ 
+			Insert into PullEngineConfigDetails(ConfigID,EngineInstanceID,URLID,IsActive,CreatedBy,dataFetchType)
+			Select distinct VConfigid,VInstanceID, UrlId,case when DataFetchType='HistoricalData' Then 0 Else 1 End,1,DataFetchType
+			From
+			UrlTemp;
+ 
+			VURLID:=(Select urlid from PullEngineConfigDetails where ConfigID=VConfigid Limit 1);
+
+			Update PullEngineConfigDetails set IsActive='1' 
+			where ConfigID=VConfigid and URLID=Vurlid;
+
+			Update KBDataProfileDetails  set IsProfileComplete=1
+			where profileid=VProfileid and   DataSourceID=(Select SOURCEID from KBSOURCEURLMST where ID=VURLID );
+
+			Delete 
+			from 
+			PullEngineConfigDetails
+			using UrlTemp B where PullEngineConfigDetails.URLID=B.UrlId
+			and Coalesce(PullEngineConfigDetails.EngineInstanceID,'')!=VInstanceID ;
+
+	End;
+Else
+	Begin 
+
+	--return 100;
+	
+			Delete 
+			From PullEngineConfigDetails
+			where ConfigID=VConfigid and IsActive='1';
+
+			VConfigid:=(Select configid from PullEngineConfigMst  where EngineInstanceID=VInstanceID and IsActive='1' limit 1);
+	 
+			Update PullEngineConfigMst Set IsActive='0'
+			where ConfigID=VConfigid;
+	
+			VprevConfigid:=(Select configid from PullEngineConfigMSt  where EngineInstanceID=VInstanceID and IsActive='0' Order by ConfigID desc limit 1);
+
+	  		Delete 
+			From PullEngineConfigDetails 
+			where ConfigID=VprevConfigid ;--and IsActive='1';
+
+			Insert into PullEngineConfigMst(EngineInstanceID,EngineStarttime,IsActive,CreatedBy)
+			Select VInstanceID,VActiondate,'1',VCreated_by;
+
+			VConfigid:=(SELECT currval(pg_get_serial_sequence('PullEngineConfigMst','configid')));
+
+		
+			If Coalesce(VProfileid,0)>0 Then
+			Begin
+				If VProcesstype=0 Then
+				Begin
+				
+				Insert into UrlTemp(UrlId,SourceId,DataFetchType)
+				Select ID,SOURCEID ,DATA_FETCH_TYPE
+				from kbsourceurlmst A
+				Where Lower(ObjectType)='source' and isactive='1' and DATA_FETCH_TYPE='HistoricalData' and DATABASETYPE!=6
+				and Not exists (Select 1 from PullEngineConfigDetails B where A.ID=B.urlid and (IsActive='1' ))
+				and exists (Select 1 from KBDataProfileDetails AA 
+where A.SOURCEID=Coalesce(AA.DataSourceID,A.sourceid) and  ProfileID=VProfileid and Coalesce(IsProfileComplete,0)=0) Limit 1;
+				End;
+				Else
+				Begin
+				
+				Insert into UrlTemp(UrlId,SourceId,DataFetchType)
+				Select ID,SOURCEID ,DATA_FETCH_TYPE
+				from kbsourceurlmst A
+				Where Lower(ObjectType)='source' and isactive='1' and DATA_FETCH_TYPE='HistoricalData' and DATABASETYPE=6
+				and Not exists (Select 1 from PullEngineConfigDetails B where A.ID=B.urlid and (IsActive='1' ))
+				and exists (Select 1 from KBDataProfileDetails AA 
+							where A.SOURCEID=Coalesce(AA.DataSourceID,A.sourceid) and  ProfileID=VProfileid and Coalesce(IsProfileComplete,0)=0)
+				Limit 1;			
+				End;
+				End if;
+			End;
+			Else
+			Begin
+			
+				Insert into UrlTemp(UrlId,SourceId,DataFetchType)
+				Select  
+				ID,SOURCEID ,DATA_FETCH_TYPE
+				from kbsourceurlmst A
+				Where Lower(ObjectType)='source' and A.isactive='1'
+				and Not exists (Select 1 from PullEngineConfigDetails B where A.ID=B.urlid  
+				and (IsActive=2 or IsActive=1 )) and isactive='1'
+				limit VLimit	 
+				;
+
+			End;
+			End if;
+
+			Delete 
+			From PullEngineConfigDetails 
+			where ConfigID=VConfigid  ;
+			--and DataFetchType='CurrentData'
+	
+
+			Insert into PullEngineConfigDetails(ConfigID,EngineInstanceID,URLID,IsActive,CreatedBy,dataFetchType)
+			Select VConfigid,VInstanceID, UrlId,case when DataFetchType='HistoricalData' Then 0 Else 1 End,1,DataFetchType
+			From
+			UrlTemp;
+	 
+			VURLID:=(Select urlid from PullEngineConfigDetails where ConfigID=VConfigid Limit 1);
+
+			Update PullEngineConfigDetails set IsActive='1'
+			where ConfigID=VConfigid and URLID=Vurlid;
+
+			Update KBDataProfileDetails  set IsProfileComplete=1
+			where profileid=VProfileid and   DataSourceID=(Select SOURCEID from KBSOURCEURLMST where ID=VURLID );
+
+			Delete 
+			From PullEngineConfigDetails
+			using UrlTemp B where PullEngineConfigDetails.URLID=B.UrlId
+			and Coalesce(PullEngineConfigDetails.EngineInstanceID,'')!=VInstanceID ;
+ 
+	End;
+	End if;
+
+	End;
+	End;
+	Else   
+	Begin 
+	
+	Vresult:=(
+			Select Row_to_json(output)
+			from
+			(
+			Select 'No URLs Free' "Message"
+			)output
+		);
+
+	Return(VResult);
+	End;
+	End if; 
+	
+
+End; 
+
+Else    
+Begin
+
+	Vresult:=(
+			Select Row_to_json(output)
+			from
+			(
+			Select 'No URLs Present' "Message"
+			)output
+		);
+
+	Return(VResult);
+End;  
+End if;
+End;
+End if;
+
+/* Forming the output */
+
+--return(select Array_to_json(Array_agg(row_to_json(a))) from(select * from UrlTemp)a);
+--return (VSource);
+If VSource is not Null and VSource!=0 then
+Begin
+
+delete from  pullengineconfigmst;
+delete from pullengineconfigdetails;
+
+	VResult:= (
+			Select Row_to_json(outs)
+			from
+			(
+				Select Row_to_json(outp) as "OUTPUT"
+				from
+				(	
+					select Array_to_json(Array_agg(Row_to_json(web))) as "URL"
+					From
+					(
+					SELECT 
+					URL 			"NAME"
+					,Coalesce(WSDLURL,'') "WSDLURL"
+					,Coalesce(WSDLClassName,'') "WSDLClassName"
+					,Coalesce(WSDLAction,'') "WSDLAction"
+					,IsRestBased		"IsRestBased"
+					,PRIMARYKEYCOLUMNS "PRIMARYKEYCOLUMNS"
+					,DATASOURCENAME	"DATASOURCENAME"
+					, '&' 		"CONCATS"
+					,urls.ID AS 	"URLID"
+					,MainSeparator	"MainSeparator"
+					,SPOKETYPE	"SPOKETYPE"
+					,SubSeparator	"SubSeparator"
+					,Sources.SOURCETYPE_ID AS 	"SOURCEID"
+					,Sources.SOURCETYPE_NAME AS 	"SOURCENAME"
+					,TIMEOFFSETS.TIMEZONENAME AS 	"TIMEZONENAME"
+					,TIMEOFFSETS.UTCDurationinMinutes as "UTCOFFSET"
+					,TIMEOFFSETS.TIMEZONEID AS 	"TIMEZONEID"
+					,DATA_FETCH_TYPE		"DATA_FETCH_TYPE"
+					--,urls.databasetype as "DATABASETYPE"
+					 ,(Case  
+ 					when urls.databasetype =1 THEN 'oracle'
+						when urls.databasetype=2 THEN 'sql server'
+ 						when urls.databasetype=3 THEN 'mysql'
+ 					        when urls.databasetype=4 THEN 'postgre' 	
+ 				                when urls.databasetype=6 THEN 'foxpro'
+ 					        ELSE to_char(urls.DATABASETYPE, ' ')
+ 					END  ) as  "DATABASETYPE"
+					,Coalesce(urls.PortNumber,0) as  "PORTNUMBER"
+					,DATA_RETRIEVAL_TIME as "TIMEINTERVAL"
+					,DATA_RETRIEVAL_UOM   as "UOM"
+					,UPLOADTYPE   as "EXACTTIMECHECKED"
+					,DataFormats.FORMATTYPE as 		"TYPE"
+					,(
+						Select Array_to_json(Array_agg(row_to_json(cust))) "CUSTOMER"
+						from
+						( 
+						select DISTINCT kcp.ENTITY_ID as "ID" , kcp.Location_id as "LOCATIONID" 
+						,'' "PHONENO",'ID,LOCATIONID,PHONENO' as "Attribute_list"
+						  from KBSOURCEMST SM
+						  Join KBEntityPhone kcp ON kcp.ENTITY_ID = sm.entity_id and kcp.Location_ID = Sm.Location_id  and kcp.SOURCETYPEID = SM.SOURCETYPE_ID  where   Sources.SOURCETYPE_ID=Sm.SOURCETYPE_ID
+						  
+						) as cust
+					)
+					,(
+						Select Row_to_json(params) as "PARAMETERS"
+						from
+						(
+							Select Array_To_json(Array_agg(row_to_json(param))) as "PARAMETER"
+							from
+							(	
+							Select distinct urldetailsid,PARAM_NAME "Key",PARAM_VALUE "Value" ,PARAM_TYPE "Type" ,FORMULA "Formula",LocationDimId "GroupID",Operator "Operator"
+							,'urldetailsid,Key,Value,Type,Formula,GroupID,Operator'	"Attribute_list"
+						From KBSOURCEURLDETAILS UrlDetails where Sources.SOURCETYPE_ID=UrlDetails.SOURCEID 
+				and urls.id=UrlDetails.urlid and lower(UrlDetails.PARAM_TYPE) in ('static','entity')  order by UrlDetails.urldetailsid
+						
+							)param
+						) params
+					)
+					,USERNAME			"USERNAME"
+					,PASSWORD			"PASSWORD"
+					,DBAuthType 			"DBAUTHTYPE" 
+					,SERVERNAME			"SERVERNAME" 
+					,DATABASENAME			"DATABASENAME"
+					,DBQUERY			"DBQUERY"
+					,TABLEQUERY 			"METRICQUERY"	
+					,HasPaging 			"HASPAGING"
+					,PagingColumn 			"PAGINGCOLUMN"
+					,NoofRecords 			"NOOFRECORDS"
+					,(	
+						Select Row_to_json(metdet) as "METRICDETAILS"
+						From
+						(
+							Select Array_To_json(Array_agg(row_to_json(mets))) as "METRIC"
+							from
+							(
+select Metric.METRIC_ID "METRIC_ID",Metric.METRICNAME "METRICNAME",Metric.CONSTANTVALUE "CONSTANTVALUE",'METRIC_ID,METRICNAME,CONSTANTVALUE' as "Attribute_list" from kbMetricMst Metric 
+		inner join kbspokeconfigurations Sp on  Metric.SOURCE_ID=Sp.sourcetypeid and Metric.METRICNAME=Sp.METRICNAME
+		where Metric.SOURCE_ID=Sources.SOURCETYPE_ID and Metric.TEMPLATE_ID=1 order by Sp.metricorder 	)mets
+						)metdet	
+					)
+					 ,
+					 (
+						Select licensekeyid 
+						from kblicensedetails Maps 
+						where Customerid in (Select CustomerId from kbusercustomermapping where userid= Sources.CreatedBy)
+						limit 1
+					) 			"VID"
+					,urls.DBIDColumn	"DBIDColumn"
+					,DBIDColumnDataType	"DBIDColumnDataType"
+					,custom_authenticationtype "TOKENAUTH"
+					,MainSeparator		"RECORDTYPE"
+					,case when coalesce(Sources.masterspokeid,0) > 0 then Sources.masterspokeid when coalesce(Sources.masterspokeid,0)=0 then sources.sourcetype_id end "MASTERSPOKEID",
+					urls.objecttype "OBJECTTYPE"
+					,'NAME,WSDLURL,WSDLClassName,WSDLAction,IsRestBased,PRIMARYKEYCOLUMNS,DATASOURCENAME,CONCATS,URLID,MainSeparator,SPOKETYPE,SubSeparator,SOURCEID,SOURCENAME,TIMEZONENAME,UTCOFFSET,TIMEZONEID,DATA_FETCH_TYPE'
+					||',DATABASETYPE,TIMEINTERVAL,UOM,TYPE,USERNAME,PASSWORD,SERVERNAME,PORTNUMBER,DATABASENAME,DBQUERY,METRICQUERY'
+					||',HASPAGING,PAGINGCOLUMN,NOOFRECORDS,VID,DBIDColumn,DBIDColumnDataType,TOKENAUTH,RECORDTYPE,MASTERSPOKEID,OBJECTTYPE' as "Attribute_list"	
+						
+					FROM  
+						kbsourcetypemst Sources
+						Join kbsourceurlmst urls on Sources.SOURCETYPE_ID=urls.SOURCEID and urls.IsActive='1'
+						JOIN KBTIMEZONEOFFSETS AS TIMEOFFSETS  ON Sources.TIMEZONEID = TIMEOFFSETS.TIMEZONEID
+						Left Outer Join KbSpokeDataFormats DataFormats on Sources.DataFormat=Dataformats.ID
+						Join KBDataSourceMst DataSources on Urls.DataSourceID=DataSources.DataSourceID
+						where Sources.SOURCETYPE_ID not in  (
+						 select cast(callstatus as int) from kbenginewisedatafetchinginformation  
+						) 
+                        
+                        and Sources.IsActive='1'
+					Group BY URL,WSDLURL,WSDLClassName,WSDLAction,IsRestBased,DATASOURCENAME,urls.ID,databasetype,DATA_FETCH_TYPE,PortNumber,DATA_RETRIEVAL_UOM,DATA_RETRIEVAL_TIME,USERNAME,PASSWORD,DBAUTHTYPE,SERVERNAME,DATABASENAME,DBQUERY,TABLEQUERY,
+HasPaging,PagingColumn,NoofRecords,DBIDColumn,DBIDColumnDataType,custom_authenticationtype,MainSeparator,objecttype,SOURCETYPE_ID,	SOURCEURL ,TIMEOFFSETS.TIMEZONENAME ,TIMEOFFSETS.UTCDurationinMinutes ,TIMEOFFSETS.TIMEZONEID,DataFormats.FORMATTYPE,MainSeparator,SubSeparator,SPOKETYPE,MASTERSPOKEID,UPLOADTYPE
+                        
+					)web
+				)outp
+			)outs		--FOR XML RAW('URL'),ROOT('OUTPUT')
+		);
+
+--VResult:= (Replace(Replace(Replace(VResult,'\',''),':"[',':['),']""',']"')); 
+Return(VResult );
+
+End;
+Else
+Begin
+ 
+	/* Web Service Start*/
+
+	VResultweb:=
+			
+			(	 	Select Array_to_json(Array_agg(row_to_json(ur))) as "URL"
+					From
+					(	
+						SELECT 
+						 PRIMARYKEYCOLUMNS 		"PRIMARYKEYCOLUMNS"
+						,DATASOURCENAME 		"DATASOURCENAME"
+						,Coalesce(AA.Configid,'0') "Configid"
+						,SPOKETYPE 		"SPOKETYPE"
+						,urls.ID 		"URLID"	
+						,URL 			"NAME"
+						,MainSeparator		"MainSeparator"
+						,SubSeparator		"SubSeparator"
+						, '&' 			"CONCATS"
+						,Sources.SOURCETYPE_ID  "SOURCEID"
+						,Sources.SOURCETYPE_NAME "SOURCENAME"
+						,TIMEOFFSETS.TIMEZONENAME "TIMEZONENAME"
+						,TIMEOFFSETS.UTCDurationinMinutes as "UTCOFFSET"
+						,TIMEOFFSETS.TIMEZONEID AS "TIMEZONEID"
+						,Coalesce(DATA_FETCH_TYPE,'CurrentData') "DATA_FETCH_TYPE"
+						,'' 			"DATABASETYPE"
+						,'' 			"PORTNUMBER"
+						,custom_authenticationtype "TOKENAUTH"
+						,MainSeparator		"RECORDTYPE"
+						,DATA_RETRIEVAL_TIME as "TIMEINTERVAL"
+						,DATA_RETRIEVAL_UOM   as "UOM"
+						,UPLOADTYPE   as "EXACTTIMECHECKED"
+						
+								,ksdf.FORMATTYPE as "TYPE"
+						,Coalesce(WSDLURL,'') "WSDLURL"
+						,Coalesce(WSDLClassName,'') "WSDLClassName"
+						,Coalesce(WSDLAction,'') "WSDLAction"
+						,IsRestBased		"IsRestBased"
+						,(
+							Select Array_to_json(Array_agg(row_to_json(cust))) "CUSTOMER"
+							from
+							( 
+							select DISTINCT kcp.ENTITY_ID as "ID" , kcp.Location_id as "LOCATIONID" 
+							,'' "PHONENO"
+							--,(Select DBfnCustomerTemplateSpokeDetailsPhoneNO(kcp.ENTITY_ID,kcp.Location_id,';',SM.SourceName,sm.SOURCETYPE_ID)) AS "PHONENO"
+							,'ID,LOCATIONID,PHONENO' as "Attribute_list"
+							  from 
+							  KBSOURCEMST SM
+							  Join KBEntityPhone kcp ON kcp.ENTITY_ID = sm.entity_id and kcp.Location_ID = Sm.Location_id 
+							  and kcp.SOURCETYPEID = SM.SOURCETYPE_ID
+							  where   Sources.SOURCETYPE_ID=Sm.SOURCETYPE_ID
+							  --for XML raw('CUSTOMER')
+							) as cust
+						)
+						,
+						(
+							Select Row_to_json(params) as "PARAMETERS"
+							from
+							(
+								Select Array_To_json(Array_agg(row_to_json(param))) as "PARAMETER"
+								from
+								(	
+								Select distinct urldetailsid,PARAM_NAME "Key",PARAM_VALUE "Value" ,PARAM_TYPE "Type" ,FORMULA "Formula",LocationDimId "GroupID",operator "Operator"
+								,'urldetailsid,Key,Value,Type,Formula,GroupID,Operator'	"Attribute_list"
+								From KBSOURCEURLDETAILS UrlDetails 
+								where  Sources.SOURCETYPE_ID=UrlDetails.SOURCEID 
+								and urls.id=UrlDetails.urlid
+								and 
+								lower(UrlDetails.PARAM_TYPE) in ('static','entity')  order by 	UrlDetails.urldetailsid
+								--For XML RAW('PARAMETER'),ROOT('PARAMETERS')
+								)param
+							) params
+						)
+						,USERNAME	"USERNAME"
+						,PASSWORD	"PASSWORD"
+						,
+						(	
+							Select Row_to_json(metdet) as "METRICDETAILS"
+							From
+							(
+								Select Array_To_json(Array_agg(row_to_json(mets))) as "METRIC"
+								from
+								(
+select Metric.METRIC_ID "METRIC_ID",Metric.METRICNAME "METRICNAME",Metric.CONSTANTVALUE "CONSTANTVALUE" 
+,'METRIC_ID,METRICNAME,CONSTANTVALUE' as "Attribute_list"
+								from kbMetricMst Metric 
+					inner join kbspokeconfigurations Sp on  Metric.SOURCE_ID=Sp.sourcetypeid and Metric.METRICNAME=Sp.METRICNAME
+								where Metric.SOURCE_ID=Sources.SOURCETYPE_ID and Metric.TEMPLATE_ID=1
+								order by Sp.metricorder	
+										--for xml raw('METRICS'),root('METRICDETAILS')
+										--select * from kbspokeconfigurations
+								)mets
+							)metdet	
+						)
+						 ,
+						 (
+							Select licensekeyid from kblicensedetails Maps 
+							where Customerid in (Select CustomerId from kbusercustomermapping where userid= Sources.CreatedBy limit 1)
+							limit 1
+						) 				"VID"
+						,urls.DBIDColumn		"DBIDColumn"
+						,DBIDColumnDataType		"DBIDColumnDataType"
+						,case when coalesce(Sources.masterspokeid,0) > 0 then Sources.masterspokeid when coalesce(Sources.masterspokeid,0)=0 then sources.sourcetype_id end "MASTERSPOKEID",
+						urls.objecttype "OBJECTTYPE"
+						
+						,'PRIMARYKEYCOLUMNS,DATASOURCENAME,Configid,SPOKETYPE,URLID,NAME,MainSeparator,SubSeparator,CONCATS,SOURCEID,SOURCENAME,TIMEZONENAME,UTCOFFSET'
+						||',TIMEZONEID,DATA_FETCH_TYPE,DATABASETYPE,PORTNUMBER,TIMEINTERVAL,UOM,TYPE,WSDLURL,WSDLClassName,WSDLAction,IsRestBased,USERNAME'
+						||',PASSWORD,VID,DBIDColumn,DBIDColumnDataType,RECORDTYPE,TOKENAUTH,MASTERSPOKEID,OBJECTTYPE,EXACTTIMECHECKED' as "Attribute_list"	
+						FROM  
+						kbsourcetypemst Sources
+						Join kbsourceurlmst urls on Sources.SOURCETYPE_ID=urls.SOURCEID and urls.IsActive='1'
+						JOIN KBTIMEZONEOFFSETS AS TIMEOFFSETS  ON Sources.TIMEZONEID = TIMEOFFSETS.TIMEZONEID
+						Left Outer Join KbSpokeDataFormats DataFormats on Sources.DataFormat=Dataformats.ID
+						join  KbSpokeDataFormats ksdf on Sources.DataFormat=ksdf.ID
+						Join KBDataSourceMst DataSources on Urls.DataSourceID=DataSources.DataSourceID
+						Join UrlTemp AA on urls.ID=AA.UrlId
+						where Sources.SOURCETYPE=1 and Urls.DataSourceID in(2,10)  
+						--and Lower(ObjectType)='source' 
+						and Sources.IsActive='1' and urls.url is not null and urls.url!=''
+						Group BY 	Sources.SOURCETYPE_ID,URL,DataSourceName,TIMEOFFSETS.TIMEZONENAME ,TIMEOFFSETS.UTCDurationinMinutes ,Sources.DataFormat
+						,TIMEOFFSETS.TIMEZONEID,Sources.TIMEZONEID,DATA_RETRIEVAL_TIME,DATA_RETRIEVAL_UOM,AA.Configid
+						,ksdf.FORMATTYPE,urls.SOURCEID,urls.ID,USERNAME,PASSWORD,MainSeparator,SubSeparator,SPOKETYPE,WSDLURL,WSDLAction,IsRestBased,WSDLClassName
+					,DATA_FETCH_TYPE,Sources.CreatedBy,urls.DBIDColumn,DBIDColumnDataType,Sources.SOURCETYPE_NAME  ,custom_authenticationtype ,MASTERSPOKEID,objecttype
+						--FOR XML RAW('URL')
+					)ur
+				 
+			);
+
+/* Web Service End*/
+
+/* Web Service Start for Entity*/
+	VResultwebEntity:=
+ 			
+ 			(	 	Select Array_to_json(Array_agg(row_to_json(ur))) as "URL"
+			From
+			(	
+				SELECT 
+				Sources.ENTITY_NAME "ENTITY_NAME" 
+				, Sources.Entitydef_id "ENTITYDEF_ID"
+				 ,entitysourcepk		"PRIMARYKEYCOLUMNS"
+						,DATASOURCENAME 		"DATASOURCENAME"
+						,'0' "Configid"
+						,'0' 		"SPOKETYPE"
+						,urls.ID 		"URLID"	
+						,URL 			"NAME"
+						,''		"MainSeparator"
+						,''		"SubSeparator"
+						, '&' 			"CONCATS"
+						
+						--,TIMEOFFSETS.TIMEZONENAME "TIMEZONENAME"
+						--,TIMEOFFSETS.UTCDurationinMinutes as "UTCOFFSET"
+						,1  AS "TIMEZONEID"
+						,Coalesce(DATA_FETCH_TYPE,'CurrentData') "DATA_FETCH_TYPE"
+						,'' 			"DATABASETYPE"
+						,'' 			"PORTNUMBER"
+						,custom_authenticationtype "TOKENAUTH"
+						,''		"RECORDTYPE"
+						,DATA_RETRIEVAL_TIME as "TIMEINTERVAL"
+						,DATA_RETRIEVAL_UOM   as "UOM"
+						,UPLOADTYPE   as "EXACTTIMECHECKED"
+						
+						--,ksdf.FORMATTYPE as "TYPE"
+						,Coalesce(WSDLURL,'') "WSDLURL"
+						,Coalesce(WSDLClassName,'') "WSDLClassName"
+						,Coalesce(WSDLAction,'') "WSDLAction"
+						,IsRestBased		"IsRestBased"
+						 ,(
+ 							Select Array_to_json(Array_agg(row_to_json(cust))) "CUSTOMER"
+ 							from
+ 							( 
+ 							select DISTINCT kcp.ENTITY_ID as "ID" , kcp.Location_id as "LOCATIONID" 
+ 							,'' "PHONENO",'ID,LOCATIONID,PHONENO' as "Attribute_list"
+ 							  from 
+ 							  KBSOURCEMST SM
+ 				 Join KBEntityPhone kcp ON kcp.ENTITY_ID = SM.entity_id and kcp.Location_ID = SM.Location_id 
+ 							  and kcp.SOURCETYPEID = urls.entitysourceid limit 1
+ 							  --where   Sources.SOURCETYPE_ID=urls.entitysourceid
+ 							  
+ 							) as cust
+ 						)
+						,
+						(
+							Select Row_to_json(params) as "PARAMETERS"
+							from
+							(
+								Select Array_To_json(Array_agg(row_to_json(param))) as "PARAMETER"
+								from
+								(	
+								Select distinct urldetailsid,PARAM_NAME "Key",PARAM_VALUE "Value" ,PARAM_TYPE "Type" ,FORMULA "Formula",LocationDimId "GroupID",operator "Operator"
+								,'urldetailsid,Key,Value,Type,Formula,GroupID,Operator'	"Attribute_list"
+From KBSOURCEURLDETAILS UrlDetails where  urls.SOURCEID=UrlDetails.SOURCEID and urls.id=UrlDetails.urlid
+and lower(UrlDetails.PARAM_TYPE) in ('static','entity')  order by 	UrlDetails.urldetailsid
+								--For XML RAW('PARAMETER'),ROOT('PARAMETERS')
+								)param
+							) params
+						)
+						,USERNAME	"USERNAME"
+						,PASSWORD	"PASSWORD"
+						,
+						(	
+							Select Row_to_json(metdet) as "METRICDETAILS"
+							From
+							(
+								Select Array_To_json(Array_agg(row_to_json(mets))) as "METRIC"
+								from
+								(
+select Metric.METRIC_ID "METRIC_ID",Metric.METRICNAME "METRICNAME",Metric.CONSTANTVALUE "CONSTANTVALUE" 
+,'METRIC_ID,METRICNAME,CONSTANTVALUE' as "Attribute_list"
+from kbMetricMst Metric inner join kbspokeconfigurations Sp 
+on  Metric.SOURCE_ID=urls.entitysourceid and Metric.METRICNAME=Sp.METRICNAME
+where Metric.SOURCE_ID=urls.entitysourceid and Metric.TEMPLATE_ID=1
+								order by Sp.metricorder	
+										--for xml raw('METRICS'),root('METRICDETAILS')
+										--select * from kbspokeconfigurations
+								)mets
+							)metdet	
+						)
+						 ,
+						 (
+							Select licensekeyid from kblicensedetails Maps 
+							where Customerid in (Select CustomerId from kbusercustomermapping where userid= Sources.CreatedBy limit 1)
+							limit 1
+						) 				"VID"
+						,urls.DBIDColumn		"DBIDColumn"
+						,DBIDColumnDataType		"DBIDColumnDataType"
+						,0 as "MASTERSPOKEID",
+						urls.objecttype "OBJECTTYPE"
+						,createurltype		"CREATEURLTYPE"
+						,AttributeMapping	"ATTRIBUTEMAPPING"
+						,cast(screenjson as text)		"GENERICURLINPUT"
+						,sources.createdby	"LOGINID"
+						,urls.objecttype "OBJECTTYPE"
+						,urls.objecttype "OBJECTTYPE",
+                         urls.entitysourceid,
+                         urls.entitydataformattype,
+                         urls.entitydataformatsubseparator,
+                         urls.entitydataformatmainseparator,
+                         urls.entitydataformatobject,
+                         urls.entitysourcepk
+					,'PRIMARYKEYCOLUMNS,DATASOURCENAME,CONCATS,URLID,MainSeparator,SPOKETYPE,SubSeparator,SOURCEID,SOURCENAME,TIMEZONENAME,UTCOFFSET,TIMEZONEID,DATA_FETCH_TYPE'
+					||',DATABASETYPE,TIMEINTERVAL,UOM,TYPE,USERNAME,PASSWORD,SERVERNAME,PORTNUMBER,DATABASENAME,DBQUERY,METRICQUERY'
+					||',HASPAGING,PAGINGCOLUMN,NOOFRECORDS,VID,DBIDColumn,DBIDColumnDataType,TOKENAUTH,RECORDTYPE,MASTERSPOKEID,OBJECTTYPE,EXACTTIMECHECKED' as "Attribute_list"	
+					From kbentitymst Sources
+				Join kbsourceurlmst urls on Sources.ENTITYDEF_ID=urls.SOURCEID
+				Join KBDataSourceMst DataSources on Urls.DataSourceID=DataSources.DataSourceID
+				Inner join KBDataSourceAttributes dsatt on dsatt.DataSourceID=DataSources.DataSourceID   --newlyadded
+				LEft outer join KBDataSourceAttributeDetails dsdetails on dsatt.DSAttributeID=dsdetails.DSAttributeID 
+				and   dsdetails.DSAttributeDetailID=urls.DATABASETYPE  --newlyadded
+				where  Lower(ObjectType)='entity' and urls.isactive='1'
+Group BY Sources.ENTITY_NAME,DataSourceName,DATA_RETRIEVAL_TIME,DATA_RETRIEVAL_UOM
+,urls.SOURCEID,urls.ID,URL,USERNAME,urls.PASSWORD,SERVERNAME,DATABASENAME,DBQUERY,TABLEQUERY,HasPaging ,PagingColumn ,NoofRecords , dsdetails.DSADetailName,urls.PortNumber,Sources.CreatedBy,urls.DBIDColumn,DBIDColumnDataType,DBAuthType,Sources.EntityDef_Id,ORGANISATION,"group",urls.attributemapping,DATA_FETCH_TYPE,createurl,createurltype,AttributeMapping,cast(screenjson as text),sources.createdby,WSDLAction,objecttype,UPLOADTYPE 
+ /*added this on 29-09-2018*/                   -- limit 1
+			)ur
+ 				 
+ 			);
+
+/* Web Service End for Entity*/
+
+/* Database Start */
+
+	VResultdb:= 
+				(
+				 
+					Select Array_to_json(Array_agg(row_to_json(ur))) as "URL"
+					From
+					(	
+					SELECT  
+					PRIMARYKEYCOLUMNS 		"PRIMARYKEYCOLUMNS"
+					,DATASOURCENAME	"DATASOURCENAME"
+					, '&' 		"CONCATS"
+					,urls.ID AS 	"URLID"
+					,MainSeparator	"MainSeparator"
+					,SPOKETYPE	"SPOKETYPE"
+					,SubSeparator	"SubSeparator"
+					,Sources.SOURCETYPE_ID AS 	"SOURCEID"
+					,Sources.SOURCETYPE_NAME AS 	"SOURCENAME"
+					,TIMEOFFSETS.TIMEZONENAME AS 	"TIMEZONENAME"
+					,TIMEOFFSETS.UTCDurationinMinutes as "UTCOFFSET"
+					,TIMEOFFSETS.TIMEZONEID AS 	"TIMEZONEID"
+					,DATA_FETCH_TYPE		"DATA_FETCH_TYPE"
+					,Coalesce(dsdetails.DSADetailName,'') "DATABASETYPE"
+					,Coalesce(urls.PortNumber,0) as  "PORTNUMBER"
+					,DATA_RETRIEVAL_TIME as "TIMEINTERVAL"
+					,DATA_RETRIEVAL_UOM   as "UOM"
+					,UPLOADTYPE   as "EXACTTIMECHECKED"
+					
+					,ksdf.FORMATTYPE as 		"TYPE"
+					,(
+						Select Array_to_json(Array_agg(row_to_json(cust))) "CUSTOMER"
+						from
+						( 
+						select DISTINCT kcp.ENTITY_ID as "ID" , kcp.Location_id as "LOCATIONID" 
+						,'' "PHONENO"
+						
+						,'ID,LOCATIONID,PHONENO' as "Attribute_list"
+						  from 
+						  KBSOURCEMST SM
+						  Join KBEntityPhone kcp ON kcp.ENTITY_ID = sm.entity_id and kcp.Location_ID = Sm.Location_id 
+						  and kcp.SOURCETYPEID = SM.SOURCETYPE_ID
+						  where   Sources.SOURCETYPE_ID=Sm.SOURCETYPE_ID
+						  --for XML raw('CUSTOMER')
+						) as cust
+					)
+					,(
+						Select Row_to_json(params) as "PARAMETERS"
+						from
+						(
+							Select Array_To_json(Array_agg(row_to_json(param))) as "PARAMETER"
+							from
+							(	
+							Select distinct urldetailsid,PARAM_NAME "Key",PARAM_VALUE "Value" ,PARAM_TYPE "Type" ,FORMULA "Formula",LocationDimId "GroupID",Operator "Operator"
+							,'urldetailsid,Key,Value,Type,Formula,GroupID,Operator'	"Attribute_list"
+							From KBSOURCEURLDETAILS UrlDetails 
+							where  Sources.SOURCETYPE_ID=UrlDetails.SOURCEID 
+							and urls.id=UrlDetails.urlid
+							and lower(UrlDetails.PARAM_TYPE) in ('static','entity')  order by UrlDetails.urldetailsid
+							--For XML RAW('PARAMETER'),ROOT('PARAMETERS')
+							)param
+						) params
+					)
+					,USERNAME			"USERNAME"
+					,PASSWORD			"PASSWORD"
+					,DBAuthType 			"DBAUTHTYPE" 
+					,SERVERNAME			"SERVERNAME" 
+					,DATABASENAME			"DATABASENAME"
+					,DBQUERY			"DBQUERY"
+					,TABLEQUERY 			"METRICQUERY"	
+					,HasPaging 			"HASPAGING"
+					,PagingColumn 			"PAGINGCOLUMN"
+					,NoofRecords 			"NOOFRECORDS"
+					,(	
+						Select Row_to_json(metdet) as "METRICDETAILS"
+						From
+						(
+							Select Array_To_json(Array_agg(row_to_json(mets))) as "METRIC"
+							from
+							(
+							select Metric.METRIC_ID "METRIC_ID",Metric.METRICNAME "METRICNAME",Metric.CONSTANTVALUE "CONSTANTVALUE" 
+								,'METRIC_ID,METRICNAME,CONSTANTVALUE' as "Attribute_list" 
+								
+								from kbMetricMst Metric 
+					inner join kbspokeconfigurations Sp on  Metric.SOURCE_ID=Sp.sourcetypeid and Metric.METRICNAME=Sp.METRICNAME
+								where Metric.SOURCE_ID=Sources.SOURCETYPE_ID and Metric.TEMPLATE_ID=1
+								order by Sp.metricorder	
+									--for xml raw('METRICS'),root('METRICDETAILS')
+							)mets
+						)metdet	
+					)
+					 ,
+					 (
+						Select licensekeyid 
+						from kblicensedetails Maps 
+						where Customerid in (Select CustomerId from kbusercustomermapping where userid= Sources.CreatedBy)
+						limit 1
+					) 			"VID"
+					,urls.DBIDColumn	"DBIDColumn"
+					,DBIDColumnDataType	"DBIDColumnDataType"
+					,custom_authenticationtype "TOKENAUTH"
+					,MainSeparator		"RECORDTYPE"
+					,case when coalesce(Sources.masterspokeid,0) > 0 then Sources.masterspokeid when coalesce(Sources.masterspokeid,0)=0 then sources.sourcetype_id end "MASTERSPOKEID",urls.objecttype "OBJECTTYPE"
+					,urls.concatenation_operator "URLPATH"
+					,urls.concatenation_rule "SHEETNAME"
+,'PRIMARYKEYCOLUMNS,DATASOURCENAME,CONCATS,URLID,MainSeparator,SPOKETYPE,SubSeparator,SOURCEID,SOURCENAME,TIMEZONENAME,UTCOFFSET,TIMEZONEID,DATA_FETCH_TYPE'||',DATABASETYPE,TIMEINTERVAL,UOM,TYPE,USERNAME,PASSWORD,SERVERNAME,PORTNUMBER,DATABASENAME,DBQUERY,METRICQUERY'
+||',HASPAGING,PAGINGCOLUMN,NOOFRECORDS,VID,DBIDColumn,DBIDColumnDataType,TOKENAUTH,RECORDTYPE,MASTERSPOKEID,OBJECTTYPE,URLPATH,SHEETNAME,EXACTTIMECHECKED' as "Attribute_list"		
+					FROM  
+					kbsourcetypemst Sources
+					Join kbsourceurlmst urls on Sources.SOURCETYPE_ID=urls.SOURCEID and urls.IsActive='1'
+					JOIN KBTIMEZONEOFFSETS AS TIMEOFFSETS  ON Sources.TIMEZONEID = TIMEOFFSETS.TIMEZONEID
+					Left Outer Join KbSpokeDataFormats DataFormats on Sources.DataFormat=Dataformats.ID
+					join  KbSpokeDataFormats ksdf on Sources.DataFormat=ksdf.ID
+					Join KBDataSourceMst DataSources on Urls.DataSourceID=DataSources.DataSourceID
+					--Inner join KBDataSourceAttributes dsatt on dsatt.DataSourceID=DataSources.DataSourceID   --newlyadded
+					---Inner join KBDataSourceAttributeDetails dsdetails on dsatt.DSAttributeID=dsdetails.DSAttributeID 
+					--and   (dsdetails.DSAttributeDetailID=urls.DATABASETYPE or dsdetails.DSAttributeDetailID=urls.DataSourceID) --newlyadded
+					Inner join KBDataSourceAttributeDetails dsdetails on dsdetails.DSAttributeDetailID=urls.databasetype 
+					where Sources.SOURCETYPE=1 and urls.DataSourceID in (1,9) /*(1,6)*/  and Lower(ObjectType)='source' 
+					and Lower(Urls.DATA_FETCH_TYPE)='currentdata' and Sources.IsActive='1'
+					Group BY 	Sources.SOURCETYPE_ID,DataSourceName,TIMEOFFSETS.TIMEZONENAME ,TIMEOFFSETS.UTCDurationinMinutes 
+					,TIMEOFFSETS.TIMEZONEID,Sources.TIMEZONEID,DATA_RETRIEVAL_TIME,DATA_RETRIEVAL_UOM
+					,ksdf.FORMATTYPE,urls.SOURCEID,urls.ID,USERNAME,PASSWORD,SERVERNAME,DATABASENAME,DBQUERY,TABLEQUERY	,SPOKETYPE
+					,MainSeparator,SubSeparator,DATA_FETCH_TYPE,HasPaging ,PagingColumn ,NoofRecords , dsdetails.DSADetailName,urls.PortNumber,Sources.CreatedBy
+					,urls.DBIDColumn,DBIDColumnDataType,DBAuthType  ,Sources.SOURCETYPE_NAME,custom_authenticationtype ,MASTERSPOKEID,objecttype,UPLOADTYPE,urls.concatenation_operator,urls.concatenation_rule
+					--FOR XML RAW('URL')
+					)ur
+				 	
+				);
+
+		
+	/*Getting the historical data*/
+
+	--return (UrlTemp);
+	
+	VResultdb1:=
+			(		
+				 	Select Array_to_json(Array_agg(row_to_json(ur))) as "URL"
+					From
+					(	
+					SELECT 
+					PRIMARYKEYCOLUMNS 		"PRIMARYKEYCOLUMNS"
+					,DATASOURCENAME	"DATASOURCENAME"
+					, '&' 		"CONCATS"
+					,urls.ID AS 	"URLID"
+					,MainSeparator	"MainSeparator"
+					,SPOKETYPE	"SPOKETYPE"
+					,SubSeparator	"SubSeparator"
+					,Sources.SOURCETYPE_ID AS 	"SOURCEID"
+					,Sources.SOURCETYPE_NAME AS 	"SOURCENAME"
+					,TIMEOFFSETS.TIMEZONENAME AS 	"TIMEZONENAME"
+					,TIMEOFFSETS.UTCDurationinMinutes as "UTCOFFSET"
+					,TIMEOFFSETS.TIMEZONEID AS 	"TIMEZONEID"
+					,DATA_FETCH_TYPE		"DATA_FETCH_TYPE"
+					,Coalesce(dsdetails.DSADetailName,'') "DATABASETYPE"
+					,Coalesce(urls.PortNumber,0) as  "PORTNUMBER"
+					,DATA_RETRIEVAL_TIME as "TIMEINTERVAL"
+					,DATA_RETRIEVAL_UOM   as "UOM"
+					,UPLOADTYPE   as "EXACTTIMECHECKED"
+					
+					,ksdf.FORMATTYPE as 		"TYPE"
+					,(
+						Select Array_to_json(Array_agg(row_to_json(cust))) "CUSTOMER"
+						from
+						( 
+						select DISTINCT kcp.ENTITY_ID as "ID" , kcp.Location_id as "LOCATIONID" 
+						,'' "PHONENO"
+						--,(Select DBfnCustomerTemplateSpokeDetailsPhoneNO(kcp.ENTITY_ID,kcp.Location_id,';',SM.SourceName,sm.SOURCETYPE_ID)) AS "PHONENO"
+						,'ID,LOCATIONID,PHONENO' as "Attribute_list"
+						  from 
+						  KBSOURCEMST SM
+						  Join KBEntityPhone kcp ON kcp.ENTITY_ID = sm.entity_id and kcp.Location_ID = Sm.Location_id 
+						  and kcp.SOURCETYPEID = SM.SOURCETYPE_ID
+						  where   Sources.SOURCETYPE_ID=Sm.SOURCETYPE_ID
+						  --for XML raw('CUSTOMER')
+						) as cust
+					)
+					,(
+						Select Row_to_json(params) as "PARAMETERS"
+						from
+						(
+							Select Array_To_json(Array_agg(row_to_json(param))) as "PARAMETER"
+							from
+							(	
+							Select distinct urldetailsid,PARAM_NAME "Key",PARAM_VALUE "Value" ,PARAM_TYPE "Type" ,FORMULA "Formula",LocationDimId "GroupID",Operator "Operator"
+							,'urldetailsid,Key,Value,Type,Formula,GroupID,Operator'	"Attribute_list"
+							From KBSOURCEURLDETAILS UrlDetails 
+							where  Sources.SOURCETYPE_ID=UrlDetails.SOURCEID 
+							and urls.id=UrlDetails.urlid
+							and lower(UrlDetails.PARAM_TYPE) in ('static','entity')  order by UrlDetails.urldetailsid
+							--For XML RAW('PARAMETER'),ROOT('PARAMETERS')
+							)param
+						) params
+					)
+					,USERNAME			"USERNAME"
+					,PASSWORD			"PASSWORD"
+					,DBAuthType 			"DBAUTHTYPE" 
+					,SERVERNAME			"SERVERNAME" 
+					,DATABASENAME			"DATABASENAME"
+					,DBQUERY			"DBQUERY"
+					,TABLEQUERY 			"METRICQUERY"	
+					,HasPaging 			"HASPAGING"
+					,PagingColumn 			"PAGINGCOLUMN"
+					,NoofRecords 			"NOOFRECORDS"
+					,(	
+						Select Row_to_json(metdet) as "METRICDETAILS"
+						From
+						(
+							Select Array_To_json(Array_agg(row_to_json(mets))) as "METRIC"
+							from
+							(
+							select Metric.METRIC_ID "METRIC_ID",Metric.METRICNAME "METRICNAME",Metric.CONSTANTVALUE "CONSTANTVALUE" 
+								,'METRIC_ID,METRICNAME,CONSTANTVALUE' as "Attribute_list" 
+								
+								from kbMetricMst Metric 
+					inner join kbspokeconfigurations Sp on  Metric.SOURCE_ID=Sp.sourcetypeid and Metric.METRICNAME=Sp.METRICNAME
+								where Metric.SOURCE_ID=Sources.SOURCETYPE_ID and Metric.TEMPLATE_ID=1
+								order by Sp.metricorder	
+							
+									--for xml raw('METRICS'),root('METRICDETAILS')
+							)mets
+						)metdet	
+					)
+					 ,
+					 (
+						Select licensekeyid 
+						from kblicensedetails Maps 
+						where Customerid in (Select CustomerId from kbusercustomermapping where userid= Sources.CreatedBy)
+						limit 1
+					) 			"VID"
+					,urls.DBIDColumn	"DBIDColumn"
+					,DBIDColumnDataType	"DBIDColumnDataType"
+					,custom_authenticationtype "TOKENAUTH"
+					,MainSeparator		"RECORDTYPE"
+					,case when coalesce(Sources.masterspokeid,0) > 0 then Sources.masterspokeid when coalesce(Sources.masterspokeid,0)=0 then sources.sourcetype_id end "MASTERSPOKEID",
+					urls.objecttype "OBJECTTYPE"
+					,'PRIMARYKEYCOLUMNS,DATASOURCENAME,CONCATS,URLID,MainSeparator,SPOKETYPE,SubSeparator,SOURCEID,SOURCENAME,TIMEZONENAME,UTCOFFSET,TIMEZONEID,DATA_FETCH_TYPE'
+					||',DATABASETYPE,TIMEINTERVAL,UOM,TYPE,USERNAME,PASSWORD,SERVERNAME,PORTNUMBER,DATABASENAME,DBQUERY,METRICQUERY'
+					||',HASPAGING,PAGINGCOLUMN,NOOFRECORDS,VID,DBIDColumn,DBIDColumnDataType,TOKENAUTH,RECORDTYPE,MASTERSPOKEID,OBJECTTYPE,EXACTTIMECHECKED' as "Attribute_list"	
+					FROM  
+					kbsourcetypemst Sources
+					Join kbsourceurlmst urls on Sources.SOURCETYPE_ID=urls.SOURCEID and urls.IsActive='1'
+					JOIN KBTIMEZONEOFFSETS AS TIMEOFFSETS  ON Sources.TIMEZONEID = TIMEOFFSETS.TIMEZONEID
+					Left Outer Join KbSpokeDataFormats DataFormats on Sources.DataFormat=Dataformats.ID
+					join  KbSpokeDataFormats ksdf on Sources.DataFormat=ksdf.ID
+					Join KBDataSourceMst DataSources on Urls.DataSourceID=DataSources.DataSourceID
+					--Inner join KBDataSourceAttributes dsatt on dsatt.DataSourceID=DataSources.DataSourceID   --newlyadded
+					--Inner join KBDataSourceAttributeDetails dsdetails on dsatt.DSAttributeID=dsdetails.DSAttributeID 
+					--		and   dsdetails.DSAttributeDetailID=urls.DATABASETYPE  --newlyadded
+					--Join UrlTemp AA on urls.ID=AA.UrlId
+                    Inner join KBDataSourceAttributeDetails dsdetails on dsdetails.DSAttributeDetailID=urls.databasetype 
+					where Sources.SOURCETYPE=1 and  urls.DataSourceID in (1,9) /*(1,6)*/  and Lower(ObjectType)='source' 
+					and Urls.DATA_FETCH_TYPE='HistoricalData' and Sources.IsActive='1'
+                    and  Sources.sourcetype_id not in (select distinct cast(callstatus as integer) from kbenginewisedatafetchinginformation)   
+					Group BY 	Sources.SOURCETYPE_ID,DataSourceName,TIMEOFFSETS.TIMEZONENAME ,TIMEOFFSETS.UTCDurationinMinutes 
+					,TIMEOFFSETS.TIMEZONEID,Sources.TIMEZONEID,DATA_RETRIEVAL_TIME,DATA_RETRIEVAL_UOM
+					,ksdf.FORMATTYPE,urls.SOURCEID,urls.ID,USERNAME,PASSWORD,SERVERNAME,DATABASENAME,DBQUERY,TABLEQUERY	,SPOKETYPE
+					,MainSeparator,SubSeparator,DATA_FETCH_TYPE,HasPaging ,PagingColumn ,NoofRecords , dsdetails.DSADetailName,urls.PortNumber,Sources.CreatedBy
+					,urls.DBIDColumn,DBIDColumnDataType,DBAuthType  ,Sources.SOURCETYPE_NAME,custom_authenticationtype ,MASTERSPOKEID,objecttype,UPLOADTYPE
+					--FOR XML RAW('URL')
+					)ur
+				 
+				);
+
+/* Database End */
+                         
+
+/* FTP Start */
+
+	VResultFTP:= 
+			(
+			 
+					Select Array_to_json(Array_agg(row_to_json(ur))) as "URL"
+					From
+					(	
+					SELECT
+					PRIMARYKEYCOLUMNS 		"PRIMARYKEYCOLUMNS"
+					,DATASOURCENAME				"DATASOURCENAME"
+					, '&' 					"CONCATS"
+					,urls.ID AS 				"URLID"
+					,MainSeparator				"MainSeparator"
+					,SPOKETYPE				"SPOKETYPE"
+					,SubSeparator				"SubSeparator"
+					,Sources.SOURCETYPE_ID AS 		"SOURCEID"
+					,Sources.SOURCETYPE_NAME AS 		"SOURCENAME"
+					,TIMEOFFSETS.TIMEZONENAME AS 		"TIMEZONENAME"
+					,TIMEOFFSETS.UTCDurationinMinutes as 	"UTCOFFSET"
+					,TIMEOFFSETS.TIMEZONEID AS 		"TIMEZONEID"
+					,DATA_FETCH_TYPE			"DATA_FETCH_TYPE"
+					,Coalesce(DataSources.Datasourcename,'') "DATABASETYPE"
+					,Coalesce(urls.PortNumber,0) as  	"PORTNUMBER"
+					,DATA_RETRIEVAL_TIME as "TIMEINTERVAL"
+					,DATA_RETRIEVAL_UOM   as "UOM"
+					,UPLOADTYPE   as "EXACTTIMECHECKED"
+					
+					,ksdf.FORMATTYPE as 			"TYPE"
+					,(
+						Select Array_to_json(Array_agg(row_to_json(cust))) "CUSTOMER"
+						from
+						( 
+						select DISTINCT kcp.ENTITY_ID as "ID" , kcp.Location_id as "LOCATIONID" 
+						, '' "PHONENO"
+						--,(Select DBfnCustomerTemplateSpokeDetailsPhoneNO(kcp.ENTITY_ID,kcp.Location_id,';',SM.SourceName,sm.SOURCETYPE_ID)) AS "PHONENO"
+						,'ID,LOCATIONID,PHONENO' as "Attribute_list"
+						  from 
+						  KBSOURCEMST SM
+						  Join KBEntityPhone kcp ON kcp.ENTITY_ID = sm.entity_id and kcp.Location_ID = Sm.Location_id 
+						  and kcp.SOURCETYPEID = SM.SOURCETYPE_ID
+						  where   Sources.SOURCETYPE_ID=Sm.SOURCETYPE_ID
+						  --for XML raw('CUSTOMER')
+						) as cust
+					)
+					,(
+						Select Row_to_json(params) as "PARAMETERS"
+						from
+						(
+							Select Array_To_json(Array_agg(row_to_json(param))) as "PARAMETER"
+							from
+							(	
+							Select distinct urldetailsid,PARAM_NAME "Key",PARAM_VALUE "Value" ,PARAM_TYPE "Type" ,FORMULA "Formula",LocationDimId "GroupID",Operator "Operator"
+							,'urldetailsid,Key,Value,Type,Formula,GroupID,Operator'	"Attribute_list"
+							From KBSOURCEURLDETAILS UrlDetails 
+							where  Sources.SOURCETYPE_ID=UrlDetails.SOURCEID 
+							and urls.id=UrlDetails.urlid
+							and lower(UrlDetails.PARAM_TYPE) in ('static','entity')  order by UrlDetails.urldetailsid
+							--For XML RAW('PARAMETER'),ROOT('PARAMETERS')
+							)param
+						) params
+					)
+					,USERNAME				"USERNAME"
+					,PASSWORD				"PASSWORD"
+					,SERVERNAME 				"SERVERNAME"
+					,DATABASENAME				"DATABASENAME"
+					,DBQUERY				"DBQUERY"
+					,TABLEQUERY 				"METRICQUERY"	
+					,HasPaging 				"HASPAGING"
+					,PagingColumn 				"PAGINGCOLUMN"
+					,NoofRecords 				"NOOFRECORDS"
+					,(	
+						Select Row_to_json(metdet) as "METRICDETAILS"
+						From
+						(
+							Select Array_To_json(Array_agg(row_to_json(mets))) as "METRIC"
+							from
+							(
+							select Metric.METRIC_ID "METRIC_ID",Metric.METRICNAME "METRICNAME",Metric.CONSTANTVALUE "CONSTANTVALUE" 
+								,'METRIC_ID,METRICNAME,CONSTANTVALUE' as "Attribute_list" 
+								
+								from kbMetricMst Metric 
+					inner join kbspokeconfigurations Sp on  Metric.SOURCE_ID=Sp.sourcetypeid and Metric.METRICNAME=Sp.METRICNAME
+								where Metric.SOURCE_ID=Sources.SOURCETYPE_ID and Metric.TEMPLATE_ID=1
+								order by Sp.metricorder	 
+							--for xml raw('METRICS'),root('METRICDETAILS')
+							)mets
+						)metdet	
+					)
+					 ,
+					 (
+						Select licensekeyid 
+						from kblicensedetails Maps 
+						where Customerid in (Select CustomerId from kbusercustomermapping where userid= Sources.CreatedBy)
+						limit 1
+					) 					"VID"
+					,urls.DBIDColumn			"DBIDColumn"
+					,DBIDColumnDataType			"DBIDColumnDataType"
+					,custom_authenticationtype "TOKENAUTH"
+					,MainSeparator		"RECORDTYPE"
+					,case when coalesce(Sources.masterspokeid,0) > 0 then Sources.masterspokeid when coalesce(Sources.masterspokeid,0)=0 then sources.sourcetype_id end "MASTERSPOKEID",
+					urls.objecttype "OBJECTTYPE"
+					,'PRIMARYKEYCOLUMNS,DATASOURCENAME,CONCATS,URLID,MainSeparator,SPOKETYPE,SubSeparator,SOURCEID,SOURCENAME,TIMEZONENAME,UTCOFFSET,TIMEZONEID,DATA_FETCH_TYPE'
+					||',DATABASETYPE,TIMEINTERVAL,UOM,TYPE,USERNAME,PASSWORD,SERVERNAME,PORTNUMBER,DATABASENAME,DBQUERY,METRICQUERY'
+					||',HASPAGING,PAGINGCOLUMN,NOOFRECORDS,VID,DBIDColumn,DBIDColumnDataType,TOKENAUTH,RECORDTYPE,MASTERSPOKEID,OBJECTTYPE,EXACTTIMECHECKED' as "Attribute_list"	
+					FROM  
+					kbsourcetypemst Sources
+					Join kbsourceurlmst urls on Sources.SOURCETYPE_ID=urls.SOURCEID and urls.IsActive='1'
+					JOIN KBTIMEZONEOFFSETS AS TIMEOFFSETS ON Sources.TIMEZONEID = TIMEOFFSETS.TIMEZONEID
+					Left Outer Join KbSpokeDataFormats DataFormats on Sources.DataFormat=Dataformats.ID
+					join KbSpokeDataFormats ksdf on Sources.DataFormat=ksdf.ID
+					Join KBDataSourceMst DataSources on Urls.DataSourceID=DataSources.DataSourceID
+					--Join UrlTemp AA on urls.ID=AA.UrlId
+					where Sources.SOURCETYPE=1 and Urls.DataSourceID =6 and Lower(ObjectType)='source' and Urls.DATA_FETCH_TYPE='CurrentData' and Sources.IsActive='1'
+					Group BY Sources.SOURCETYPE_ID,DataSourceName,TIMEOFFSETS.TIMEZONENAME ,TIMEOFFSETS.UTCDurationinMinutes 
+						,TIMEOFFSETS.TIMEZONEID,Sources.TIMEZONEID,DATA_RETRIEVAL_TIME,DATA_RETRIEVAL_UOM
+						,ksdf.FORMATTYPE,urls.SOURCEID,urls.ID,USERNAME,PASSWORD,SERVERNAME,DATABASENAME,DBQUERY,TABLEQUERY,SPOKETYPE
+						,MainSeparator,SubSeparator,DATA_FETCH_TYPE,HasPaging ,PagingColumn ,NoofRecords ,urls.PortNumber,Sources.CreatedBy
+						,urls.DBIDColumn,DBIDColumnDataType,Sources.SOURCETYPE_NAME,custom_authenticationtype,MASTERSPOKEID,objecttype,UPLOADTYPE 
+					--FOR XML RAW('URL')
+					)ur
+			 
+				);
+
+	
+/* FTP End */
+                         
+                      
+
+/* Shared File Start */
+
+	VResultsh:= 	(
+				 	Select Array_to_json(Array_agg(row_to_json(ur))) as "URL"
+					From
+					(
+					SELECT
+					PRIMARYKEYCOLUMNS 		"PRIMARYKEYCOLUMNS"
+					,DATASOURCENAME				"DATASOURCENAME"
+					, '&' 					"CONCATS"
+					,urls.ID AS 				"URLID"
+					,MainSeparator				"MainSeparator"
+					,SPOKETYPE				"SPOKETYPE"
+					,SubSeparator				"SubSeparator"
+					,Sources.SOURCETYPE_ID AS 		"SOURCEID"
+					,Sources.SOURCETYPE_NAME AS 		"SOURCENAME"
+					,TIMEOFFSETS.TIMEZONENAME AS 		"TIMEZONENAME"
+					,TIMEOFFSETS.UTCDurationinMinutes as 	"UTCOFFSET"
+					,TIMEOFFSETS.TIMEZONEID AS 		"TIMEZONEID"
+					,DATA_FETCH_TYPE			"DATA_FETCH_TYPE"
+					,Coalesce(DataSources.Datasourcename,'') "DATABASETYPE"
+					,Coalesce(urls.PortNumber,0) as  	"PORTNUMBER"
+					,DATA_RETRIEVAL_TIME as "TIMEINTERVAL"
+					,DATA_RETRIEVAL_UOM as "UOM"
+					,UPLOADTYPE   as "EXACTTIMECHECKED"
+					
+					,ksdf.FORMATTYPE as 			"TYPE"
+					,(
+						Select Array_to_json(Array_agg(row_to_json(cust))) "CUSTOMER"
+						from
+						( 
+						select DISTINCT kcp.ENTITY_ID as "ID" , kcp.Location_id as "LOCATIONID" 
+						, '' "PHONENO"
+						--,(Select DBfnCustomerTemplateSpokeDetailsPhoneNO(kcp.ENTITY_ID,kcp.Location_id,';',SM.SourceName,sm.SOURCETYPE_ID)) AS "PHONENO"
+						,'ID,LOCATIONID,PHONENO' as "Attribute_list"
+						  from 
+						  KBSOURCEMST SM
+						  Join KBEntityPhone kcp ON kcp.ENTITY_ID = sm.entity_id and kcp.Location_ID = Sm.Location_id 
+						  and kcp.SOURCETYPEID = SM.SOURCETYPE_ID
+						  where   Sources.SOURCETYPE_ID=Sm.SOURCETYPE_ID
+						  --for XML raw('CUSTOMER')
+						) as cust
+					)
+					,(
+						Select Row_to_json(params) as "PARAMETERS"
+						from
+						(
+							Select Array_To_json(Array_agg(row_to_json(param))) as "PARAMETER"
+							from
+							(	
+							Select distinct urldetailsid,PARAM_NAME "Key",PARAM_VALUE "Value" ,PARAM_TYPE "Type" ,FORMULA "Formula",LocationDimId "GroupID",Operator "Operator"
+							,'urldetailsid,Key,Value,Type,Formula,GroupID,Operator'	"Attribute_list"
+							From KBSOURCEURLDETAILS UrlDetails 
+							where  Sources.SOURCETYPE_ID=UrlDetails.SOURCEID 
+							and urls.id=UrlDetails.urlid
+							and lower(UrlDetails.PARAM_TYPE) in ('static','entity')  order by UrlDetails.urldetailsid
+							--For XML RAW('PARAMETER'),ROOT('PARAMETERS')
+							)param
+						) params
+					)
+					,USERNAME				"USERNAME"
+					,PASSWORD				"PASSWORD"
+					,SERVERNAME 				"SERVERNAME"
+					,DATABASENAME				"DATABASENAME"
+					,DBQUERY				"DBQUERY"
+					,TABLEQUERY 				"METRICQUERY"	
+					,HasPaging 				"HASPAGING"
+					,PagingColumn 				"PAGINGCOLUMN"
+					,NoofRecords 				"NOOFRECORDS"
+					,(	
+						Select Row_to_json(metdet) as "METRICDETAILS"
+						From
+						(
+							Select Array_To_json(Array_agg(row_to_json(mets))) as "METRIC"
+							from
+							(
+							select Metric.METRIC_ID "METRIC_ID",Metric.METRICNAME "METRICNAME",Metric.CONSTANTVALUE "CONSTANTVALUE",Sp.metricorder "METRICORDER"
+								,'METRIC_ID,METRICNAME,CONSTANTVALUE,METRICORDER' as "Attribute_list"
+								from kbMetricMst Metric 
+					inner join kbspokeconfigurations Sp on  Metric.SOURCE_ID=Sp.sourcetypeid and Metric.METRICNAME=Sp.METRICNAME
+								where Metric.SOURCE_ID=Sources.SOURCETYPE_ID and Metric.TEMPLATE_ID=1
+								order by Sp.metricorder	
+									--for xml raw('METRICS'),root('METRICDETAILS')
+
+									
+							)mets
+						)metdet	
+					)
+					 ,
+					 (
+						Select licensekeyid 
+						from kblicensedetails Maps 
+						where Customerid in (Select CustomerId from kbusercustomermapping where userid= Sources.CreatedBy)
+						limit 1
+					) 					"VID"
+					,urls.DBIDColumn			"DBIDColumn"
+					,DBIDColumnDataType			"DBIDColumnDataType"
+					,custom_authenticationtype "TOKENAUTH"
+					,MainSeparator		"RECORDTYPE"
+					,case when coalesce(Sources.masterspokeid,0) > 0 then Sources.masterspokeid when coalesce(Sources.masterspokeid,0)=0 then sources.sourcetype_id end "MASTERSPOKEID",urls.objecttype "OBJECTTYPE"
+					,'PRIMARYKEYCOLUMNS,DATASOURCENAME,CONCATS,URLID,MainSeparator,SPOKETYPE,SubSeparator,SOURCEID,SOURCENAME,TIMEZONENAME,UTCOFFSET,TIMEZONEID,DATA_FETCH_TYPE'
+					||',DATABASETYPE,TIMEINTERVAL,UOM,TYPE,USERNAME,PASSWORD,SERVERNAME,PORTNUMBER,DATABASENAME,DBQUERY,METRICQUERY'
+					||',HASPAGING,PAGINGCOLUMN,NOOFRECORDS,VID,DBIDColumn,DBIDColumnDataType,TOKENAUTH,RECORDTYPE,MASTERSPOKEID,OBJECTTYPE,EXACTTIMECHECKED' as "Attribute_list"	
+					FROM  
+					kbsourcetypemst Sources
+					Join kbsourceurlmst urls on Sources.SOURCETYPE_ID=urls.SOURCEID and urls.IsActive='1'
+					JOIN KBTIMEZONEOFFSETS AS TIMEOFFSETS ON Sources.TIMEZONEID = TIMEOFFSETS.TIMEZONEID
+					Left Outer Join KbSpokeDataFormats DataFormats on Sources.DataFormat=Dataformats.ID
+					join KbSpokeDataFormats ksdf on Sources.DataFormat=ksdf.ID
+					Join KBDataSourceMst DataSources on Urls.DataSourceID=DataSources.DataSourceID
+					Join UrlTemp AA on urls.ID=AA.UrlId
+					where Sources.SOURCETYPE=1 and Urls.DataSourceID in (7)  and Lower(ObjectType)='source' and Urls.DATA_FETCH_TYPE='CurrentData' and Sources.IsActive='1'
+					Group BY 	Sources.SOURCETYPE_ID,DataSourceName,TIMEOFFSETS.TIMEZONENAME ,TIMEOFFSETS.UTCDurationinMinutes 
+					,TIMEOFFSETS.TIMEZONEID,Sources.TIMEZONEID,DATA_RETRIEVAL_TIME,DATA_RETRIEVAL_UOM
+					,ksdf.FORMATTYPE,urls.SOURCEID,urls.ID,USERNAME,PASSWORD,SERVERNAME,DATABASENAME,DBQUERY,TABLEQUERY	,SPOKETYPE
+					,MainSeparator,SubSeparator,DATA_FETCH_TYPE,HasPaging ,PagingColumn ,NoofRecords ,urls.PortNumber,DataSources.DataSourceName
+					,Sources.CreatedBy,Sources.SOURCETYPE_NAME,urls.DBIDColumn,DBIDColumnDataType,custom_authenticationtype ,MASTERSPOKEID,objecttype,UPLOADTYPE
+					)ur
+			 	--FOR XML RAW('URL')
+				);
+			
+
+/* FTP END*/
+
+/*LDAP Start*/
+
+	VResultLDAP:= (
+				 	Select Array_to_json(Array_agg(row_to_json(ur))) as "URL"
+					From
+					(
+					SELECT  
+					PRIMARYKEYCOLUMNS 		"PRIMARYKEYCOLUMNS"
+					,DATASOURCENAME				"DATASOURCENAME"
+					, '&' 					"CONCATS"
+					,urls.ID AS 				"URLID"
+					,MainSeparator				"MainSeparator"
+					,SPOKETYPE				"SPOKETYPE"
+					,SubSeparator				"SubSeparator"
+					,Sources.SOURCETYPE_ID AS 		"SOURCEID"
+					,Sources.SOURCETYPE_NAME AS 		"SOURCENAME"
+					,TIMEOFFSETS.TIMEZONENAME AS 		"TIMEZONENAME"
+					,TIMEOFFSETS.UTCDurationinMinutes as 	"UTCOFFSET"
+					,TIMEOFFSETS.TIMEZONEID AS 		"TIMEZONEID"
+					,DATA_FETCH_TYPE			"DATA_FETCH_TYPE"
+					,'' 					"DATABASETYPE"
+					,DATA_RETRIEVAL_TIME as "TIMEINTERVAL"
+					,DATA_RETRIEVAL_UOM   as "UOM"
+					,UPLOADTYPE   as "EXACTTIMECHECKED"
+					
+					,ksdf.FORMATTYPE as 			"TYPE"
+					,(
+						Select Array_to_json(Array_agg(row_to_json(cust))) "CUSTOMER"
+						from
+						( 
+						select DISTINCT kcp.ENTITY_ID as "ID" , kcp.Location_id as "LOCATIONID" 
+						, '' "PHONENO"	
+						--,(Select DBfnCustomerTemplateSpokeDetailsPhoneNO(kcp.ENTITY_ID,kcp.Location_id,';',SM.SourceName,sm.SOURCETYPE_ID)) AS "PHONENO"
+						,'ID,LOCATIONID,PHONENO' as "Attribute_list"
+						  from 
+						  KBSOURCEMST SM
+						  Join KBEntityPhone kcp ON kcp.ENTITY_ID = sm.entity_id and kcp.Location_ID = Sm.Location_id 
+						  and kcp.SOURCETYPEID = SM.SOURCETYPE_ID
+						  where   Sources.SOURCETYPE_ID=Sm.SOURCETYPE_ID
+						  --for XML raw('CUSTOMER')
+						) as cust
+					)
+					,(
+						Select Row_to_json(params) as "PARAMETERS"
+						from
+						(
+							Select Array_To_json(Array_agg(row_to_json(param))) as "PARAMETER"
+							from
+							(	
+							Select distinct urldetailsid,PARAM_NAME "Key",PARAM_VALUE "Value" ,PARAM_TYPE "Type" ,FORMULA "Formula",LocationDimId "GroupID",Operator "Operator"
+							,'urldetailsid,Key,Value,Type,Formula,GroupID,Operator'	"Attribute_list"
+							From KBSOURCEURLDETAILS UrlDetails 
+							where  Sources.SOURCETYPE_ID=UrlDetails.SOURCEID 
+							and urls.id=UrlDetails.urlid
+							and lower(UrlDetails.PARAM_TYPE) in ('static','entity')  order by UrlDetails.urldetailsid
+							--For XML RAW('PARAMETER'),ROOT('PARAMETERS')
+							)param
+						) params
+					)
+					,USERNAME				"USERNAME"
+					,PASSWORD				"PASSWORD"
+					,SERVERNAME 				"SERVERNAME"
+					,Coalesce(PORTNUMBER,0)		"PORTNUMBER"
+					,Coalesce(ORGANISATION,'')		"ORGANISATION"
+					,Coalesce("group",'')			"GROUP"
+					,
+					(
+						Select licensekeyid 
+						from kblicensedetails Maps 
+						where Customerid in (Select CustomerId from kbusercustomermapping where userid= Sources.CreatedBy)
+						limit 1
+					) 	"VID"
+					,custom_authenticationtype "TOKENAUTH"
+					,MainSeparator		"RECORDTYPE"
+					,case when coalesce(Sources.masterspokeid,0) > 0 then Sources.masterspokeid when coalesce(Sources.masterspokeid,0)=0 then sources.sourcetype_id end "MASTERSPOKEID",urls.objecttype "OBJECTTYPE"
+					,'PRIMARYKEYCOLUMNS,DATASOURCENAME,CONCATS,URLID,MainSeparator,SPOKETYPE,SubSeparator,SOURCEID,SOURCENAME,TIMEZONENAME,UTCOFFSET,TIMEZONEID,DATA_FETCH_TYPE'
+						 ||',DATABASETYPE,TIMEINTERVAL,UOM,TYPE,USERNAME,PASSWORD,SERVERNAME,PORTNUMBER,ORGANISATION,GROUP,VID,TOKENAUTH,RECORDTYPE,MASTERSPOKEID,OBJECTTYPE,EXACTTIMECHECKED' as "Attribute_list"				
+					FROM  
+					kbsourcetypemst Sources
+					Join kbsourceurlmst urls on Sources.SOURCETYPE_ID=urls.SOURCEID and urls.IsActive='1'
+					JOIN KBTIMEZONEOFFSETS AS TIMEOFFSETS ON Sources.TIMEZONEID = TIMEOFFSETS.TIMEZONEID
+					Left Outer Join KbSpokeDataFormats DataFormats on Sources.DataFormat=Dataformats.ID
+					join  KbSpokeDataFormats ksdf on Sources.DataFormat=ksdf.ID
+					Join KBDataSourceMst DataSources on Urls.DataSourceID=DataSources.DataSourceID
+					Join UrlTemp AA on urls.ID=AA.UrlId
+					where Sources.SOURCETYPE=1 and Urls.DataSourceID=3  and Lower(ObjectType)='source' and Sources.IsActive='1'
+					Group BY 	Sources.SOURCETYPE_ID,DataSourceName,TIMEOFFSETS.TIMEZONENAME ,TIMEOFFSETS.UTCDurationinMinutes 
+					,TIMEOFFSETS.TIMEZONEID,Sources.TIMEZONEID,DATA_RETRIEVAL_TIME,DATA_RETRIEVAL_UOM
+					,ksdf.FORMATTYPE,urls.SOURCEID,urls.ID,USERNAME,PASSWORD,SERVERNAME,PORTNUMBER,ORGANISATION,"group"
+					,MainSeparator,SubSeparator,SPOKETYPE,DATA_FETCH_TYPE,Sources.CreatedBy,Sources.SOURCETYPE_NAME ,custom_authenticationtype 
+					,MASTERSPOKEID,objecttype,UPLOADTYPE
+					)ur
+				 	--FOR XML RAW('URL')
+				)
+			;
+End;
+
+End if;
+
+VResult:=	(	
+		Select row_to_json(a)
+		from
+		(
+		Select 
+		(select VResultWeb as "URL" )
+		,(select VResultwebEntity as "URL" )
+		,(select VResultdb as "URL")
+		,(select VResultdb1 as "URL")
+		,(select VResultftp as "URL")
+		,(select VResultsh as "URL")
+		,(select VResultLDAP as "URL")
+        ,(select VResultdbentity as "URL")
+		,(select VResultshentity as "URL")
+        ,(select VResultFTPentity as "URL")    
+		)a
+		)
+		;
+
+Begin
+
+	VResult:=(
+		
+			Select Row_to_json(outs)
+			from
+			(
+			Select VResult as "OUTPUT" -- For XML Path('OUTPUT')
+			)outs
+				
+		);
+
+--VResult:= (Replace(Replace(Replace(VResult,'\',''),':"[',':['),']""',']"')); 
+Return(select VResult as "OUTPUT");
+
+End;
+
+End
+
+$function$;
+
+ALTER FUNCTION public.usp_dbservgetsourcecommonurl(json)
+    OWNER TO postgres;
+
+

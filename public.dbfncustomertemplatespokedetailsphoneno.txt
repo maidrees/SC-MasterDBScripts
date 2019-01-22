@@ -1,0 +1,80 @@
+-- FUNCTION: public.dbfncustomertemplatespokedetailsphonenointeger, integer, character varying, character varying, integer
+
+-- DROP FUNCTION public.dbfncustomertemplatespokedetailsphonenointeger, integer, character varying, character varying, integer;
+
+CREATE OR REPLACE FUNCTION public.dbfncustomertemplatespokedetailsphoneno(
+	custid integer,
+	locid integer,
+	separator character varying,
+	sourcename character varying,
+	vtype integer)
+RETURNS text
+    LANGUAGE 'plpgsql'
+    COST 100.0
+    VOLATILE 
+AS $function$
+
+ -- Type=1 stands for CustometTemplate
+ -- Type=2 stands for SOURCEURL
+ -- Type=3 stands for DEVICES
+ -- Type=4 stands for PhoneNO
+ -- Type=5 stands for EXTension
+ -- Type=6 stands for TIMEZONE
+
+declare 
+	Cnt 	int;
+	Cnter 	int;
+	vTemplate text;
+	templateId varchar(1000);
+BEGIN
+
+drop table if exists Templates;
+	
+create temp table Templates ( Id serial,TemplateId varchar(1000));
+
+Cnt:= 0;
+templateId:=NULL;
+vTemplate:= NULL;
+
+		 
+              
+		INSERT INTO Templates(TemplateId)
+		SELECT CP.PHONENO 
+		FROM KBEntityPHONE CP 
+		WHERE CP.CUSTOMER_ID=custid AND CP.LOCATION_ID=locid and CP.SOURCENAME=sourcename and CP.PHONENO is not null and CP.CReatedBY<>-1;
+
+Cnt=(select count(1) from Templates );
+
+If Cnt > 0 and Cnt is not null then
+Begin 		
+		Cnter:=1;
+
+                WHILE(Cnter<=Cnt) Loop
+
+			templateId:= Cast((select TemplateID from Templates where Id=Cnter) as Varchar(1000));
+
+			if VTemplate is null and TemplateId is not null then
+			begin
+			  VTemplate:=  templateId||Separator ;
+			End; 
+			elseif TemplateId is not null Then
+			Begin
+			  VTemplate:=VTemplate ||templateId ||Separator;
+			End;
+			End if;  
+		Cnter:= Cnter + 1;  
+		End Loop; 						
+END;
+End if;
+
+Return(VTemplate);
+
+End
+
+$function$;
+
+ALTER FUNCTION public.dbfncustomertemplatespokedetailsphoneno(integer, integer, character varying, character varying, integer)
+    OWNER TO postgres;
+
+
+

@@ -1,0 +1,509 @@
+-- FUNCTION: public.usp_kbeventmailjson
+
+-- DROP FUNCTION public.usp_kbeventmailjson;
+
+CREATE OR REPLACE FUNCTION public.usp_kbeventmail(
+	input json DEFAULT NULL::json)
+RETURNS json
+    LANGUAGE 'plpgsql'
+    COST 100.0
+    VOLATILE 
+AS $function$
+
+Declare 
+	VResult Json;
+	VAlerts Json;
+	VEvents Json;
+	VAlertNotifications Json;
+begin
+
+VEvents:=
+(
+	 	Select Array_to_json(Array_agg(Row_to_json(ievent))) as "event"
+		From
+		(	
+			select Coalesce(eventsmst.originalID,eventsmst.EVENT_ID) as "id"
+			,event_sd as "name",Details.mailcount as "mailcount",emailtimeperiod as "time",emailuom "uom",bodyformat "bodyformat",Mst.templateid "templateid"
+			,"emailsubject"  
+			,starttime starttime
+			,endtime endtime
+			,rulecriteria rulecriteria
+			,'id,name,mailcount,time,uom,templateid,emailsubject,starttime,endtime,rulecriteria' "Attribute_list"
+			,
+			(
+				Select Array_to_json(Array_agg(Row_to_json(tem))) as "template"
+				from
+				(
+				select distinct MailMst.EmailHtmlContent "EmailHtmlContent"
+				from  kbeventemailDetails MailDetails  
+				JOIN   kbeventemailmst MailMst on MailMst.templateid=MailDetails.templateid  
+				where MailMst.type='Events' and MailDetails.active='1' 
+				and MailMst.templateid=Mst.templateid
+				--for xml path('')
+				)as tem
+			) 
+				
+			,'' "metricdetails"
+			,
+			(
+			 
+				select 
+					Coalesce(
+						(
+							Select string_agg(emails,'') 
+							from
+							(
+							select distinct users.emailid ||';' emails
+							from kbuserMst users
+							join kbuserrole userrole
+							on userrole.USER_ID=users.USER_ID
+							JOIN kbroleMst	roleMst on roleMst.ROLE_ID=userrole.ROLE_ID
+							where 
+							roleMst.ROLE_NAME in 
+										(
+											select regexp_split_to_table(Details.EmailTO,';')
+										)
+							and roleMst.isactive='1' and userrole.Isactive='1'
+							)a
+							--for xml path('')
+						),'')
+				||
+					Coalesce(
+						(
+							Select string_agg(email,'')  
+							from
+							(
+							select distinct  item ||';' as email
+							from 	(
+								select regexp_split_to_table(Details.EmailTO,';') item
+								)a
+							--where item like '%@%' 
+							--for xml path('')
+							)a
+						) 
+						,'') "emailto"
+				--for xml path('emailto')
+				 
+			)
+				,
+				(
+					 
+
+					select 
+					Coalesce(
+						(Select string_agg(mails,'')
+						from
+						(
+							select distinct users.emailid ||';' mails
+							from kbuserMst users
+							join kbuserrole userrole
+							on userrole.USER_ID=users.USER_ID
+							JOIN kbroleMst	roleMst on roleMst.ROLE_ID=userrole.ROLE_ID
+							where 
+							roleMst.ROLE_NAME in (select regexp_split_to_table(Details.EmailCC ,';'))
+							and roleMst.isactive=1 and userrole.Isactive=1
+							--for xml path('')
+						)a	
+						)
+					,'')
+					||
+					Coalesce(
+						(Select String_Agg(email,'')
+						from	
+						(
+							select distinct  item ||';' as email
+							from 	(
+								select regexp_split_to_table(Details.EmailCC,';') item
+								)a
+							--where item like '%@%' 
+						--for xml path('')
+						) a
+						)
+					,'')"emailcc"
+
+					--for xml path('emailcc')
+					 
+				)	
+
+				,
+				(
+				 	select 
+						Coalesce(
+							(Select String_agg(email,'')
+							from
+							(
+								select distinct users.emailid ||';' email
+								from kbuserMst users
+								join kbuserrole userrole
+								on userrole.USER_ID=users.USER_ID
+								JOIN kbroleMst	roleMst on roleMst.ROLE_ID=userrole.ROLE_ID
+								where 
+								roleMst.ROLE_NAME in (select item from (select regexp_split_to_table(Details.EmailBCC,';') as item)a)
+								and roleMst.isactive='1' and userrole.Isactive='1'
+								--for xml path('')
+							)a
+							)
+						,'')
+					||
+						Coalesce(
+							(
+							Select String_Agg(emails,'')
+							from
+							(
+								select distinct  item ||';' emails
+								from (select regexp_split_to_table(Details.EmailBCC,';') as item)a
+								--where item like '%@%' 
+								--for xml path('')
+							)a
+							)
+							,'') "emailbcc"
+							--for xml path('emailbcc')
+				 
+				)	
+			from kbeventsMst eventsmst
+			JOin kbeventemailDetails Details on Details.EventID=Coalesce(eventsmst.originalID,eventsmst.EVENT_ID)
+			JOIN kbeventemailmst Mst on Mst.templateid=Details.templateid 
+			where Mst.type='Events'   and eventsmst.Isactive=1 and Details.active='1'
+			--for xml raw('event')--,root('output')
+		)ievent
+	 
+		
+ );
+ 
+
+VAlerts:=
+		(
+			
+		Select Row_to_json(output) 
+		from
+		(
+		Select Array_to_json(Array_Agg(row_to_json(src))) "source"
+		from
+		(
+		select    case when Coalesce(IsMultiDataSource,'0')='0' then SOURCETYPE_ID Else kpi.CorrelationID End as "id"
+		, case when Coalesce(IsMultiDataSource,'0')='0' then  SOURCETYPE_NAME Else 
+		
+		(
+		Select String_agg(sources,'')
+		from
+		(
+		Select SOURCETYPE_NAME ||  ';' sources
+		from cbcorrelationdetails Corr
+		Join KBSourceTypeMst Sources on Corr.SourceID=Sources.SOURCETYPE_ID
+		where Corr.CorrelationID=kpi.CorrelationID
+		)a
+		--for xml path('')	 
+		)
+		End as "name"
+		
+		, case when Coalesce(IsMultiDataSource,'0')='0' 
+		then  
+		(
+		Select String_agg(ents,'')
+		from
+		(
+		select Distinct C.ENTITY_NAME || ';'  ents
+		from 
+		KBEntityPhone A 
+		join KBEntities B on A.ENTITY_ID=B.ENTITY_ID 
+		join KBEntityMst C on B.ENTITYDEF_ID=C.ENTITYDEF_ID
+		where A.SOURCETYPEID=sources.SOURCETYPE_ID
+		--for xml path('')
+		)a	 
+		) 
+		Else 
+
+		(
+		Select String_agg(entdef,'')
+		from
+		(
+		Select Distinct C.ENTITY_NAME ||  ';'  as entdef
+		from cbcorrelationdetails Corr
+		Join KBSourceTypeMst Sources on Corr.SourceID=Sources.SOURCETYPE_ID
+		Join KBEntityPhone A on Sources.SOURCETYPE_ID=A.SOURCETYPEID
+		join KBEntities B on A.ENTITY_ID=B.ENTITY_ID 
+		join KBEntityMst C on B.ENTITYDEF_ID=C.ENTITYDEF_ID
+		where Corr.CorrelationID=kpi.CorrelationID
+		--for xml path('')	 
+		)a
+		)
+		End as "entitydefinitions"
+
+		,Coalesce(originalid,kpi.kpi_id) as "kpiid"
+		, IsMultiDataSource as "ismultidatasource"
+		,  Coalesce(TGroup.ACTION_CUSTOMIZE_NAME,'None') "GroupName"
+		,
+		(
+		(
+		Select String_agg(stats,'')
+		from
+		(
+		select  stat.status||'#CWT01#' stats
+		from 
+		kbalertmst alrts  
+		join kbalertaction actions on alrts.alert_id=actions.alert_id
+		join kbkpistatus stat on stat.statusid= cast(actions.alertaction as int)
+		where alrts.alert_id=alrt.Alert_ID and actions.isactive='1'
+		--for xml path('')
+		)a
+		)
+		) as "kpistatus"
+		,'id,name,entitydefinitions,kpistatus,kpiid,ismultidatasource,GroupName' "Attribute_list"
+		,(
+		select Array_to_json(Array_Agg(row_to_json(alrt))) "alert"
+		From
+		(
+		select Alerts.alert_id as "id",alert_name as "name", Details1.mailcount as "mailcount",Coalesce(details1.EmailRule,0) "EmailRule"
+		,Coalesce(Details1.AlertFrequency,tempDetails.AlertFrequency,0) "AlertFrequency"
+		,Coalesce(Details1.AlertFrequencyUOM,tempDetails.AlertFrequencyUOM,'') "AlertFrequencyUOM"
+		,Coalesce(Details1.ANotificationOperator,tempDetails.ANotificationOperator,'') "ANotificationOperator"
+		,case when coalesce(details1.starttime,tempdetails.starttime) is not null and coalesce(details1.starttime,tempdetails.starttime) !=''
+			and coalesce(details1.starttime,tempdetails.starttime) !='01/01/1900'
+				and coalesce(details1.endtime,tempdetails.endtime) is not null and coalesce(details1.endtime,tempdetails.endtime)!=''
+				and coalesce(details1.endtime,tempdetails.endtime) !='01/01/1900'
+			then 
+				case when lower(coalesce(details1.emailuom,tempdetails.emailuom)) like '%day%' Then DATE_PART('day',cast(coalesce(details1.endtime,tempdetails.endtime) as timestamp)-cast(coalesce(details1.starttime,tempdetails.starttime) as timestamp))
+				when 	lower(coalesce(details1.emailuom,tempdetails.emailuom)) like '%hour%' Then DATE_PART('hour',cast(coalesce(details1.endtime,tempdetails.endtime) as timestamp)-cast(coalesce(details1.starttime,tempdetails.starttime) as timestamp))
+				when 	lower(coalesce(details1.emailuom,tempdetails.emailuom)) like '%minute%' Then DATE_PART('minute',cast(coalesce(details1.endtime,tempdetails.endtime) as timestamp)-cast(coalesce(details1.starttime,tempdetails.starttime) as timestamp))
+				when 	lower(coalesce(details1.emailuom,tempdetails.emailuom)) like '%second%' Then DATE_PART('second',cast(coalesce(details1.endtime,tempdetails.endtime) as timestamp)-cast(coalesce(details1.starttime,tempdetails.starttime) as timestamp))
+				end
+		else 		
+		coalesce(details1.emailtimeperiod,tempdetails.emailtimeperiod) 		
+		end 
+		 "time"
+		,coalesce(details1.emailuom,tempdetails.emailuom) "uom"
+		,coalesce(details1.bodyformat,tempdetails.bodyformat)  "bodyformat"
+		,details1.templatedetailid "emailid"
+		,coalesce(details1.emailsubject,tempdetails.emailsubject)  "emailsubject"
+		,Alerts.alerttype "alerttype",Alerts.severity "severity",Coalesce(Alerts.IsMailConfigured,cast('0' as bit)) "email"
+		,Coalesce(IsSMSConfigured,cast('0' as bit)) "sms",Coalesce(IsAPIConfigured,cast('0'as bit)) "api"
+		,coalesce(details1.starttime,tempdetails.starttime) starttime
+		,coalesce(details1.endtime,tempdetails.endtime) endtime
+		,coalesce(details1.rulecriteria,tempdetails.rulecriteria) rulecriteria
+		, method_type "apiaction"
+		, Details1.authentication_type "authentication_type"
+		,(
+			select row_to_json(a) "entitymapping" 
+			from 
+			(
+				select array_Agg("id") "id"
+				from
+				(
+					select entitydef_id "id" 
+					from kbalerts_entitydefinitionsmapping entmap 
+					where Alerts.alert_id=entmap.alert_id
+				)aa
+			) a
+		) 
+		,'id,name,mailcount,EmailRule,AlertFrequency,AlertFrequencyUOM,ANotificationOperator,time,uom,emailid,emailsubject,emailsubject,alerttype,severity,email,sms,api,starttime,endtime,rulecriteria' "Attribute_list"
+		,
+		(
+		Select Array_to_json(Array_Agg(row_to_json(temps))) as "template"
+		from
+		( 
+		select distinct replace(replace(MailDetails.EmailHtmlContent,'<','&lt;'),'>','&gt;')  "EmailHtmlContent"
+		from  kbeventemailDetails MailDetails  
+		JOIN  kbeventemailmst MailMst on MailMst.templateid=MailDetails.templateid  
+		where MailMst.type='Alerts' and MailDetails.active='1' 
+		and MailMst.templateid=Mst.templateid
+		--for xml path('')
+		)as temps
+		) 
+		,Details1.Metricplaceholder "metricdetails"
+
+		,(
+		 
+			select 
+			Coalesce(
+			(
+			Select string_agg(emails,'') 
+			from
+			(
+			select distinct users.emailid ||';' emails
+			from kbuserMst users
+			join kbuserrole userrole
+			on userrole.USER_ID=users.USER_ID
+			JOIN kbroleMst	roleMst on roleMst.ROLE_ID=userrole.ROLE_ID
+			where 
+			roleMst.ROLE_NAME in 
+			(
+			select regexp_split_to_table(Details1.EmailTO,';')
+			)
+			and roleMst.isactive='1' and userrole.Isactive='1'
+			)a
+			--for xml path('')
+			),'')
+			||
+			Coalesce(
+			(
+			Select string_agg(email,'') 
+			from
+			(
+			select distinct  item ||';' as email
+			from 	(
+			select regexp_split_to_table(Details1.EmailTO,';') item
+			)a
+			--where item like '%@%' 
+			--for xml path('')
+			)a
+			) 
+			,'') "emailto"
+		--for xml path('emailto')
+		
+		)
+		,(
+		 
+			select 
+			Coalesce(
+			(Select string_agg(mails,'')
+			from
+			(
+			select distinct users.emailid ||';' mails
+			from kbuserMst users
+			join kbuserrole userrole
+			on userrole.USER_ID=users.USER_ID
+			JOIN kbroleMst	roleMst on roleMst.ROLE_ID=userrole.ROLE_ID
+			where 
+			roleMst.ROLE_NAME in (select Regexp_split_to_table(Details1.EmailCC ,';'))
+			and roleMst.isactive=1 and userrole.Isactive=1
+			--for xml path('')
+			)a	
+			)
+			,'')
+			||
+			Coalesce(
+			(Select String_Agg(email,'')
+			from	
+			(
+			select distinct  item ||';' as email
+			from 	(
+			select regexp_split_to_table(Details1.EmailCC,';') item
+			)a
+			--where item like '%@%' 
+			--for xml path('')
+			) a
+			)
+			,'')"emailcc"
+
+		--for xml path('emailcc')
+		 
+		)	
+		,(
+		 
+			select 
+			Coalesce(
+			(Select String_agg(email,'')
+			from
+			(
+			select distinct users.emailid ||';' email
+			from kbuserMst users
+			join kbuserrole userrole
+			on userrole.USER_ID=users.USER_ID
+			JOIN kbroleMst	roleMst on roleMst.ROLE_ID=userrole.ROLE_ID
+			where 
+			roleMst.ROLE_NAME in (select item from (select regexp_split_to_table(Details1.EmailBCC,';') as item)a)
+			and roleMst.isactive='1' and userrole.Isactive='1'
+			--for xml path('')
+			)a
+			)
+			,'')
+			||
+			Coalesce(
+			(
+			Select String_Agg(emails,'')
+			from
+			(
+			select distinct  item ||';' emails
+			from (select regexp_split_to_table(Details1.EmailBCC,';') as item)a
+			--where item like '%@%' 
+			--for xml path('')
+			)a
+			)
+			,'') "emailbcc"
+		--for xml path('emailbcc')
+		 
+		)
+
+		from kbalertMst Alerts
+		Left JOin ( Select * from kbeventemailDetails where active='1') Details1 on Details1.EventID=Alerts.alert_id
+		Left JOIN (Select * from  kbeventemailmst where type='Alerts' ) Mst on Mst.templateid=Details1.templateid 
+		Left outer Join ( Select * from kbeventemailDetails_temphold where active='1') tempDetails on tempDetails.eventid=Alerts.ALERT_ID
+		Left outer join ( Select * from kbeventemailmst_TempHold where type='Alerts' ) tempMailMst on tempMailMst.templateid=tempDetails.templateid
+		where Alerts.Isactive='1'  and Alerts.alert_id=alrt.alert_id
+		--for xml raw('alert')
+		) as alrt
+		)
+
+		from kbalertMst alrt 
+		join kbkpiMst kpi on Coalesce(kpi.originalid,kpi.kpi_id)=alrt.alert_kpi
+		Join kbalertaction AActions on Alrt.alert_id=AActions.alert_id
+		Join kbkpistatus KStatus on cast(AActions.alertaction as int)=KStatus.statusid
+
+		Left join kbsourcetypeMst sources on sources.SOURCETYPE_ID=kpi.source_id and coalesce(kpi.IsMultiDataSource,'0')='0'
+		Left join CBCorrelationMst corrmst on kpi.CorrelationID=corrmst.CorrelationID and coalesce(kpi.IsMultiDataSource,'1')='1'
+		left outer JOIN (Select * from kbeventemailDetails where active=1) Details1 on Details1.EventID=alrt.alert_id
+		left outer JOIN ( Select * from  kbeventemailmst where type='Alerts'  )Mst on Mst.templateid=Details1.templateid 
+		Join kbkpirule KRules on kpi.kpi_id=Krules.kpi_id and KStatus.status=KRules.ruleaction
+		join (select * 
+		from  KBTEMPLATEGROUPINGMST A
+		where A.GROUPDETAILID = (Select min (b.GROUPDETAILID) 
+		from KBTEMPLATEGROUPINGMST B where A.ACTIONID=B.ACTIONID and A.TEMPLATEID=B.TEMPLATEID)
+
+		) TGroup  on KRules.action_groupid=TGroup.GROUPDETAILID
+		where  alrt.Isactive='1' and kpi.isactive='1'  and krules.isactive='1' and AActions.isactive='1'
+		group by IsMultiDataSource,SOURCETYPE_ID,kpi.CorrelationID ,SOURCETYPE_NAME,corrmst.CorrelationName,originalid,kpi.kpi_id,TGroup.ACTION_CUSTOMIZE_NAME,alrt.alert_id
+		--for xml raw('source'),root('alerts')
+		)src
+		)output
+		);
+ 
+	
+VAlertNotifications:=(
+
+			Select Row_to_json(outs) 
+			from
+			(
+			Select Array_to_json(Array_Agg(row_to_json(tab))) "Table"
+			from
+			(
+			Select TABLE_NAME "name",'name' "Attribute_list",
+			(
+				Select Array_to_json(Array_Agg(row_to_json(col))) "column"
+				from
+				(
+				Select TABLE_COLUMNS "Name",Coalesce(ATTRIBUTES,'') "attribute",DATATYPE "datatype",Coalesce(IS_PRIMARY,0) "isprimary"
+				,Coalesce(IS_NULLABLE,0) "isnullable",Coalesce(XPATH,'') "root"
+				,'Name,attribute,datatype,isprimary,isnullable,root' "Attribute_list"
+				from KBSPOKETABLEDETAILS Details 
+				where Alerts.RECORDID=Details.TABLE_ID 
+				--For xml RAW('column')
+				) as col
+			)
+			from KBSPOKETABLE Alerts
+			where SPOKE_TYPE='Alerts'
+			--For xml RAW('Table'),root('alertnotifications')
+			)tab
+			)outs
+			);				
+ 
+ Return(	
+		Select Row_to_json(outp)
+		from
+		(
+			Select Row_to_json(aa) as "output"
+			from
+			(
+			select VEvents as "event",VAlerts as "alerts",VAlertNotifications as "alertnotifications"
+			)aa
+		) outp	
+		--for xml path('output')
+	);
+ 		 
+End
+
+$function$;
+
+ALTER FUNCTION public.usp_kbeventmail(json)
+    OWNER TO postgres;
+
+

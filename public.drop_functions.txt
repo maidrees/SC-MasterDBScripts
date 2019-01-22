@@ -1,0 +1,84 @@
+-- FUNCTION: public.drop_functionsjson
+
+-- DROP FUNCTION public.drop_functionsjson;
+
+CREATE OR REPLACE FUNCTION public.drop_functions(
+	input json DEFAULT NULL::json)
+RETURNS character varying
+    LANGUAGE 'plpgsql'
+    COST 100.0
+    VOLATILE 
+AS $function$
+
+Declare 
+	VFunctionname	varchar(255);
+	Vtablename	varchar(255);
+	VResult		boolean;
+
+Begin
+
+drop table if exists dbobjects;
+create temp table dbobjects(id serial, objectname varchar(255),objecttype smallint);
+
+VResult:='1';
+
+insert into dbobjects(objectname,objecttype)
+SELECT  p.proname,1 objecttype
+FROM    pg_catalog.pg_namespace n
+JOIN    pg_catalog.pg_proc p
+ON      p.pronamespace = n.oid
+WHERE   n.nspname = 'public' and (lower(p.proname) like '%_test' or lower(p.proname) like '%_c2' or lower(p.proname) like '%working')
+-- union all
+-- select table_name ,2
+-- from information_schema.tables 
+-- where lower(table_name) like '%_c2' and table_schema='public'
+
+;
+
+while (
+	SELECT  count(1)
+	from dbobjects )>0
+loop
+
+	SELECT  objectname into VFunctionname
+	FROM    dbobjects
+	WHERE   objecttype=1
+	limit 1;
+
+	-- SELECT  objectname into Vtablename
+-- 	FROM    dbobjects
+-- 	WHERE   objecttype=2
+-- 	limit 1;
+
+ 
+		Execute ('Drop function '||VFunctionname ||'(json) ;' );
+ 
+
+	-- if Vtablename is not null then
+-- 	begin
+-- 		Execute ('Drop table '||Vtablename ||' ;' );
+-- 	end;
+-- 	end if;
+
+-- SELECT 'Drop function '||   p.proname || '(json);'
+-- FROM    pg_catalog.pg_namespace n
+-- JOIN    pg_catalog.pg_proc p
+-- ON      p.pronamespace = n.oid
+-- WHERE   n.nspname = 'public' and (  lower(p.proname) like '%_c2' )
+-- union all
+-- 
+-- select 'Drop table '|| table_name || ';'
+-- from information_schema.tables 
+-- where lower(table_name) like '%_c2' and table_schema='public'
+
+end loop;
+
+return(VResult);
+End
+
+$function$;
+
+ALTER FUNCTION public.drop_functions(json)
+    OWNER TO postgres;
+
+

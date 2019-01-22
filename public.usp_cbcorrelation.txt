@@ -1,0 +1,2386 @@
+-- FUNCTION: public.usp_cbcorrelationjson
+
+-- DROP FUNCTION public.usp_cbcorrelationjson;
+
+CREATE OR REPLACE FUNCTION public.usp_cbcorrelation(
+	input json)
+RETURNS json
+    LANGUAGE 'plpgsql'
+    COST 100.0
+    VOLATILE 
+AS $function$
+ 
+
+DECLARE
+	VTRAN		VARCHAR(30);
+	VCreated_By	int;
+	VID		int;
+	VResult		json;
+	VCORRELATIONTYPEID	int;
+	VCorrelationName	varchar(255);
+	Vcorrelationid	int;
+	Vtableid	int;
+	VSELECTEDSOURCENAMES text;
+	VDefaultDataSources int;
+	VCnt		int;
+	VCnter		int;
+	VUniqueID	varchar(100);
+	VCORRELATIONNAMES varchar(255);
+	VTablestructure	Json;
+	VDataType	varchar(255);
+	VFIELDNAME	varchar(255);
+	VIsActive	Varchar(10);
+	VFIELDCHK	smallint;
+	VFirstTag 	Json;
+	VSecondTag 	Json;
+	VThirdTag 	Json;
+	VThirdTag_1 	Json;
+	VFourthTag 	Json;
+	VFifthTag 	Json;
+	VFirstSubTag 	Json;
+	VSixthTag 	Json;
+	VSeventhTag 	Json;
+	VEighthTag 	Json;
+	VNinthTag 	Json;
+	VMainTag 	Json;
+	VDimensions	json;
+	VEntities	json;	
+	VDefaultSource 	BIGINT;
+	Vnew 		varchar(225);
+	Vnew1 		varchar(225);
+	Vnewold 	varchar(225);
+	VExpectencyID	int;
+	VSname 		VARCHAR(1000);
+	VActiondate	timestamp default(current_timestamp at time zone 'utc')	;	
+
+Begin
+
+drop table if exists temps;
+drop table if exists users;
+drop table if exists TEMPCORRELATION;	 
+drop table if exists CORREntDim;
+drop table if exists CORREntDimDetails; 
+drop table if exists SELECTEDSOURCES;
+Drop table if exists DataSourcesInfo;
+Drop table if exists ConfigDetails;
+Drop table if exists AttWeightInfo;
+Drop table if exists Latency;
+Drop table if exists CORRELATION;
+Drop table if exists Sources;
+Drop table if exists Sourceids;
+Drop table if exists SOURCEDETAILS;
+Drop table if exists FuzzyLogic;
+
+create temp table SOURCEDETAILS(id serial,item varchar(1000));
+create temp table temps(id serial,ivalue json);
+create temp table users (id serial,userid int);
+create temp table TEMPCORRELATION(CorrelationID BIGINT,CorrelationName varchar(100),CorrelationTypeID varchar(100),selectedSources text,DEFAULTDATASOURCE INT
+	,FieldToCorrelate varchar(100),DSName varchar(100),DSFieldName varchar(100),MatchType varchar(100),MatchparamName varchar(100),MatchParamvalue1 INT ,MatchParamvalue2 INT
+	,IsEntityDimension smallint);
+
+create temp table CORREntDim (CorrelationID BIGINT,ObjectID bigint,ObjectName varchar(100), ObjectType varchar(100));
+create temp table CORREntDimDetails(CorrDimEntId Bigint,CorrelationID BIGINT,ObjectID bigint,ObjectName varchar(100), MstObjectID bigint, MstObjectType  varchar(100));
+create temp table SELECTEDSOURCES(id serial,Sourcenames int,HasLegs bit,HasNMachines bit,iTYPE int);
+create temp table ConfigDetails(id serial,ConfigurationID BIGINT,SourceID bigint, FieldName varchar(100),Rowindex int);
+create temp table Sources(id serial,sourceids text);
+create temp table Sourceids(id serial,Sids text);
+create temp table FuzzyLogic(id serial,ServiceExpression text,RuleID bigint ,SpokeID bigint,SOURCEFIELDId bigint,value varchar(225) ,Priority smallint,Rowindex int
+, SelectedSourceid bigint,Value1 varchar(50),Value2 varchar(50),MappingDataIndex int);
+
+create temp table DataSourcesInfo(id serial
+    ,FieldType varchar(100)
+    ,SpokeID bigint
+    ,SourceName varchar(100)
+    ,SOURCEFIELDId bigint,Sourcefield varchar(100)
+    ,matchtype varchar(100),matchrule varchar(100)
+    ,matchparam varchar(100)
+    ,param1 varchar(225)
+    ,param2 varchar(225)
+    ,param1value varchar(225)
+    ,param2value varchar(225)
+    ,MasterTableName varchar(100)
+    ,MasterRecordName varchar(100)
+    ,SELECTEDDATASOURCEID bigint
+    ,SELECTEDDATASOURCE varchar(225)
+    ,AttributeName varchar(225)
+    ,Ncharacters varchar(225)
+    ,IsRequired bit
+    ,Rowindex int
+    ,ServiceExpression varchar(1000)
+    );
+
+create temp table AttWeightInfo(id int,UniqueID varchar(100),SelectDataSources varchar(3000),DSIds bigint,FieldName varchar(100),FieldValue BIGINT, POSOFFSET varchar(25),NEGOFFSET varchar(25),UOM varchar(50),NID bigint,RuleIndex INT
+, iCutoffweight  smallint, Mincutoffweight smallint, maxcutoffweight smallint, DSID int,ConditionSymbol varchar(1000),CONDTIONVALUE1 varchar(100)
+,CONDTIONVALUE2 varchar(100),NewlyAdded smallint);
+
+create temp table Latency (ID Serial,SourceName VARCHAR(100),MaxTime VARCHAR(100),TimeUnits VARCHAR(100),Weightage BIGINT, LegTime INT, LegTimeUnit VARCHAR(20));
+
+create temp table CORRELATION (ID Serial,SPOKE_ID INT,TABLE_NAME VARCHAR(100),TABLE_COLUMNS VARCHAR(200),ATTRIBUTES VARCHAR(100),IS_NULLABLE BIT,IS_PRIMARY BIT
+	,OPERATION_TYPE VARCHAR(100),DATATYPE VARCHAR(100),XPATH VARCHAR(100),correlationId int,SpokeId int);
+
+insert into temps(ivalue)
+select input;
+
+VTRAN:= (select ivalue->'CORRELATIONDETAILS'->> 'TRANSTYPE' from temps limit 1);
+VCreated_By:= (select ivalue->'CORRELATIONDETAILS'->> 'LoginId' from temps limit 1);
+VID:= (select ivalue->'CORRELATIONDETAILS'->> 'VID' from temps limit 1);
+
+insert into users(userid)
+select userid
+From
+KBUserCustomerMapping A
+Inner join
+(
+	Select customerid 
+	from KBUserCustomerMapping
+	where userid=VCreated_By
+) B  on A.customerid=B.customerid
+where A.customerid!=1
+
+;
+
+IF (Lower(VTRAN) = 'create')  Then
+BEGIN
+
+/* Inserting into the Temporary table the master information received in the input */
+
+	INSERT INTO TEMPCORRELATION(CorrelationName,CorrelationTypeID,selectedSources,DEFAULTDATASOURCE,IsEntityDimension)
+	select ivalue->'CORRELATIONDETAILS'->'CORRELATION'->> 'NAME' 
+	,ivalue->'CORRELATIONDETAILS'->'CORRELATION'->> 'TYPE' 
+	,ivalue->'CORRELATIONDETAILS'->'CORRELATION'->> 'SELECTEDDATASOURCE'
+	,cast(ivalue->'CORRELATIONDETAILS'->'CORRELATION'->> 'DEFAULTDATASOURCE'  as int)
+	,cast(ivalue->'CORRELATIONDETAILS'->'CORRELATION'->> 'CorrelationFor' as smallint)
+	from temps 
+	limit 1	;
+	
+
+      Select CorrelationTypeID,CorrelationName into VCORRELATIONTYPEID, VCorrelationName
+      FROM TEMPCORRELATION limit 1;
+
+      
+   
+--Return(select array_to_json(array_Agg(row_to_json(a))) from(select * from TEMPCORRELATION)a);
+  
+	
+      if not exists(select 1 from CBCorrelationMst B where lower(B.CorrelationName)=lower(VCorrelationName) and exists (select 1 from users where b.createdby=users.userid ) ) Then
+      begin
+
+	   /* Inserting the master data in the Correlation master table */
+        
+	INSERT INTO CBCorrelationMst(CorrelationName,TypeID,CorrelationDate,CreatedBy,IsActive,IsEntityDimension)
+	SELECT CorrelationName,CORRELATIONTYPEID,Actiondate,created_by,isactive,IsEntityDimension
+	from
+	(		
+	SELECT CorrelationName,VCORRELATIONTYPEID CORRELATIONTYPEID,VActiondate Actiondate,Vcreated_by created_by,cast('1' as smallint) isactive,IsEntityDimension
+	FROM TEMPCORRELATION
+	limit 1
+	) inp
+	;
+	
+      
+	Vcorrelationid:= ( SELECT currval(pg_get_serial_sequence('CBCorrelationMst','correlationid')));      
+	
+      end;
+      End if;
+
+	If (Select Count(1) from CBCorrelationMst)<=1 Then
+	Begin
+			 
+		Insert into KBSPOKETABLE(SPOKE_ID,SPOKE_TYPE,TABLE_NAME,TABLE_TYPE,XPATH,TYPE,CorrelationId,CreatedBy,CreatedDate,ModifiedBy,ModifiedDate)
+		Select Vcorrelationid,'CORRELATION','DBKPIFact','KPI','ROWS/MultipleDatasourceKPIS/KPI',2,Vcorrelationid,VCreated_By,VActiondate,VCreated_By,VActiondate;
+
+		Vtableid:=( SELECT currval(pg_get_serial_sequence('KBSPOKETABLE','recordid')));      
+	 
+		INSERT INTO KBSPOKETABLEDETAILS(SPOKE_ID,TABLE_ID,TABLE_COLUMNS,ATTRIBUTES,IS_NULLABLE,IS_PRIMARY,DATATYPE,OPERATION_TYPE,XPATH) 
+		VALUES
+		( vcorrelationid,vtableid,'source_id','SOURCEID',0,0,'bigint','INSERT','ROWS')
+		,(vcorrelationid,vtableid,'KPIFactID','kpifactid',0,0,'BIGINT','INSERT','ROWS/MultipleDatasourceKPIS/KPI')
+		,(vcorrelationid,vtableid,'KPIID','id',0,0,'BIGINT','INSERT','ROWS/MultipleDatasourceKPIS/KPI')
+		,(vcorrelationid,vtableid,'AlertID','alertid',0,0,'BIGINT','INSERT','ROWS/MultipleDatasourceKPIS/KPI')
+		,(vcorrelationid,vtableid,'KPIStatus','status',0,0,'BIGINT','INSERT','ROWS/MultipleDatasourceKPIS/KPI')
+		,(vcorrelationid,vtableid,'EntityId','ENTITYID',0,0,'bigint','INSERT','ROWS')
+		,(vcorrelationid,vtableid,'Seq','COMMONGUID',0,0,'varchar','INSERT','ROWS/ROW')
+		,(vcorrelationid,vtableid,'EntityLocationID','LOCATIONID',0,0,'bigint','INSERT','ROWS')
+		,(vcorrelationid,vtableid,'ConditionStatusName','statusname',0,0,'varchar(100)','INSERT','ROWS/MultipleDatasourceKPIS/KPI')
+		,(vcorrelationid,vtableid,'ConditionGroupingName','groupingname',0,0,'varchar(100)','INSERT','ROWS/MultipleDatasourceKPIS/KPI')
+;
+
+	End;
+	End if;
+
+      
+      /* Inserting the Dimension and Entity Details */	
+ 
+		
+	INSERT INTO CORREntDim(CorrelationID,ObjectID,ObjectName,ObjectType)
+	Select A.Correlationid,A.DimensionID ObjectID, Dimensions.DIMENSIONNAME ObjectName,A.ObjectType
+	from
+	(
+		Select 	
+		Vcorrelationid Correlationid
+		,cast(ivalue->'CORRELATIONDETAILS'->'CORRELATION'->'DimensionEntityDetails'->'Dimensions'->'Dimension'->>'DimensionID' as int) as DimensionID
+		,'DIMENSION' ObjectType
+		from temps 
+		limit 1
+	) A
+	Join KB_DIM_DIMENSIONMST Dimensions on A.DimensionID=Dimensions.ID;
+	
+	INSERT INTO CORREntDim(CorrelationID,ObjectID,ObjectName,ObjectType)
+	Select A.Correlationid,A.ENTITY_ID, Entities.ENTITY_NAME,A.ObjectType
+	from
+	(
+		Select 	
+		Vcorrelationid Correlationid
+		,cast(ivalue->'CORRELATIONDETAILS'->'CORRELATION'->'DimensionEntityDetails'->'Entities'->'Entity'->>'EntityID' as int) ENTITY_ID
+		,'ENTITY' ObjectType
+		from temps 
+		limit 1
+	) A
+	Join KBEntities Entities on A.ENTITY_ID=Entities.ENTITYDEF_ID;
+	 
+	  
+	INSERT INTO CORREntDimDetails(CorrelationID,ObjectID,ObjectName,MstObjectID,MstObjectType)
+	Select A.Correlationid,A.FieldID ObjectID, A.FieldName ObjectName,Dimensions.ObjectID,A.ObjectType
+	from
+	(
+		Select 	
+		Vcorrelationid Correlationid
+		,cast(ivalue->'CORRELATIONDETAILS'->'CORRELATION'->'DimensionEntityDetails'->'Dimensions'->'Dimension'->'FIELD'->>'FieldID' as int) FieldID
+		,ivalue->'CORRELATIONDETAILS'->'CORRELATION'->'DimensionEntityDetails'->'Dimensions'->'Dimension'->'FIELD'->>'FieldName' FieldName
+		,cast(ivalue->'CORRELATIONDETAILS'->'CORRELATION'->'DimensionEntityDetails'->'Dimensions'->'Dimension'->'FIELD'->>'DATASOURCEID' as int) as DimensionID
+		,'DIMENSION' ObjectType
+		from temps 
+		limit 1	
+		
+	) A
+	Join CORREntDim Dimensions on A.DimensionID=Dimensions.ObjectID and A.Correlationid=Dimensions.CorrelationID
+	where Dimensions.ObjectType='DIMENSION';
+	
+	INSERT INTO CORREntDimDetails(CorrelationID,ObjectID,ObjectName,MstObjectID,MstObjectType)
+	Select A.Correlationid,A.FieldID ObjectID, A.FieldName ObjectName,Entities.ObjectID,A.ObjectType
+	from
+	(
+		Select 	
+		Vcorrelationid Correlationid
+		,cast(ivalue->'CORRELATIONDETAILS'->'CORRELATION'->'DimensionEntityDetails'->'Entities'->'Entity'->'Branch'->>'LocationID' as int) FieldID
+		,ivalue->'CORRELATIONDETAILS'->'CORRELATION'->'DimensionEntityDetails'->'Entities'->'Entity'->'Branch'->>'LocationName' FieldName
+		,cast(ivalue->'CORRELATIONDETAILS'->'CORRELATION'->'DimensionEntityDetails'->'Entities'->'Entity'->'Branch'->>'EntityID' as int) EntityID
+		,'ENTITY' ObjectType
+		from temps 
+		limit 1
+	) A
+	Join CORREntDim Entities on A.EntityID=Entities.ObjectID and A.Correlationid=Entities.CorrelationID
+	where Entities.ObjectType='ENTITY';
+	   
+	 
+	 /* Inserting into CBCorrDimEntityMappingMst and CBCorrDimEntityMappingDetails. We store the entity and the dimensions mapped to the correaltion rule */
+	 
+	 
+	 Insert into CBCorrDimEntityMappingMst(CorrelationId,ObjectID,ObjectName,ObjectType,CreatedBy,ModifiedBy, ModifiedDate)
+	 Select Mst.CorrelationID,mst.ObjectID,mst.ObjectName,mst.ObjectType,Vcreated_by CreatedBy, Vcreated_by ModifiedBy,VActiondate ModifiedDate
+	 From CORREntDim Mst;
+	 
+	 Update CORREntDimDetails
+	 set CorrDimEntId=Mst.CorrDimEntID
+	 From
+	 CBCorrDimEntityMappingMst Mst 
+	 where CORREntDimDetails.CorrelationID=Mst.CorrelationId and CORREntDimDetails.MstObjectID=Mst.ObjectID and CORREntDimDetails.MstObjectType=Mst.ObjectType;
+	 
+	 Insert into CBCorrDimEntityMappingDetails(CorrDimEntID,CorrelationId,Met_LocID,Met_LocName,ObjectType,CreatedBy,ModifiedBy, ModifiedDate)
+	 Select Details.CorrDimEntId,Details.CorrelationID,Details.MstObjectID,Details.ObjectName, details.MstObjectType,Vcreated_by CreatedBy
+	 , Vcreated_by ModifiedBy,VActiondate ModifiedDate
+	 from CORREntDimDetails Details
+	 where not exists (Select 1 from CBCorrDimEntityMappingDetails CDetails where Details.CorrelationID=CDetails.CorrelationId
+				and Details.MstObjectType=CDetails.ObjectType and Details.ObjectName=CDetails.Met_LocName);
+	 
+	 
+	 
+	VSELECTEDSOURCENAMES:= (SELECT selectedSources from TEMPCORRELATION);
+      
+	VDefaultDataSources:= (SELECT DEFAULTDATASOURCE from TEMPCORRELATION);
+
+      
+	INSERT INTO SELECTEDSOURCES(SOURCENAMES,HasLegs,HasNMachines,iTYPE)
+	SELECT 
+	  cast(SUBSTRING(item,0,strpos(item,';')) as int) Sourceid
+	, cast(SUBSTRING(item,strpos(item,';')+1,1) as bit) HasNLegs
+	, Cast(SUBSTRING(item,strpos(item,';')+3,1) as bit) HasNMachines     
+	, cast(SUBSTRING(item,strpos(item,';')+5,1) as int) iTYPE     
+	FROM 
+	(
+	select item
+	from
+		(
+		select regexp_split_to_table(VSELECTEDSOURCENAMES,'#CWDB01#') as item
+		)aa
+	where item !='')A
+	;
+	
+		/* Inserting the sources that have been used in the rule */
+		INSERT INTO CBCorrelationDetails(CorrelationID,SourceID,IsSelected,IsActive,CreatedBy,HasLegs,HasNMachines,typeid)
+		SELECT Vcorrelationid,KSTM.SOURCETYPE_ID,CASE WHEN Sourcenames = VDefaultDataSources THEN 1 ELSE 0 END ,'1',Vcreated_by
+		,Ss.HasLegs
+		,SS.HasNMachines
+		,SS.iTYPE
+		FROM SELECTEDSOURCES SS
+		INNER JOIN KBSourceTypeMst KSTM ON KSTM.SOURCETYPE_ID = SS.Sourcenames
+		where not exists(select 1 from CBCorrelationDetails where correlationid=Vcorrelationid)
+		; 
+ 
+
+	INSERT INTO DataSourcesInfo(FieldType,SpokeID,SourceName,SOURCEFIELDId,Sourcefield,matchtype,matchrule,param1 ,param2,param1value,param2value
+	,MasterTableName,MasterRecordName,SELECTEDDATASOURCEID,SELECTEDDATASOURCE,AttributeName,Ncharacters,IsRequired,Rowindex,ServiceExpression )
+	SELECT 
+	FieldType  
+	,SPOKEID  
+	,SourceName  
+	,SOURCEFIELDID
+	,SOURCEFIELDNAME  
+	,MATCHTYPE
+	,MatchRule
+	,PARAM1
+	,PARAM2
+	,PARAM1VALUE
+	,PARAM2VALUE
+	,MasterTableName
+	,MasterRecordName	
+	,SELECTEDDATASOURCEID	
+	,SELECTEDDATASOURCE
+	,AttributeName
+	,Ncharaters
+	,ISREQUIRED
+	,RowIndex
+	,ServiceExpression AS ServiceExpression  
+	FROM 
+
+	(	 
+		Select Fuzzylogic->>'ServiceExpression' ServiceExpression
+		,FieldType,SPOKEID,sourcename,SOURCEFIELDID,SOURCEFIELDNAME,ISREQUIRED,MatchRule,MATCHTYPE,PARAM1,PARAM2,PARAM1VALUE,PARAM2VALUE, MasterTableName, MasterRecordName
+		,SELECTEDDATASOURCEID,SELECTEDDATASOURCE,AttributeName,Ncharaters,RowIndex
+		from
+		(
+			Select case when MATCHTYPE!='Exact Match' and MATCHTYPE!='Static Match' then json_array_elements(fuzzy) Else '{"ServiceExpression":""}' end Fuzzylogic,FieldType,SPOKEID,sourcename,SOURCEFIELDID,SOURCEFIELDNAME,ISREQUIRED
+			,MatchRule,MATCHTYPE,PARAM1,PARAM2,PARAM1VALUE,PARAM2VALUE, MasterTableName, MasterRecordName,SELECTEDDATASOURCEID,SELECTEDDATASOURCE,AttributeName,Ncharaters,RowIndex
+			from
+			(
+				select Datasrc->'FuzzyLogic' fuzzy,FieldType,SPOKEID,sourcename,SOURCEFIELDID,SOURCEFIELDNAME,ISREQUIRED
+				,Datasrc->>'MATCHTYPE' as MATCHTYPE
+				,Datasrc->>'RULE' as		MatchRule
+				,Datasrc->>'PARAM1' 	as	PARAM1
+				,Datasrc->>'PARAM2' 	as	PARAM2
+				,Datasrc->>'VALUE' 	as	PARAM1VALUE
+				,Datasrc->>'PARAM2VALUE' as	PARAM2VALUE
+				,Datasrc->>'MasterTableName' as MasterTableName
+				,Datasrc->>'MasterRecordName' as MasterRecordName	
+				,cast(Datasrc->>'SOURCEID'as int) as	SELECTEDDATASOURCEID	
+				,Datasrc->>'DATASOURCE' as	SELECTEDDATASOURCE
+				,Datasrc->>'SELECTEDFIELDNAME' as	AttributeName
+				,Datasrc->>'NoOfCharacters' as	Ncharaters
+				,cast(Datasrc->>'RowIndex'as smallint) as	RowIndex
+				from
+				(
+					Select 
+					FieldType,SPOKEID,sourcename,SOURCEFIELDID,SOURCEFIELDNAME,ISREQUIRED,
+					json_array_elements(datasrc) as Datasrc
+					from
+					(
+						Select parsesrc->>'FIELDNAME' as FieldType
+						,cast(parsesrc->>'SPOKEID' as int) SPOKEID
+						,parsesrc->>'SPOKENAME'  sourcename
+						,cast(parsesrc->>'SOURCEFIELDID' as int) SOURCEFIELDID
+						,parsesrc->>'SOURCEFIELDNAME' SOURCEFIELDNAME
+						,cast(parsesrc->>'ISREQUIRED' as bit) ISREQUIRED
+						,parsesrc->'DATASOURCE' as datasrc
+						from
+						(
+							Select json_array_elements(rdsrc) parsesrc
+							from
+							(
+								Select srcjson->'Source' rdsrc
+								from
+								(
+									Select json_array_elements(srces) srcjson
+									from
+									(
+										Select src->'SOURCES' srces
+										from
+										(
+											Select json_array_elements(Fields) src
+											from
+											(
+												Select matches->'FIELD' Fields
+												from
+												(
+													select json_array_elements(matchrule) as matches
+													from
+													(
+														Select ivalue->'CORRELATIONDETAILS'->'CORRELATION'->'MATHCHINGRULEDETAILS' matchrule
+														from
+														temps 
+														limit 1
+													)inp
+												) fie
+											)fieldtojson
+										) srctojson
+									)srcestojson
+								)readsrc
+							)redsrc	
+						)outs
+					)subinput
+				)exp
+			)fexp
+		)serviceexp	
+	) as mains
+	 ;
+
+--return(select array_to_json(array_Agg(row_to_json(a)))from (select SOURCEFIELDId,Rowindex,ServiceExpression,matchtype from DataSourcesInfo)a);
+
+-- 
+-- Return(select array_to_json(array_Agg(row_to_json(a))) 
+-- 	from( SELECT Distinct DSI.SpokeID,Vcorrelationid,CCFM.fieldID,cast(NULL as int),NULL AS MasterTableName,DSI.MasterRecordName AS MasterRecordName
+--        ,NULL,NULL,Vcreated_by,'1',DSI.SOURCEFIELD,IsRequired
+-- 	from DataSourcesInfo DSI
+-- 	LEFT JOIN CBCorrelationFieldsMst CCFM ON lower(CCFM.FieldName) = lower(DSI.FieldType)
+-- 	LEFT JOIN CBMatchTypeMst CMTM ON Lower(CMTM.MatchTypeName)=lower(DSI.matchtype) )a);
+  
+   
+ Insert into FuzzyLogic(ServiceExpression,RuleID,SpokeID,SOURCEFIELDId,value,Priority,Rowindex,Value1, Value2 )
+ select ServiceExpression
+,cast(Fuzrul->>'RuleID' as int)	RuleID
+,cast(Fuzrul->>'DataSourceID' as int)	DataSourceID
+,cast(Fuzrul->>'FieldID' as int)	FieldID
+,NULL param1value
+,cast(Fuzrul->>'Priority'as smallint)	Priority
+,cast(Fuzrul->>'RowIndex'as smallint)	RowIndex
+,Fuzrul->>'Value1'	Value1
+,Fuzrul->>'Value2' Value2
+from
+(
+	Select ServiceExpression,json_array_elements(Fuzr)Fuzrul
+	from
+	( 
+		Select Fuzzylogic->>'ServiceExpression' ServiceExpression
+		, Fuzzylogic->'Rule' Fuzr
+		from
+		(
+			Select json_array_elements(fuzzy) Fuzzylogic
+			from
+			(
+				select dsrces->'FuzzyLogic' fuzzy
+				from
+				(
+					select json_array_elements(DSOURCES) dsrces
+					from
+					(
+						Select srce->'DATASOURCE' DSOURCES
+						from
+						(
+							select json_array_elements(sorc) srce
+							from
+							(
+								Select source->'Source' sorc
+								from
+								(
+									select json_array_elements(src) source
+									from
+									(
+										Select mfield->'SOURCES' src
+										from
+										(
+											select json_array_elements(fields) mfield
+											from
+											(
+												Select matches->'FIELD' fields
+												from
+												(
+													Select json_array_elements(matchr) matches
+													from
+													(
+														select ivalue->'CORRELATIONDETAILS'->'CORRELATION'->'MATHCHINGRULEDETAILS' matchr
+														from temps 
+														limit 1
+													)mat
+												) field
+											)mfields
+										) srcs
+									)srces
+								)isrc
+							)isrces			
+						)dsrc
+					)dsrcs
+				)flogic
+			) fuzz
+		)fuzlog 
+	)frul	
+) fruls
+;
+
+--return(select Array_to_json(Array_agg(row_to_json(a))) from (Select * from FuzzyLogic) a);
+
+     
+        VCnt:= (SELECT COUNT(*) FROM DataSourcesInfo);
+        VCnter:= 1;
+  
+        BEGIN
+ 
+
+	/* This is the master table that stores the Metric mapping data */
+        
+       INSERT INTO CBConfigurationMst(
+       DataSoureTypeID,CorrelationID,FieldID,MatchTypeID,DSTableColumnName,MstTableColumnName,SelectedDataSource,SelectedDSAttributeName
+       ,CreatedBy,IsActive,SourceField,isRequired)
+       SELECT Distinct DSI.SpokeID,Vcorrelationid,CCFM.fieldID,cast(NULL as int),NULL AS MasterTableName,DSI.MasterRecordName AS MasterRecordName
+       ,NULL,NULL,Vcreated_by,'1',DSI.SOURCEFIELD,IsRequired
+	from DataSourcesInfo DSI
+	LEFT JOIN CBCorrelationFieldsMst CCFM ON lower(CCFM.FieldName) = lower(DSI.FieldType)
+	LEFT JOIN CBMatchTypeMst CMTM ON Lower(CMTM.MatchTypeName)=lower(DSI.matchtype) ;
+
+	END;
+	
+	INSERT INTO ConfigDetails(ConfigurationID,SourceID,FieldName,rowindex)
+	SELECT ConfigurationID,DataSoureTypeID,fields.FieldName ,cast(Datasrc->>'RowIndex' as int) as	RowIndex
+	FROM CBConfigurationMst ConfigMst
+	Join CBCorrelationFieldsMst fields on ConfigMst.FieldID=fields.FieldID
+	Join
+	(
+		Select 
+		VCorrelationID CorrelationID,FieldType,SPOKEID,sourcename,SOURCEFIELDID,SOURCEFIELDNAME SOURCEFIELDNAME,ISREQUIRED,
+		json_array_elements(datasrc) as Datasrc
+		from
+		(
+			Select parsesrc->>'FIELDNAME' as FieldType
+			,cast(parsesrc->>'SPOKEID' as int) SPOKEID
+			,parsesrc->>'SPOKENAME'  sourcename
+			,cast(parsesrc->>'SOURCEFIELDID' as int) SOURCEFIELDID
+			,parsesrc->>'SOURCEFIELDNAME' SOURCEFIELDNAME
+			,cast(parsesrc->>'ISREQUIRED' as bit) ISREQUIRED
+			,parsesrc->'DATASOURCE' as datasrc
+			from
+			(
+				Select json_array_elements(rdsrc) parsesrc
+				from
+				(
+					Select srcjson->'Source' rdsrc
+					from
+					(
+						Select json_array_elements(srces) srcjson
+						from
+						(
+							Select src->'SOURCES' srces
+							from
+							(
+								Select json_array_elements(Fields) src
+								from
+								(
+									Select matches->'FIELD' Fields
+									from
+									(
+										select json_array_elements(matchrule) as matches
+										from
+										(
+											Select ivalue->'CORRELATIONDETAILS'->'CORRELATION'->'MATHCHINGRULEDETAILS' matchrule
+											from
+											temps 
+											limit 1
+										)inp
+									) fie
+								)fieldtojson
+							) srctojson
+						)srcestojson
+					)readsrc
+				)redsrc	
+			)outs
+		)subinput	
+	) A on configmst.CorrelationID=A.CorrelationID and Configmst.DataSoureTypeID=A.Spokeid and A.SOURCEFIELDNAME=Configmst.SourceField
+			and Fields.FieldName=A.FieldType
+	WHERE configmst.CorrelationID = Vcorrelationid;
+
+   --Return(select array_to_json(array_Agg(row_to_json(a)))from (select * from ConfigDetails)a) ;
+   
+	VCnt:= (SELECT COUNT(*) FROM ConfigDetails);
+	VCnter:= 1;
+
+-- 
+-- Return(select array_to_json(array_Agg(row_to_json(a)))from (
+-- 			Select  SOURCEFIELDId,Rowindex,ServiceExpression
+-- 			from 
+-- 			FuzzyLogic B 
+-- 			 
+-- )a
+-- );			
+
+  
+   --WHILE(@Cnter <= @Cnt)
+	   BEGIN
+	   
+	   
+	   
+	   /* This is the details table that stores the Metric mapping data */
+		
+	   INSERT INTO CBCorrelationConfigDetails(CorrelationID,ConfigurationID,CriteriaID,param1,param2,Value1,Value2,CreatedBy,IsActive,
+	   MatchTypeID,DSTableColumnName,DataSourceID,SelectedDataSource,SelectedDSAttributeName,MstTableColumnName,Priority,Expression)
+	   SELECT Vcorrelationid
+	   ,CBC.ConfigurationID,CCM.CriteriaID
+	   ,Param1
+	   ,param2
+	   ,Case when param1value='NULL' OR param1value='EMPTY' Then '' Else param1value End  param1value
+	   ,param2value,Vcreated_by,'1'
+	   ,CMTM.matchtypeid,CMTM.MatchTypeName,SELECTEDDATASOURCEID,dsi.SELECTEDDATASOURCE,DSI.AttributeName,dsi.MasterTableName
+	   ,Priority
+	   ,ServiceExpression
+	   FROM 
+	   ConfigDetails CBC
+	   INNER JOIN (
+			Select FieldType ,SpokeID,SourceName,SOURCEFIELDId,Sourcefield,matchtype,matchrule,matchparam,param1,param2
+			,param1value,param2value,MasterTableName,MasterRecordName,SELECTEDDATASOURCEID,SELECTEDDATASOURCE
+			,AttributeName,Ncharacters,IsRequired ,0 Priority,'' as ServiceExpression
+			from DataSourcesInfo 
+			where matchtype!='Custom Match'
+
+			union all
+
+			Select  FieldType ,A.SpokeID,SourceName,A.SOURCEFIELDId,Sourcefield,matchtype,NULL MatchRule,NULL MatchParam
+			,cast(B.RuleID as varchar(50)) Param1,'test' Param2
+			,case when B.value Is Null then Value1 Else B.Value End Param1Value
+			,case when B.value Is Null then Value2 Else NULL End Param2Value
+			,NULL MasterTableName, NULL MasterRecordName,A.SELECTEDDATASOURCEID,A.SELECTEDDATASOURCE 
+			,AttributeName,A.Ncharacters,IsRequired,Priority,B.ServiceExpression
+			from DataSourcesInfo A
+			Left Outer Join 
+			FuzzyLogic B on A.SOURCEFIELDId=B.SOURCEFIELDId and A.Rowindex=B.Rowindex and A.ServiceExpression=B.ServiceExpression
+			where matchtype='Custom Match'
+			) DSI 
+			ON CBC.SourceID = DSI.SpokeID and CBC.FieldName=DSI.FieldType
+	   INNER JOIN CBCorrelationFieldsMst CBFM ON CBFM.FieldName = DSI.FieldType
+	   LEFT JOIN CBMCriteriaMst CCM ON CCM.CriteriaName = DSI.matchrule
+	   LEFT JOIN CBMatchTypeMst CMTM ON CMTM.MatchTypeName=DSI.matchtype 
+	   where DSI.matchtype is not null;
+	 
+	   END;
+ 
+
+ 
+ /* Reading the Metric weightage information coming in the input */
+ 
+ 
+	Insert into AttWeightInfo(id ,UniqueID ,SelectDataSources --,DSIds 
+	,FieldName ,FieldValue , POSOFFSET ,NEGOFFSET ,UOM ,NID ,RuleIndex,iCutoffweight, maxcutoffweight, mincutoffweight
+	,DSID,ConditionSymbol,CONDTIONVALUE1,CONDTIONVALUE2
+	) 
+	SELECT 	NULL,NULL,SELECTEDDATASOURCE ,NAME,WEIGHTAGE,POSOFFSET,NEGOFFSET,UOM,RuleCount ,RuleIndex,mains.Cutoffweight,mains.maxcutoffweight,mains.Mincutoffweight 
+	,DSID,ConditionSymbol,CONDITIONVALUE1,CONDITIONVALUE2
+	FROM 
+	(
+		Select 	
+		SELECTEDDATASOURCE, RULECOUNT,RuleIndex,
+		flddata->> 'NAME' as NAME
+		,cast(flddata->>'VALUE'as int) Weightage
+		,flddata->>'POSOffSET' as POSOffSET
+		,flddata->>'NAGOffSET' NEGOffSET
+		,flddata->>'TimeUnit' UOM
+		,Cutoffweight
+		,maxcutoffweight
+		,Mincutoffweight
+		,DSID,CONDITIONSYMBOL,CONDITIONVALUE1,CONDITIONVALUE2 
+		from 
+		(	
+			Select SELECTEDDATASOURCE, RULECOUNT,RuleIndex,cast(DSID as int) DSID,CONDITIONSYMBOL,CONDITIONVALUE1,CONDITIONVALUE2 ,Cutoffweight,Mincutoffweight,maxcutoffweight
+			,json_array_elements(fld)as flddata
+			from
+			(
+				Select sourcedata->>'SELECTEDDATASOURCE' as SELECTEDDATASOURCE
+				,cast(sourcedata->>'RULECOUNT' as int)  as RULECOUNT
+				,cast(sourcedata->>'RuleIndex' as int) as RuleIndex
+				,cast(sourcedata->>'CUTOFFWEIGHTAGE' as smallint) as Cutoffweight
+				,cast(sourcedata->>'MinCUTOFFWEIGHTAGE' as smallint) as Mincutoffweight
+				,cast(sourcedata->>'MaxCUTOFFWEIGHTAGE' as smallint) as maxcutoffweight
+				,sourcedata->'FIELD' as fld
+				,Replace(sourcedata->>'RULECOUNT','#CWDB01#','')AS DSID
+				,CONDITIONSYMBOL,CONDITIONVALUE1,CONDITIONVALUE2 
+				From
+				(
+					Select json_array_elements(dsrc) as sourcedata,
+					CONDITIONSYMBOL,CONDITIONVALUE1,CONDITIONVALUE2
+					from
+					(
+						Select sds->'SELECTEDDATASOURCES' as dsrc 
+						,sds->>'CONDITIONSYMBOL' as CONDITIONSYMBOL
+						,sds->>'CONDITIONVALUE1' as CONDITIONVALUE1
+						,sds->>'CONDITIONVALUE2' as CONDITIONVALUE2
+						from
+						(
+							Select json_array_elements(CFV) as sds
+							From
+							(
+								Select Rd->'CORRELATIONFIELDSVALUES' as CFV
+								from
+								(
+									Select json_array_elements(Ruldetails) as Rd
+									from
+									(
+										Select ivalue->'CORRELATIONDETAILS'->'CORRELATION'->'RULESDETAILS' as Ruldetails
+										from 
+										temps 
+										limit 1	
+									) CorFv
+								)CF
+							)Selds
+						)srcs
+					)srcdata
+				)fds
+			)outs				
+		)ds	
+	)mains	
+;
+
+	Update AttWeightInfo 
+	set id= Temp.id
+	From
+	(Select DENSE_RANK() Over(Order by Nid) ID, SelectDataSources,NID
+	from AttWeightInfo 
+	)   Temp where AttWeightInfo .NID=Temp.Nid;
+
+	VCnt=(Select COUNT(distinct NID) from AttWeightInfo);
+	VCnter:=1;
+
+	While VCnter<=VCnt Loop
+
+	VUniqueID:=(SELECT md5(random()::text || clock_timestamp()::text)::uuid);
+
+	Update AttWeightInfo set UniqueID=VUniqueID 
+	where id=Vcnter;
+
+	VCnter := VCnter+1;
+
+	End Loop;
+
+/* This is the master table that will generate a unique id for each rule defined in a correlation*/
+
+	Insert into CBWeightageConfigurations(WeightageConfigurationID,CorrelationID,AssociatedSourcesList,IsActive,CreatedBy,ModifiedBy,CutOffWeightage,MinCutOffWeightage,MaxCutOffWeightage)
+	select Distinct UniqueID, Vcorrelationid Correlationid, SelectDataSources,'1' IsActive,Vcreated_by CreatedBy, Vcreated_by ModifiedBy,iCutoffweight,maxcutoffweight,Mincutoffweight
+	from AttWeightInfo;
+
+/* This table stores the Attribute weightages per rule */
+
+	INSERT INTO CBAttributeWeightageMst(WeightageConfigurationID,CorrelationID,FieldID,weightage,CreatedBy,Pos_Offset,New_Offset,UOM,RuleIndex)
+	select UniqueID,Vcorrelationid,FieldID,FieldValue weightage,Vcreated_by CreatedBy
+	,POSOFFSET,NEGOFFSET,UOM,RuleIndex
+	FROM AttWeightInfo AWI
+	INNER JOIN CBCorrelationFieldsMst   CBCF ON CBCF.FieldName = AWI.FieldName
+	ORder by UniqueID;
+
+-- Update A set A.UniqueID=B.UniqueID
+-- From AttributeRule A 
+-- Join AttWeightInfo B on A.DSID=B.NID;
+--  
+/* The below tal=ble stores the Rule defined */ 
+
+	INSERT INTO CBAttributeWeightRule (WeightageConfigurationID,EffectiveFrom,CorrelationID,ParamType,ParamValue1,ParamValue2,IsActive,CreatedBy)
+	SELECT Distinct UniqueID,VActiondate,Vcorrelationid,ConditionSymbol,CONDTIONVALUE1,CONDTIONVALUE2,cast('1' as bit),Vcreated_by
+	FROM AttWeightInfo;
+
+	INSERT INTO Latency(SourceName,MaxTime,TimeUnits,Weightage,LegTime,LegTimeUnit)
+	Select datasrc->>'NAME' as iNAME
+	,datasrc->>'MaximumTime' as MaximumTime
+	,datasrc->>'TimeUnit' as TimeUnit
+	,50 DataSourceWeight
+	--,cast(datasrc->>'DataSourceWeight' as int) as DataSourceWeight
+	,cast(datasrc->>'LegTime' as int) as LegTime
+	,datasrc->>'LegTimeUnit' as LegTimeUnit
+	From
+	(
+		Select json_array_elements(LD) as datasrc
+		from
+		(
+			Select RD->'DATASOURCE' as LD
+			from
+			(
+				Select json_array_elements(Ruldetails) as Rd
+				from
+				(
+				Select ivalue->'CORRELATIONDETAILS'->'CORRELATION'->'LATENCYRULE' as Ruldetails
+				from 
+				temps 
+				limit 1	
+				) LData
+			)dsrc	
+		)lat
+	)ldsrc
+;
+ 
+	INSERT INTO CBDataExpectencyMst(CorrelationID,DataSourceID,LatencyValue,LatencyVolume,DataSourceWeight,CreatedBy,IsActive,Latency_BufferTime,Latency_UOM)
+	SELECT VCorrelationID,sources.sourcetype_id,cast(MaxTime as int),TimeUnits ,Weightage,Vcreated_by,'1', LegTime,LegTimeUnit
+	FROM Latency LMST
+	Join kbsourcetypemst sources on cast(lmst.sourcename as int)=sources.sourcetype_id
+	;
+	VExpectencyID:= ( SELECT currval(pg_get_serial_sequence('CBDataExpectencyMst','cbid')));      
+
+	-- INSERT INTO @LatencyRule(ConditionSymbol,CONDTIONVALUE1,CONDTIONVALUE2)
+-- 	SELECT xmlList.rows.value('@CONDITIONSYMBOL','nvarchar(10)') AS CONDTIONSYMBOL
+-- 	      ,xmlList.rows.value('@CONDITIONVALUE1','nvarchar(10)') AS CONDTIONVALUE1
+-- 		,xmlList.rows.value('@CONDITIONVALUE2','nvarchar(10)') AS CONDTIONVALUE2
+-- 	  FROM @Trans_xml.nodes('CORRELATIONDETAILS/CORRELATION/LATENCYRULE') xmlList(rows) 
+-- 
+-- 	 
+-- 	/* The below table stores the rule defined for each of the record stored in the above table */ 
+-- 
+	INSERT INTO CBDataExpectencyRule (CorrelationID,ExpectencyRuleID,ParamType,ParamValue1,ParamValue2,CreatedBy,IsActive)
+	SELECT Vcorrelationid,VExpectencyID,NULL,NULL,NULL,VCreated_By,'1' ;
+	--,conditionsymbol,CONDTIONVALUE1,CONDTIONVALUE2,VCreated_By,'1' 
+	--FROM @LatencyRule 
+
+	/*NEW IMPLEMENTATION FOR INSERTING THE DETAILS*/
+	
+	
+	VCORRELATIONNAMES:= (select CorrelationName FROM TEMPCORRELATION);
+	
+	Insert into KBSPOKETABLE
+	(SPOKE_ID,SPOKE_TYPE,TABLE_NAME,TABLE_TYPE,XPATH,TYPE,CorrelationId,CreatedBy, ModifiedBy, CreatedDate, ModifiedDate)
+	SELECT Vcorrelationid,'CORRELATION','DM_DRIVER_'||VCORRELATIONNAMES,'','ROWS/ROW/DATA/row',2,NULL  --2 FOR CORRELATION
+	,VCreated_By CreatedBy, VCreated_By ModifiedBy,VActiondate CreatedDate,VActiondate ModifiedDate
+	UNION ALL
+	SELECT DISTINCT S.SOURCENAMES,'SPOKEMETRICDETAILS','FACT_'||MST.ALIAS||'METRICDETAILS','','ROWS/ROW/DATA/row',2,Vcorrelationid
+	,VCreated_By CreatedBy, VCreated_By ModifiedBy,VActiondate CreatedDate,VActiondate ModifiedDate
+	FROM SELECTEDSOURCES S JOIN KBSOURCETYPEMST MST ON  S.SOURCENAMES=MST.SOURCETYPE_ID
+	Union All
+	/* isnerting the processed correlation data table schema */
+	select Vcorrelationid,'CORRELATION','CorrData_Fact_'||VCORRELATIONNAMES,'ProcessedData','ROWS/ROW',2, NULL
+	,VCreated_By CreatedBy, VCreated_By ModifiedBy,VActiondate CreatedDate,VActiondate ModifiedDate
+	;
+  
+	Insert into KBSPOKETABLEDETAILS(TABLE_ID,TABLE_COLUMNS,ATTRIBUTES,DATATYPE,XPATH)
+	select RecordID,'Seq','COMMONGUID','varchar(255)','ROWS/ROW'
+	from KBSPOKETABLE where SPOKE_ID=Vcorrelationid and SPOKE_TYPE='CORRELATION' and TABLE_NAME='CorrData_Fact_'||VCORRELATIONNAMES
+	union all  
+	select RecordID,'Correlation_xml','','text','ROWS'
+	from KBSPOKETABLE where SPOKE_ID=Vcorrelationid and SPOKE_TYPE='CORRELATION' and TABLE_NAME='CorrData_Fact_'||VCORRELATIONNAMES
+	union all
+	select  RecordID,'recorddate','CreatedDate','Datetime','ROWS'
+	from KBSPOKETABLE where SPOKE_ID=Vcorrelationid and SPOKE_TYPE='CORRELATION' and TABLE_NAME='CorrData_Fact_'||VCORRELATIONNAMES
+	union all  
+	select RecordID,'isactive','IsActive','smallint','ROWS'
+	from KBSPOKETABLE where SPOKE_ID=Vcorrelationid and SPOKE_TYPE='CORRELATION' and TABLE_NAME='CorrData_Fact_'||VCORRELATIONNAMES
+	union all  
+	select RecordID,'epochtime','EPOCHTIME','Nvarchar(100)','ROWS'
+	from KBSPOKETABLE where SPOKE_ID=Vcorrelationid and SPOKE_TYPE='CORRELATION' and TABLE_NAME='CorrData_Fact_'||VCORRELATIONNAMES
+	union all  
+	select RecordID,'entityId','ENTITYID','nvarchar(100)','ROWS/ROW'
+	from KBSPOKETABLE where SPOKE_ID=Vcorrelationid and SPOKE_TYPE='CORRELATION' and TABLE_NAME='CorrData_Fact_'||VCORRELATIONNAMES;
+
+	INSERT INTO CORRELATION(SPOKE_ID,TABLE_NAME,TABLE_COLUMNS,ATTRIBUTES,IS_NULLABLE ,IS_PRIMARY,OPERATION_TYPE,DATATYPE,XPATH)
+	select NULL spokeid,'DM_DRIVER_'||VCORRELATIONNAMES,'Call_UID' iName,'Call_UID' iattribute,cast('0' as bit) Coalesceable,cast('0' as bit) isprimary,'INSERT','varchar(100)' as datatype,'ROWS'root;
+
+	INSERT INTO CORRELATION(SPOKE_ID,TABLE_NAME,TABLE_COLUMNS,ATTRIBUTES,IS_NULLABLE ,IS_PRIMARY,OPERATION_TYPE,DATATYPE,XPATH)
+	select NULL spokeid,'DM_DRIVER_'||VCORRELATIONNAMES,'CorrelationID' iName,'CORRELATIONID' iattribute,cast('0' as bit) Coalesceable,cast('0' as bit) isprimary,'INSERT','BIGINT' as datatype,'ROWS'root;
+	
+	INSERT INTO CORRELATION(SPOKE_ID,TABLE_NAME,TABLE_COLUMNS,ATTRIBUTES,IS_NULLABLE ,IS_PRIMARY,OPERATION_TYPE,DATATYPE,XPATH)
+	select NULL spokeid,'DM_DRIVER_'||VCORRELATIONNAMES,'CreatedDate' iName,'CreatedDate' iattribute,cast('0' as bit) Coalesceable,cast('0' as bit) isprimary,'INSERT','Datetime' as datatype,'ROWS'root;
+
+	INSERT INTO CORRELATION(SPOKE_ID,TABLE_NAME,TABLE_COLUMNS,ATTRIBUTES,IS_NULLABLE ,IS_PRIMARY,OPERATION_TYPE,DATATYPE,XPATH)
+	select NULL spokeid,'DM_DRIVER_'||VCORRELATIONNAMES,'CreatedBy' iName,'CreatedBy' iattribute,cast('0' as bit) Coalesceable,cast('0' as bit) isprimary,'INSERT','BIGINT' as datatype,'ROWS'root;
+
+	INSERT INTO CORRELATION(SPOKE_ID,TABLE_NAME,TABLE_COLUMNS,ATTRIBUTES,IS_NULLABLE ,IS_PRIMARY,OPERATION_TYPE,DATATYPE,XPATH)
+	select NULL spokeid,'DM_DRIVER_'||VCORRELATIONNAMES,'VirtusGUID' iName,'COMMONGUID' iattribute,cast('0' as bit) Coalesceable,cast('0' as bit) isprimary,'INSERT','varchar(100)' as datatype,'ROWS/ROW'root;
+	
+
+	INSERT INTO CORRELATION(SPOKE_ID,TABLE_NAME,TABLE_COLUMNS,ATTRIBUTES,IS_NULLABLE ,IS_PRIMARY,OPERATION_TYPE,DATATYPE,XPATH,SpokeID)
+	SELECT distinct Vcorrelationid,'DM_DRIVER_'||VCORRELATIONNAMES,SRC.SOURCETYPE_NAME||'_'||Coalesce(CON.Metricalias,CON.METRICNAME)
+	as TABLE_COLUMNS,CON.METRICNAME as ATTRIBUTES,cast('0' as bit),cast('0' as bit),'INSERT',Mets.METRICDATATYPE,'ROWS/ROW/DATA/row', s.SOURCENAMES
+	FROM SELECTEDSOURCES S
+	JOIN KBSPOKECONFIGURATIONS CON ON  CON.SOURCETYPEID= S.SOURCENAMES
+	join kbmetricMst Mets on CON.METRICNAME=Mets.METRICNAME
+	JOIN KbsourcetypeMst SRC on SRC.SOURCETYPE_ID=S.SOURCENAMES
+	where con.SOURCETYPEID=Mets.source_ID 
+	and Mets.Template_ID=1 and CON.IsPRIMARYKEY='1';
+ 
+ 
+	INSERT INTO CORRELATION(SPOKE_ID,TABLE_NAME,TABLE_COLUMNS,ATTRIBUTES,IS_NULLABLE ,IS_PRIMARY,OPERATION_TYPE,DATATYPE,XPATH,SpokeId)
+	SELECT  distinct Vcorrelationid,'DM_DRIVER_'||VCORRELATIONNAMES,Mst.SOURCETYPE_NAME||'_Weightage','PERCENTAGE',cast('0' as bit),cast('0' as bit),'INSERT','varchar(255)','ROWS/ROW', s.SOURCENAMES
+	FROM SELECTEDSOURCES S
+	JOIN KBSPOKECONFIGURATIONS CON ON  CON.SOURCETYPEID= S.SOURCENAMES
+	JOIN KbsourcetypeMst Mst on Mst.SOURCETYPE_ID=S.SOURCENAMES;
+	
+	
+	
+	INSERT INTO CORRELATION(SPOKE_ID,TABLE_NAME,TABLE_COLUMNS,ATTRIBUTES,IS_NULLABLE ,IS_PRIMARY,OPERATION_TYPE,DATATYPE,XPATH,SpokeId)
+	SELECT distinct Vcorrelationid,'DM_DRIVER_'||VCORRELATIONNAMES,Mst.SOURCETYPE_NAME||'_Seq','seq',cast('0' as bit),cast('0' as bit),'INSERT','varchar(255)','ROWS/ROW/DATA/row', s.SOURCENAMES
+	FROM SELECTEDSOURCES S
+	JOIN KBSPOKECONFIGURATIONS CON ON  CON.SOURCETYPEID= S.SOURCENAMES
+	JOIN KbsourcetypeMst Mst on Mst.SOURCETYPE_ID=S.SOURCENAMES;
+	
+ 
+ 
+	INSERT INTO KBSPOKETABLEDETAILS(TABLE_ID,TABLE_COLUMNS,ATTRIBUTES,IS_PRIMARY,IS_NULLABLE,OPERATION_TYPE,DATATYPE,XPATH,SPOKE_ID,CreatedBy, ModifiedBy, CreatedDate, ModifiedDate)
+	SELECT MST.RECORDID,A.TABLE_COLUMNS,A.ATTRIBUTES,cast(A.IS_PRIMARY as int),cast(A.IS_NULLABLE as int),A.OPERATION_TYPE,A.DATATYPE,A.XPATH,A.SpokeId
+	,VCreated_By CreatedBy, VCreated_By ModifiedBy,VActiondate CreatedDate,VActiondate ModifiedDate
+	FROM CORRELATION A 
+	JOIN KBSPOKETABLE MST ON MST.TABLE_NAME=A.TABLE_NAME 
+	where exists (Select 1 from users B where Mst.Createdby=B.userid)
+	Order by A.ID;
+ 
+
+	
+	Return(
+			
+		Select Row_to_json(cors)
+		from
+		(
+		select Row_to_json(cor) as "CORRELATIONDETAILS"
+		From
+		(
+		Select Row_to_json(output) as "CORRELATION"
+		from
+		(
+			Select Vcorrelationid as "CORRELATIONID", VCorrelationName "NAME"
+			,Row_to_json(tabstr) "tablestructure"
+			from
+			(
+				Select Array_to_json(Array_Agg(row_to_json(tabs))) as "table"
+				From
+				(
+					select  AA.TABLE_NAME	as "name"					
+					,
+					(
+						Select Array_to_json(Array_agg(Row_to_json(cols))) as "column"
+						from
+						(
+							SELECT mst.TABLE_COLUMNS as "TABLECOL", case when mst.DATATYPE='INT' then 'BIGINT' else mst.DATATYPE end as "METRICDATATYPE"
+							FROM 
+							(
+								Select A.Id, A.TABLE_COLUMNS, MSt.TABLE_NAME,A.DATATYPE								
+								from
+								CORRELATION A 
+								JOIN KBSPOKETABLE MST ON MST.TABLE_NAME=A.TABLE_NAME 
+								where exists (Select 1 from users B where Mst.Createdby=B.userid)
+								Union
+								Select A.TABLE_DETAIL_ID, A.TABLE_COLUMNS, MSt.TABLE_NAME,A.DATATYPE		
+								from
+								KBSPOKETABLE MST 
+								Join KBSPOKETABLEDETAILS A on MST.RECORDID=A.TABLE_id
+								where mst.SPOKE_TYPE='CORRELATION' and TABLE_TYPE='ProcessedData'
+								and exists (Select 1 from users B where Mst.Createdby=B.userid)
+							) mst
+							where  AA.TABLE_NAME=mst.TABLE_NAME
+							Order by mst.ID
+						)cols
+						--for xml raw('column')
+					)
+					from KBSPOKETABLE AA
+					where  Spoke_type='CORRELATION' and spoke_id=Vcorrelationid 
+					and exists (Select 1 from users B where AA.Createdby=B.userid)
+					Group by AA.TABLE_NAME
+				)tabs
+			)tabstr	
+		)output	
+			-- for xml raw('table'),root('tablestructure')
+		) cor
+		)cors	
+		)
+;
+END; 
+ELSEIF Lower(VTRAN) = 'addfields' then
+BEGIN
+
+select 
+	ivalue->'CORRELATIONDETAILS'->> 'FIELDNAME' 
+	,ivalue->'CORRELATIONDETAILS'->> 'ISACTIVE' 
+	,ivalue->'CORRELATIONDETAILS'->> 'DATATYPE' 
+	into
+	VFIELDNAME
+	,VIsActive
+	,VDataType
+from temps limit 1;
+   
+   
+VFIELDCHK:= ( SELECT COUNT(*) FROM CBCorrelationFieldsMst WHERE FieldName = VFIELDNAME )  ; 
+
+	IF (VFIELDCHK < 1 AND VFIELDNAME IS NOT NULL) then
+	BEGIN
+
+	INSERT INTO CBCorrelationFieldsMst (FieldName,CreatedBy,Modifiedby,IsActive,DataType)
+	SELECT VFIELDNAME,VCreated_By,VCreated_By,'1',VDataType;
+
+	Return(
+		Select Row_to_json(a)  as "REPORTDETAILS"
+		from
+		(
+		SELECT 1 "Result", FIELDID AS "ID" 
+		FROM CBCorrelationFieldsMst 
+		WHERE FieldName = VFIELDNAME 
+		--FOR XML RAW('FIELD') ,ROOT('CORRELATIONDETAILS')
+		)a
+		);
+
+	END;
+	ELSE
+	BEGIN
+	Return(
+		Select Row_to_json(a)  as "REPORTDETAILS"
+		from
+		(
+		SELECT -1 "Result"
+		FROM CBCorrelationFieldsMst 
+		WHERE FieldName = VFIELDNAME 
+		--FOR XML RAW('FIELD') ,ROOT('CORRELATIONDETAILS')
+		)a
+		);
+	END;
+	End if;
+
+END;
+ELSEIf Lower(VTran)='gettooltip' then
+BEGIN
+ 
+select ivalue->'CORRELATIONDETAILS'->> 'CORRELATIONID' 
+into
+Vcorrelationid
+from temps limit 1;
+
+VCorrelationName:=(select correlationname from cbcorrelationmst where correlationid=Vcorrelationid);
+ 
+
+	INSERT INTO Sources(sourceids)
+	SELECT Cast(CCD.SourceID as varchar(10)) || ';'|| Cast(HasLegs as varchar(10))|| ';'|| Cast(HasNMachines as varchar(10))
+	|| ';'|| Cast(CCD.TYPEID as varchar(10))||';'
+	AS SELECTEDDATASOURCE
+	FROM CBCorrelationMst CCM
+	INNER JOIN CBCorrelationDetails CCD ON CCM.CorrelationID = CCD.CorrelationID
+	WHERE CCM.CorrelationID = Vcorrelationid;
+	
+	Vnew:= (SELECT String_Agg(Sourceids,'#CWDB01#')	FROM Sources);
+
+			  
+
+VThirdTag_1:= 
+( 
+	Select Array_to_json(Array_Agg(Row_to_json(fld))) "FIELD"
+	from
+	(
+	SELECT  CBCF.FieldName AS "FIELDNAME"
+	,
+	(
+		Select Row_to_json(srcdata) "SOURCES"
+		from
+		(
+		Select Dsource."Source", dsrces."Source" as "CustomMatchSource"
+		from
+		(
+			Select Array_to_json(Array_Agg(Row_to_json(dsrc))) as "Source"
+			from
+			(
+				Select Configmst.DataSoureTypeID "SPOKEID"
+				,SourceFields.CBID "SOURCEFIELDID"
+				,Configmst.SourceField AS "SOURCEFIELDNAME"
+				, ConfigMst.isRequired "ISREQUIRED"
+				,
+				(
+					Select Array_to_json(Array_Agg(Row_to_json(src))) as "DATASOURCE"
+					from
+					(
+						SELECT distinct
+						CBCCD.datasourceid "SOURCEID"
+						,cbccd.SelectedDataSource "DATASOURCE"
+						,MatchType.MatchTypeName AS "MATCHTYPE" 
+						,CBCCD.param1 AS "PARAM1"
+						,CBCCD.param2 AS "PARAM2"
+						,CBCCD.value1 "VALUE"
+						,CBCCD.value2 "PARAM2VALUE"
+						,CBCC.CriteriaName AS "RULE"
+						,CBCCD.SelectedDSAttributeName AS "SELECTEDFIELDNAME"
+						,CBCCD.DSTableColumnName AS "MasterTableName"
+						,CBCCD.MstTableColumnName AS "MasterRecordName"
+						FROM CBConfigurationMst CBMST1
+						INNER JOIN CBCorrelationConfigDetails CBCCD ON CBCCD.ConfigurationID = CBMST1.ConfigurationID
+						INNER JOIN CBMatchTypeMst MatchType ON MatchType.MatchTypeID = CBCCD.MatchTypeID
+						LEFT OUTER JOIN CBMCriteriaMST CBCC ON CBCCD.CriteriaID = CBCC.CriteriaID
+						WHERE CBMST1.CorrelationID = Vcorrelationid  and CBMST.CorrelationID =CBMST1.CorrelationID
+						and CBMST1.DataSoureTypeID=ConfigMst.DataSoureTypeID and CBMST1.FieldID=ConfigMst.FieldID
+						and ( CBCCD.MatchTypeID!=1)
+						--FOR XML RAW ('DATASOURCE') 
+					) AS src 
+				)
+				From CBConfigurationMst ConfigMst
+				Inner Join (select CBID, case when SourceField='' then NULL else SourceField end SourceField,MSTTableColumns,SourceID
+						from CBSourceInfo ) SourceFields On lower(Configmst.SourceField)=lower(Coalesce(SourceFields.SourceField,MSTTableColumns)) 
+																and ConfigMst.DataSoureTypeID=Sourcefields.SourceID
+				Inner Join CBCorrelationConfigDetails CDet2 on ConfigMst.ConfigurationID=CDet2.ConfigurationID
+				where CBMST.CorrelationID =ConfigMst.CorrelationID and CBMST.FieldID=ConfigMst.FieldID and ConfigMst.CorrelationID= Vcorrelationid 
+				and CDet2.Matchtypeid!=1
+				Group by Configmst.SourceField, Configmst.Datasouretypeid,SourceFields.CBID,ConfigMst.ISrequired,ConfigMst.FieldID
+				--For XML RAW ('Source') 
+			)as dsrc
+		)Dsource
+		,
+		(
+			 
+			Select Array_to_json(Array_Agg(Row_to_json(srcs))) "Source"
+			from
+			(
+				Select Configmst.DataSoureTypeID "SPOKEID"
+				,SourceFields.CBID "SOURCEFIELDID"
+				,Configmst.SourceField AS "SOURCEFIELDNAME"
+				, ConfigMst.isRequired "ISREQUIRED"
+				,
+				(
+					Select Array_to_json(Array_Agg(Row_to_json(dscr))) "DATASOURCE"
+					from
+					(
+						SELECT Distinct
+						CBCCD.datasourceid "SOURCEID"
+						,cbccd.SelectedDataSource "DATASOURCE"
+						,MatchType.MatchTypeName AS "MATCHTYPE"
+						,CBCCD.SelectedDSAttributeName AS "SELECTEDFIELDNAME"
+						,
+						cast((
+							Select Row_to_json(fuzzy) "FuzzyLogic"
+							from
+							(
+								Select Array_to_json(Array_Agg(Row_to_json(rul))) "Rule"
+								from
+								(
+									Select  '' "CorrelationID"
+									, Coalesce(CBCCD1.param1,'') AS "RuleID"
+									, Priority "Priority"
+									,
+									( 
+										select Row_to_json(val)	"Values"
+										from
+										(
+											Select Array_to_json(Array_Agg(Row_to_json(inp))) as "Input"
+											from
+											( 
+												Select distinct Case when CBCCD2.Value2 is Null 
+													Then  Coalesce(CBCCD2.value1,'') 
+													Else CBCCD2.value1 || ',' || CBCCD2.value2 End "Value" 
+												From CBCorrelationConfigDetails CBCCD2 
+												where CBCCD1.ConfigurationID=CBCCD2.ConfigurationID 
+												and CBCCD1.DataSourceID=CBCCD2.DataSourceID 
+												and CBCCD1.SelectedDSAttributeName=CBCCD2.SelectedDSAttributeName 
+												and CBCCD1.MatchTypeID=CBCCD2.MatchTypeID 
+													and CBCCD1.param1=CBCCD2.param1 
+														and CBCCD1.param1=CBCCD2.param1  
+												--FOR XML RAW('Input'),ROOT('Values')
+											)as inp
+										) val
+									)
+									From
+									CBCorrelationConfigDetails CBCCD1
+									where CBCCD.ConfigurationID=CBCCD1.ConfigurationID  and Cbccd.DataSourceID=Cbccd1.DataSourceID and CBCCD1.SelectedDSAttributeName=CBCCD.SelectedDSAttributeName
+									Group By CBCCD1.param1,CBCCD1.Priority,CBCCD1.ConfigurationID
+									,CBCCD1.DataSourceID,CBCCD1.SelectedDSAttributeName,CBCCD1.MatchTypeID 
+									--FOR XML RAW('Rule'),ROOT('FuzzyLogic')
+								)as Rul
+							)fuzzy
+						) as text) s
+						FROM CBConfigurationMst CBMST1
+						INNER JOIN CBCorrelationConfigDetails CBCCD ON CBCCD.ConfigurationID = CBMST1.ConfigurationID
+						INNER JOIN CBMatchTypeMst MatchType ON MatchType.MatchTypeID = CBCCD.MatchTypeID
+						LEFT OUTER JOIN CBMCriteriaMST CBCC ON CBCCD.CriteriaID = CBCC.CriteriaID
+						WHERE CBMST1.CorrelationID = Vcorrelationid  and CBMST.CorrelationID =CBMST1.CorrelationID
+						and CBMST1.DataSoureTypeID=ConfigMst.DataSoureTypeID and CBMST1.FieldID=ConfigMst.FieldID and CBCCD.MatchTypeid=1
+						Group By CBCCD.ConfigurationID,CBCCD.datasourceid,cbccd.SelectedDataSource,MatchType.MatchTypeName,CBCCD.SelectedDSAttributeName  
+						--FOR XML RAW ('DATASOURCE') 
+					) AS dscr 
+				)
+
+				From CBConfigurationMst ConfigMst
+				Inner Join  (select CBID, case when SourceField='' then NULL else SourceField end SourceField,MSTTableColumns,SourceID
+						from CBSourceInfo )  SourceFields On lower(Configmst.SourceField)=lower(Coalesce(SourceFields.SourceField,MSTTableColumns)) 
+																and ConfigMst.DataSoureTypeID=Sourcefields.SourceID
+				Inner Join CBCorrelationConfigDetails CDet1 on ConfigMst.ConfigurationID=CDet1.ConfigurationID
+
+				where CBMST.CorrelationID =ConfigMst.CorrelationID and CBMST.FieldID=ConfigMst.FieldID and ConfigMst.CorrelationID= Vcorrelationid 
+				and CDet1.MatchTypeid=1
+				Group By Configmst.SourceField,Configmst.DataSoureTypeID,Sourcefields.cbid,ConfigMst.isrequired,ConfigMst.Fieldid  
+				--For XML RAW ('Source')
+			)as srcs
+			 
+		) dsrces
+		--for xml path('SOURCES') 
+		)as srcdata
+	)
+	FROM CBConfigurationMst CBMST
+	INNER JOIN CBCorrelationFieldsMst CBCF ON CBCF.FIELDID = CBMST.FIELDID
+	Inner Join CBCorrelationConfigDetails CDet on CBMST.ConfigurationID=CDet.ConfigurationID
+	Inner Join CBCorrelationMst CMst on CBMST.CorrelationID=CMst.CorrelationID
+	WHERE CBMST.CorrelationID = Vcorrelationid  and CMst.IsActive=1 --and CDet.MatchTypeid=1
+	GROUP BY CBCF.FieldName,CBMST.CorrelationID,cbmst.FieldID -- ,/*Newly added*/CBMST.SourceField
+	--FOR XML RAW ('FIELD')
+	)fld
+);
+
+VSeventhTag:= 
+	( 
+		Select Array_to_json(Array_Agg(Row_to_json(src))) "DATASOURCE" 
+		from
+		(
+		SELECT DataSourceID AS "NAME"
+		,LatencyValue AS "MaximumTime"
+		,LatencyVolume AS "TimeUnit"
+		,DataSourceWeight AS "DataSourceWeight"
+		,Latency_BufferTime "LegTime"
+		,Latency_UOM "LegTimeUnit"
+		FROM CBDataExpectencyMst CDEM 
+		Inner Join CBCorrelationMst CMst on CDEM.CorrelationID=CMst.CorrelationID
+		WHERE CDEM.CorrelationID = Vcorrelationid and CMst.IsActive='1'
+		--FOR XML RAW ('DATASOURCE')
+		)src
+	);
+
+VSixthTag:= 
+	(
+		Select Array_to_json(Array_Agg(Row_to_json(lat))) "LATENCYRULE" 
+		from
+		(	
+		SELECT ParamType AS "CONDITIONSYMBOL"
+		,ParamValue1 AS "CONDITIONVALUE1"
+		,ParamValue2 AS "CONDITIONVALUE2"
+		,VSeventhTag  as "DATASOURCE"
+		FROM CBDataExpectencyRule CDE 
+		Inner Join CBCorrelationMst CMst on CDE.CorrelationID=CMst.CorrelationID
+		WHERE CDE.CorrelationID = Vcorrelationid
+                --FOR XML RAW ('LATENCYRULE')
+                )lat
+        );
+
+VFifthTag:= 
+	( 
+		Select Array_to_json(Array_Agg(Row_to_json(fld))) "FIELD" 
+		from
+		(
+		SELECT DISTINCT FIELDNAME AS "NAME"
+		,weightage AS "VALUE" 
+		,WConfig.WeightageConfigurationID "RuleID"
+		,Wconfig.AssociatedSourcesList "ApplicableSources" 
+		FROM 
+		CBWeightageConfigurations WConfig
+		Join CBAttributeWeightageMst CAWM On WConfig.WeightageConfigurationID=CAWM.WeightageConfigurationID
+		INNER JOIN CBCorrelationFieldsMst CBFC ON CBFC.FieldID = CAWM.FieldID
+		WHERE WConfig.CorrelationID = Vcorrelationid
+		--FOR XML RAW ('FIELD')
+		) fld
+        );
+                  
+					 
+ 
+ VFourthTag:= 
+	( 
+		Select  Array_to_json(Array_Agg(Row_to_json(field))) "CORRELATIONFIELDSVALUES"
+		from
+		(
+			SELECT ParamType as CONDITIONSYMBOL,ParamValue1 as CONDITIONVALUE1,ParamValue2 as CONDITIONVALUE2
+			,
+			(
+				select Array_to_json(Array_Agg(Row_to_json(srces))) "SELECTEDDATASOURCES"
+				from
+				(
+					Select WConfig1.AssociatedSourcesList "SELECTEDDATASOURCES"
+					,CutOffWeightage "CUTOFFWEIGHTAGE"
+					,WConfig1.MaxCUTOFFWEIGHTAGE	"MaxCUTOFFWEIGHTAGE"
+					,WConfig1.MinCUTOFFWEIGHTAGE	"MinCUTOFFWEIGHTAGE"
+					,
+					(
+						Select Array_to_json(Array_Agg(Row_to_json(fld))) "FIELD"
+						from
+						(
+							SELECT DISTINCT cbfc.FIELDNAME AS "NAME" 
+							,weightage AS "VALUE" 
+							,WConfig.WeightageConfigurationID "RULEID"
+							,Wconfig.AssociatedSourcesList "APPLICABLESOURCES" 
+							,Pos_Offset "POSOffSET"
+							,New_Offset "NAGOffSET"
+							,UOM "TimeUnit"
+							,CAWM.RuleIndex as "RuleIndex"
+							FROM 
+							CBWeightageConfigurations WConfig
+							Join CBAttributeWeightageMst CAWM On WConfig.WeightageConfigurationID=CAWM.WeightageConfigurationID
+							INNER JOIN CBCorrelationFieldsMst CBFC ON CBFC.FieldID = CAWM.FieldID
+							WHERE WConfig.CorrelationID = Vcorrelationid  
+								and WConfig.WeightageConfigurationID=Rules.WeightageConfigurationID
+								and CAWM.WeightageConfigurationID=Rules.WeightageConfigurationID 
+								and WConfig.WeightageConfigurationID=WConfig1.WeightageConfigurationID
+							--For Xml RAW ('FIELD')
+						
+						) as fld
+					) 
+					From 
+					CBWeightageConfigurations WConfig1	
+					where CorrelationID=Vcorrelationid 
+						and Rules.WeightageConfigurationID=WConfig1.WeightageConfigurationID
+					--For XML RAW('SELECTEDDATASOURCES')
+				)as srces
+			)
+			FROM 
+			CBAttributeWeightRule Rules 
+			Inner Join CBCorrelationMst CMst on Rules.CorrelationID=CMst.CorrelationID
+			WHERE Rules.CorrelationID = Vcorrelationid and CMST.IsActive='1'
+			--FOR XML RAW('CORRELATIONFIELDSVALUES'),Root('RULESDETAILS')
+		) field
+        );
+  
+
+VDefaultSource:= 
+		(
+			SELECT DISTINCT SourceID 
+			FROM CBCorrelationDetails CDE  
+			Inner Join CBCorrelationMst CMst on CDE.CorrelationID=CMst.CorrelationID
+			WHERE CDE.CorrelationID = VCorrelationid AND IsSelected =1 and CMst.IsActive='1'
+		);      
+      
+ VFirstTag:= 
+	(
+		Select Row_To_json(cor) as "CORRELATION"
+		from
+		(
+		SELECT CCM.CorrelationID "ID" 
+		,CCM.CorrelationName AS "NAME" 
+		,CCM.TypeID as "TYPE"
+		,Vnew as "SELECTEDDATASOURCES"
+		,VDefaultSource AS "DEFAULTDATASOURCE"
+		,HasLegs "HASLEGS"
+		,IsEntityDimension "CorrelationFor"
+		,users.USER_NAME "CreatedBy"
+		FROM CBCorrelationMst CCM
+		INNER JOIN CBCorrelationDetails CCD ON CCM.CorrelationID = CCD.CorrelationID
+		left outer Join KBUserMst users on CCm.CreatedBy=users.USER_ID
+		WHERE CCM.CorrelationID = Vcorrelationid  
+		limit 1
+		--FOR XML RAW ('CORRELATION')
+		) cor
+	);
+
+VEighthTag:= 
+	( 
+		Select 	 Array_to_json(Array_Agg(Row_to_json(calls))) "SELECTEDDATASOURCES"
+		from
+		(
+		SELECT CBDR1.SELECTEDDATASOURCE as "SourceName"
+		,
+		(
+			Select  Array_to_json(Array_Agg(Row_to_json(call))) "CALLDEPENDENCY"	
+			from
+			( 
+			SELECT 
+			SELECTEDDATASOURCE	"SELECTEDDATASOURCE"
+			,cast(Expression as xml) "Expression"
+			,ServiceExpression   "ServiceExpression"
+			FROM 
+			CBCalldependencyRule CBDR 
+			where correlationid=Vcorrelationid and CBDR1.SELECTEDDATASOURCE= CBDR.SELECTEDDATASOURCE  
+			Group by SELECTEDDATASOURCE ,Expression,ServiceExpression
+			--For XML RAW ('CALLDEPENDENCY')  
+			) as call
+		)
+		From CBCalldependencyRule CBDR1	
+		Inner Join CBCorrelationMst CMst on CBDR1.CorrelationID=CMst.CorrelationID
+		where CBDR1.CorrelationID=Vcorrelationid  and CMSt.IsActive='1'
+		Group by CBDR1.SELECTEDDATASOURCE
+		--For XML RAW('SELECTEDDATASOURCES'),Root('CALLDEPENDENCYS')
+		)calls
+	);	
+     
+      
+
+VNinthTag:= 
+	( 
+		Select 	 Array_to_json(Array_Agg(Row_to_json(calls))) "SELECTEDDATASOURCES"
+		from
+		(
+		SELECT CBDR1.SELECTEDDATASOURCE as "SourceName"
+		,
+		(
+			Select  Array_to_json(Array_Agg(Row_to_json(call))) "CALLDEPENDENCY"
+			from
+			( 
+				SELECT 
+				SELECTEDDATASOURCE	"SELECTEDDATASOURCE"
+				,cast(Expression as xml) "Expression"
+				, ServiceExpression   "ServiceExpression"
+				FROM 
+				CBDuplicateCallConfigurationRules CBDR 
+				where cbdr.correlationid=cbdr1.CorrelationID and CBDR1.SELECTEDDATASOURCE= CBDR.SELECTEDDATASOURCE  
+				--For XML RAW ('CALLDEPENDENCY')  
+			) as call
+		)
+		From CBDuplicateCallConfigurationRules CBDR1	
+		Inner Join CBCorrelationMst CMst on CBDR1.CorrelationID=CMst.CorrelationID
+		where CBDR1.CorrelationID=Vcorrelationid  and CMst.IsActive='1'
+		Group by CBDR1.SELECTEDDATASOURCE,cbdr1.CorrelationID 
+		--For XML RAW('SELECTEDDATASOURCES'),Root('MATCHINGDATADELETIONRULES')
+		) calls
+);	
+
+VDimensions:=
+	(	
+		Select  Array_to_json(Array_Agg(Row_to_json(dim))) "Dimension"
+		from
+		(
+			SELECT  Mst.ID  "ID"
+			,Mst.DIMENSIONNAME  as "Name"
+			,
+			(
+				select Row_to_json(mets) "Metrics"
+				from
+				(
+					Select  Array_to_json(Array_Agg(Row_to_json(dim))) "Metric"
+					from
+					(
+						SELECT  Met_LocID "ID"
+						,Link.Met_LocName "Name"
+						from CBCorrDimEntityMappingDetails LINK  
+						where B.CorrDimEntID=Link.CorrDimEntID and upper(link.ObjectType)='DIMENSION'
+						--FOR XML RAW('Metric'),ROOT('Metrics')
+					) as dim
+				) mets	
+			)
+			FROM CBCorrDimEntityMappingMst B 
+			join KB_Dim_DimensionMst Mst on B.ObjectID=Mst.Id
+			Inner Join CBCorrelationMst CMst on B.CorrelationID=CMst.CorrelationID
+			where B .ObjectType='DIMENSION' and B.correlationid=Vcorrelationid and CMst.IsActive='1'
+			group by Mst.ID,Mst.DIMENSIONNAME   ,CorrDimEntID
+			--for xml RAW('Dimension'),ROOT('Dimensions') 
+		) dim
+		
+	);
+	
+VEntities:=
+	(
+
+		Select  Array_to_json(Array_Agg(Row_to_json(ent))) "Entity"
+		from
+		(
+			select B.ENTITY_NAME "DefName"
+			,A.ENTITY_NAME "Name"
+			,A.ENTITY_ID "ID"
+			,
+			(
+				Select Row_to_json(entas) "EntityAttributeDetails"
+				from
+				(
+					Select  Array_to_json(Array_Agg(Row_to_json(enta))) "EntityAttribute"
+					from
+					(
+						select Cols.Met_LocName "Name" 
+						from CBCorrDimEntityMappingDetails Cols
+						Join KBEntityMst EntityMst on  Cols.Met_LocID=EntityMst.ENTITYDEF_ID
+						Inner Join CBCorrelationMst CMst on Cols.CorrelationID=CMst.CorrelationID
+						where Entitymst.ENTITYDEF_ID=B.ENTITYDEF_ID and Cols.CorrDimEntID=CorrMap.CorrDimEntID  and CMst.IsActive='1'
+						and Cols.CorrelationId=Vcorrelationid and Cols.ObjectType='ENTITY'
+						--for xml RAW('EntityAttribute'),ROOT('EntityAttributeDetails')
+					) as enta
+				)entas	
+			)
+			from
+			kbentitymst B  
+			Inner JOIN kbentities A on A.ENTITYDEF_ID=B.ENTITYDEF_ID 
+			Join CBCorrDimEntityMappingMst CorrMap on B.ENTITYDEF_ID=corrMap.ObjectID
+			where CorrMap.ObjectType='ENTITY' and Corrmap.correlationid=Vcorrelationid
+			--for xml raw('Entity'),root('Entities')
+		)ent
+	);
+
+	Return(
+		select Row_to_json(output)
+		from
+		(
+			Select Row_To_json(cors) as "CORRELATIONDETAILS"
+			from
+			(
+			SELECT VFirstTag "CORRELATION",VThirdTag_1 as "MATHCHINGRULEDETAILS",VFourthTag as "RULESDETAILS"
+				,VSixthTag as "LATENCYRULE", VEighthTag as "CALLDEPENDENCYS", VNinthTag as "MATCHINGDATADELETIONRULES",VDimensions "Dimensions",VEntities  as "Entities"
+			--FOR XML RAW ('CORRELATIONDETAILS')
+			) cors
+		) output
+	) output;		
+
+END;
+Elseif Lower(VTran)='update' Then
+begin
+
+/* Inserting into the Temporary table the master information received in the input */
+
+	INSERT INTO TEMPCORRELATION(CorrelationID,CorrelationName,CorrelationTypeID,selectedSources,DEFAULTDATASOURCE,IsEntityDimension)
+	select cast(ivalue->'CORRELATIONDETAILS'->> 'CORRELATIONID'  as bigint)
+	,ivalue->'CORRELATIONDETAILS'->'CORRELATION'->> 'NAME' 
+	,ivalue->'CORRELATIONDETAILS'->'CORRELATION'->> 'TYPE' 
+	,ivalue->'CORRELATIONDETAILS'->'CORRELATION'->> 'SELECTEDDATASOURCE'
+	,cast(ivalue->'CORRELATIONDETAILS'->'CORRELATION'->> 'DEFAULTDATASOURCE'  as int)
+	,cast(ivalue->'CORRELATIONDETAILS'->'CORRELATION'->> 'CorrelationFor' as smallint)
+	from temps 
+	limit 1	;
+	
+
+	
+	Vcorrelationid:= (SELECT CorrelationID FROM TEMPCORRELATION);          
+
+	
+	UPDATE CBCorrelationMst
+	SET TypeID = cast(TC.CorrelationTypeID as smallint)
+	FROM TEMPCORRELATION TC 
+	where TC.CorrelationID = CBCorrelationMst.CorrelationID
+	and CBCorrelationMst.CorrelationID = Vcorrelationid ; 
+
+	/* The below piece of code deletes all the existing records of the correlation from the tables and new records will be inserted */
+
+	Delete from CBCorrelationDetails where CorrelationID=Vcorrelationid;
+	Delete from CBDuplicateCallConfigurationRules where CorrelationID=Vcorrelationid;
+	Delete from CBCorrelationDetails where CorrelationID=Vcorrelationid;
+	Delete from CBCalldependencyRule where CorrelationID=Vcorrelationid;
+	Delete from CBDuplicateCallConfigurationRules where CorrelationID=Vcorrelationid;
+	Delete from CBAttributeWeightageMst where CorrelationID=Vcorrelationid;
+	Delete from CBAttributeWeightRule where CorrelationID=Vcorrelationid;
+	Delete from CBWeightageConfigurations where CorrelationID=Vcorrelationid;
+	Delete from CBCorrelationConfigDetails where ConfigurationID in (Select ConfigurationID from CBConfigurationMst where CorrelationID=Vcorrelationid);
+	Delete from CBConfigurationMst where CorrelationID=Vcorrelationid;
+	delete from CBCorrelationScheduleRules where CBScheduleID in (Select CBScheduleID from CBCorrelationScheduleMst where CorrelationID=Vcorrelationid);
+	delete from CBCorrelationScheduleMst where CorrelationID=Vcorrelationid;
+	delete from CBDataExpectencyMst where CorrelationID=Vcorrelationid;
+	delete from CBDataExpectencyRule where CorrelationID=Vcorrelationid;
+	delete from CBDuplicateCallConfigurationRules where CorrelationID=Vcorrelationid;
+
+      Select CorrelationTypeID,CorrelationName into VCORRELATIONTYPEID, VCorrelationName
+      FROM TEMPCORRELATION limit 1;
+
+   
+      /* Inserting the Dimension and Entity Details */	
+ 
+		
+	INSERT INTO CORREntDim(CorrelationID,ObjectID,ObjectName,ObjectType)
+	Select A.Correlationid,A.DimensionID ObjectID, Dimensions.DIMENSIONNAME ObjectName,A.ObjectType
+	from
+	(
+		Select 	
+		Vcorrelationid Correlationid
+		,cast(ivalue->'CORRELATIONDETAILS'->'CORRELATION'->'DimensionEntityDetails'->'Dimensions'->'Dimension'->>'DimensionID' as int) as DimensionID
+		,'DIMENSION' ObjectType
+		from temps 
+		limit 1
+	) A
+	Join KB_DIM_DIMENSIONMST Dimensions on A.DimensionID=Dimensions.ID;
+	
+	INSERT INTO CORREntDim(CorrelationID,ObjectID,ObjectName,ObjectType)
+	Select A.Correlationid,A.ENTITY_ID, Entities.ENTITY_NAME,A.ObjectType
+	from
+	(
+		Select 	
+		Vcorrelationid Correlationid
+		,cast(ivalue->'CORRELATIONDETAILS'->'CORRELATION'->'DimensionEntityDetails'->'Entities'->'Entity'->>'EntityID' as int) ENTITY_ID
+		,'ENTITY' ObjectType
+		from temps 
+		limit 1
+	) A
+	Join KBEntities Entities on A.ENTITY_ID=Entities.ENTITYDEF_ID;
+	 
+	  
+	INSERT INTO CORREntDimDetails(CorrelationID,ObjectID,ObjectName,MstObjectID,MstObjectType)
+	Select A.Correlationid,A.FieldID ObjectID, A.FieldName ObjectName,Dimensions.ObjectID,A.ObjectType
+	from
+	(
+		Select 	
+		Vcorrelationid Correlationid
+		,cast(ivalue->'CORRELATIONDETAILS'->'CORRELATION'->'DimensionEntityDetails'->'Dimensions'->'Dimension'->'FIELD'->>'FieldID' as int) FieldID
+		,ivalue->'CORRELATIONDETAILS'->'CORRELATION'->'DimensionEntityDetails'->'Dimensions'->'Dimension'->'FIELD'->>'FieldName' FieldName
+		,cast(ivalue->'CORRELATIONDETAILS'->'CORRELATION'->'DimensionEntityDetails'->'Dimensions'->'Dimension'->'FIELD'->>'DATASOURCEID' as int) as DimensionID
+		,'DIMENSION' ObjectType
+		from temps 
+		limit 1	
+		
+	) A
+	Join CORREntDim Dimensions on A.DimensionID=Dimensions.ObjectID and A.Correlationid=Dimensions.CorrelationID
+	where Dimensions.ObjectType='DIMENSION';
+	
+	INSERT INTO CORREntDimDetails(CorrelationID,ObjectID,ObjectName,MstObjectID,MstObjectType)
+	Select A.Correlationid,A.FieldID ObjectID, A.FieldName ObjectName,Entities.ObjectID,A.ObjectType
+	from
+	(
+		Select 	
+		Vcorrelationid Correlationid
+		,cast(ivalue->'CORRELATIONDETAILS'->'CORRELATION'->'DimensionEntityDetails'->'Entities'->'Entity'->'Branch'->>'LocationID' as int) FieldID
+		,ivalue->'CORRELATIONDETAILS'->'CORRELATION'->'DimensionEntityDetails'->'Entities'->'Entity'->'Branch'->>'LocationName' FieldName
+		,cast(ivalue->'CORRELATIONDETAILS'->'CORRELATION'->'DimensionEntityDetails'->'Entities'->'Entity'->'Branch'->>'EntityID' as int) EntityID
+		,'ENTITY' ObjectType
+		from temps 
+		limit 1
+	) A
+	Join CORREntDim Entities on A.EntityID=Entities.ObjectID and A.Correlationid=Entities.CorrelationID
+	where Entities.ObjectType='ENTITY';
+	   
+	 
+	 /* Inserting into CBCorrDimEntityMappingMst and CBCorrDimEntityMappingDetails. We store the entity and the dimensions mapped to the correaltion rule */
+	 
+	 
+	 Insert into CBCorrDimEntityMappingMst(CorrelationId,ObjectID,ObjectName,ObjectType,CreatedBy,ModifiedBy, ModifiedDate)
+	 Select Mst.CorrelationID,mst.ObjectID,mst.ObjectName,mst.ObjectType,Vcreated_by CreatedBy, Vcreated_by ModifiedBy,VActiondate ModifiedDate
+	 From CORREntDim Mst;
+	 
+	 Update CORREntDimDetails
+	 set CorrDimEntId=Mst.CorrDimEntID
+	 From
+	 CBCorrDimEntityMappingMst Mst 
+	 where CORREntDimDetails.CorrelationID=Mst.CorrelationId and CORREntDimDetails.MstObjectID=Mst.ObjectID and CORREntDimDetails.MstObjectType=Mst.ObjectType;
+	 
+	 Insert into CBCorrDimEntityMappingDetails(CorrDimEntID,CorrelationId,Met_LocID,Met_LocName,ObjectType,CreatedBy,ModifiedBy, ModifiedDate)
+	 Select Details.CorrDimEntId,Details.CorrelationID,Details.MstObjectID,Details.ObjectName, details.MstObjectType,Vcreated_by CreatedBy
+	 , Vcreated_by ModifiedBy,VActiondate ModifiedDate
+	 from CORREntDimDetails Details
+	 where not exists (Select 1 from CBCorrDimEntityMappingDetails CDetails where Details.CorrelationID=CDetails.CorrelationId
+				and Details.MstObjectType=CDetails.ObjectType and Details.ObjectName=CDetails.Met_LocName);
+	 
+	 
+	 
+	VSELECTEDSOURCENAMES:= (SELECT selectedSources from TEMPCORRELATION);
+
+	VDefaultDataSources:= (SELECT DEFAULTDATASOURCE from TEMPCORRELATION);
+      
+	INSERT INTO SELECTEDSOURCES(SOURCENAMES,HasLegs,HasNMachines,iTYPE)
+	SELECT 
+	  cast(SUBSTRING(item,0,strpos(item,';')) as int) Sourceid
+	, cast(SUBSTRING(item,strpos(item,';')+1,1) as bit) HasNLegs
+	, Cast(SUBSTRING(item,strpos(item,';')+3,1) as bit) HasNMachines     
+	, cast(SUBSTRING(item,strpos(item,';')+5,1) as int) iTYPE     
+	FROM 
+	(
+	select item
+	from
+		(
+		select regexp_split_to_table(VSELECTEDSOURCENAMES,'#CWDB01#') as item
+		)aa
+	where item !='')A
+	;
+	
+      
+      VCnt:= (SELECT COUNT(*) FROM SELECTEDSOURCES);
+      VCnter:= 1;
+
+      
+-- 	WHILE(VCnter <= VCnt ) Loop
+-- 
+-- 
+-- 	
+-- 		/* Inserting the sources that have been used in the rule */
+-- 		INSERT INTO CBCorrelationDetails(CorrelationID,SourceID,IsSelected,IsActive,CreatedBy,HasLegs,HasNMachines,typeid)
+-- 		SELECT Vcorrelationid,KSTM.SOURCETYPE_ID,CASE WHEN Sourcenames = VDefaultDataSources THEN 1 ELSE 0 END ,'1',Vcreated_by
+-- 		,Ss.HasLegs
+-- 		,SS.HasNMachines
+-- 		,SS.iTYPE
+-- 		FROM SELECTEDSOURCES SS
+-- 		INNER JOIN KBSourceTypeMst KSTM ON KSTM.SOURCETYPE_ID = SS.Sourcenames
+-- 		WHERE ID=VCnter;
+-- 		VCnter:= VCnter + 1;
+-- 	END Loop;
+
+			/* Inserting the sources that have been used in the rule */
+		INSERT INTO CBCorrelationDetails(CorrelationID,SourceID,IsSelected,IsActive,CreatedBy,HasLegs,HasNMachines,typeid)
+		SELECT Vcorrelationid,KSTM.SOURCETYPE_ID,CASE WHEN Sourcenames = VDefaultDataSources THEN 1 ELSE 0 END ,'1',Vcreated_by
+		,Ss.HasLegs
+		,SS.HasNMachines
+		,SS.iTYPE
+		FROM SELECTEDSOURCES SS
+		INNER JOIN KBSourceTypeMst KSTM ON KSTM.SOURCETYPE_ID = SS.Sourcenames
+		where not exists(select 1 from CBCorrelationDetails where correlationid=Vcorrelationid)
+		; 
+ 
+ 
+
+	INSERT INTO DataSourcesInfo(FieldType,SpokeID,SourceName,SOURCEFIELDId,Sourcefield,matchtype,matchrule,param1 ,param2,param1value,param2value
+	,MasterTableName,MasterRecordName,SELECTEDDATASOURCEID,SELECTEDDATASOURCE,AttributeName,Ncharacters,IsRequired,Rowindex,ServiceExpression )
+	SELECT 
+	FieldType  
+	,SPOKEID  
+	,SourceName  
+	,SOURCEFIELDID
+	,SOURCEFIELDNAME  
+	,MATCHTYPE
+	,MatchRule
+	,PARAM1
+	,PARAM2
+	,PARAM1VALUE
+	,PARAM2VALUE
+	,MasterTableName
+	,MasterRecordName	
+	,SELECTEDDATASOURCEID	
+	,SELECTEDDATASOURCE
+	,AttributeName
+	,Ncharaters
+	,ISREQUIRED
+	,RowIndex
+	,ServiceExpression AS ServiceExpression  
+	FROM 
+
+	(	 
+		Select Fuzzylogic->>'ServiceExpression' ServiceExpression
+		,FieldType,SPOKEID,sourcename,SOURCEFIELDID,SOURCEFIELDNAME,ISREQUIRED,MatchRule,MATCHTYPE,PARAM1,PARAM2,PARAM1VALUE,PARAM2VALUE, MasterTableName, MasterRecordName
+		,SELECTEDDATASOURCEID,SELECTEDDATASOURCE,AttributeName,Ncharaters,RowIndex
+		from
+		(
+			Select case when MATCHTYPE!='Exact Match' and MATCHTYPE!='Static Match' then json_array_elements(fuzzy) Else '{"ServiceExpression":""}' end Fuzzylogic,FieldType,SPOKEID,sourcename,SOURCEFIELDID,SOURCEFIELDNAME,ISREQUIRED
+			,MatchRule,MATCHTYPE,PARAM1,PARAM2,PARAM1VALUE,PARAM2VALUE, MasterTableName, MasterRecordName,SELECTEDDATASOURCEID,SELECTEDDATASOURCE,AttributeName,Ncharaters,RowIndex
+			from
+			(
+				select Datasrc->'FuzzyLogic' fuzzy,FieldType,SPOKEID,sourcename,SOURCEFIELDID,SOURCEFIELDNAME,ISREQUIRED
+				,Datasrc->>'MATCHTYPE' as MATCHTYPE
+				,Datasrc->>'RULE' as		MatchRule
+				,Datasrc->>'PARAM1' 	as	PARAM1
+				,Datasrc->>'PARAM2' 	as	PARAM2
+				,Datasrc->>'VALUE' 	as	PARAM1VALUE
+				,Datasrc->>'PARAM2VALUE' as	PARAM2VALUE
+				,Datasrc->>'MasterTableName' as MasterTableName
+				,Datasrc->>'MasterRecordName' as MasterRecordName	
+				,cast(Datasrc->>'SOURCEID'as int) as	SELECTEDDATASOURCEID	
+				,Datasrc->>'DATASOURCE' as	SELECTEDDATASOURCE
+				,Datasrc->>'SELECTEDFIELDNAME' as	AttributeName
+				,Datasrc->>'NoOfCharacters' as	Ncharaters
+				,cast(Datasrc->>'RowIndex'as smallint) as	RowIndex
+				from
+				(
+					Select 
+					FieldType,SPOKEID,sourcename,SOURCEFIELDID,SOURCEFIELDNAME,ISREQUIRED,
+					json_array_elements(datasrc) as Datasrc
+					from
+					(
+						Select parsesrc->>'FIELDNAME' as FieldType
+						,cast(parsesrc->>'SPOKEID' as int) SPOKEID
+						,parsesrc->>'SPOKENAME'  sourcename
+						,cast(parsesrc->>'SOURCEFIELDID' as int) SOURCEFIELDID
+						,parsesrc->>'SOURCEFIELDNAME' SOURCEFIELDNAME
+						,cast(parsesrc->>'ISREQUIRED' as bit) ISREQUIRED
+						,parsesrc->'DATASOURCE' as datasrc
+						from
+						(
+							Select json_array_elements(rdsrc) parsesrc
+							from
+							(
+								Select srcjson->'Source' rdsrc
+								from
+								(
+									Select json_array_elements(srces) srcjson
+									from
+									(
+										Select src->'SOURCES' srces
+										from
+										(
+											Select json_array_elements(Fields) src
+											from
+											(
+												Select matches->'FIELD' Fields
+												from
+												(
+													select json_array_elements(matchrule) as matches
+													from
+													(
+														Select ivalue->'CORRELATIONDETAILS'->'CORRELATION'->'MATHCHINGRULEDETAILS' matchrule
+														from
+														temps 
+														limit 1
+													)inp
+												) fie
+											)fieldtojson
+										) srctojson
+									)srcestojson
+								)readsrc
+							)redsrc	
+						)outs
+					)subinput
+				)exp
+			)fexp
+		)serviceexp	
+	) as mains
+	 ;
+
+-- 
+-- Return(select array_to_json(array_Agg(row_to_json(a))) 
+-- 	from( SELECT Distinct DSI.SpokeID,Vcorrelationid,CCFM.fieldID,cast(NULL as int),NULL AS MasterTableName,DSI.MasterRecordName AS MasterRecordName
+--        ,NULL,NULL,Vcreated_by,'1',DSI.SOURCEFIELD,IsRequired
+-- 	from DataSourcesInfo DSI
+-- 	LEFT JOIN CBCorrelationFieldsMst CCFM ON lower(CCFM.FieldName) = lower(DSI.FieldType)
+-- 	LEFT JOIN CBMatchTypeMst CMTM ON Lower(CMTM.MatchTypeName)=lower(DSI.matchtype) )a);
+  
+   
+ Insert into FuzzyLogic(ServiceExpression,RuleID,SpokeID,SOURCEFIELDId,value,Priority,Rowindex,Value1, Value2 )
+ select ServiceExpression
+,cast(Fuzrul->>'RuleID' as int)	RuleID
+,cast(Fuzrul->>'DataSourceID' as int)	DataSourceID
+,cast(Fuzrul->>'FieldID' as int)	FieldID
+,NULL param1value
+,cast(Fuzrul->>'Priority'as smallint)	Priority
+,cast(Fuzrul->>'RowIndex'as smallint)	RowIndex
+,Fuzrul->>'Value1'	Value1
+,Fuzrul->>'Value2' Value2
+from
+(
+	Select ServiceExpression,json_array_elements(Fuzr)Fuzrul
+	from
+	( 
+		Select Fuzzylogic->>'ServiceExpression' ServiceExpression
+		, Fuzzylogic->'Rule' Fuzr
+		from
+		(
+			Select json_array_elements(fuzzy) Fuzzylogic
+			from
+			(
+				select dsrces->'FuzzyLogic' fuzzy
+				from
+				(
+					select json_array_elements(DSOURCES) dsrces
+					from
+					(
+						Select srce->'DATASOURCE' DSOURCES
+						from
+						(
+							select json_array_elements(sorc) srce
+							from
+							(
+								Select source->'Source' sorc
+								from
+								(
+									select json_array_elements(src) source
+									from
+									(
+										Select mfield->'SOURCES' src
+										from
+										(
+											select json_array_elements(fields) mfield
+											from
+											(
+												Select matches->'FIELD' fields
+												from
+												(
+													Select json_array_elements(matchr) matches
+													from
+													(
+														select ivalue->'CORRELATIONDETAILS'->'CORRELATION'->'MATHCHINGRULEDETAILS' matchr
+														from temps 
+														limit 1
+													)mat
+												) field
+											)mfields
+										) srcs
+									)srces
+								)isrc
+							)isrces			
+						)dsrc
+					)dsrcs
+				)flogic
+			) fuzz
+		)fuzlog 
+	)frul	
+) fruls
+;
+
+ 
+     
+        VCnt:= (SELECT COUNT(*) FROM DataSourcesInfo);
+        VCnter:= 1;
+  
+        BEGIN
+ 
+
+	/* This is the master table that stores the Metric mapping data */
+        
+       INSERT INTO CBConfigurationMst(
+       DataSoureTypeID,CorrelationID,FieldID,MatchTypeID,DSTableColumnName,MstTableColumnName,SelectedDataSource,SelectedDSAttributeName
+       ,CreatedBy,IsActive,SourceField,isRequired)
+       SELECT Distinct DSI.SpokeID,Vcorrelationid,CCFM.fieldID,cast(NULL as int),NULL AS MasterTableName,DSI.MasterRecordName AS MasterRecordName
+       ,NULL,NULL,Vcreated_by,'1',DSI.SOURCEFIELD,IsRequired
+	from DataSourcesInfo DSI
+	LEFT JOIN CBCorrelationFieldsMst CCFM ON lower(CCFM.FieldName) = lower(DSI.FieldType)
+	LEFT JOIN CBMatchTypeMst CMTM ON Lower(CMTM.MatchTypeName)=lower(DSI.matchtype) ;
+
+	END;
+	
+	INSERT INTO ConfigDetails(ConfigurationID,SourceID,FieldName,rowindex)
+	SELECT ConfigurationID,DataSoureTypeID,fields.FieldName ,cast(Datasrc->>'RowIndex' as int) as	RowIndex
+	FROM CBConfigurationMst ConfigMst
+	Join CBCorrelationFieldsMst fields on ConfigMst.FieldID=fields.FieldID
+	Join
+	(
+		Select 
+		VCorrelationID CorrelationID,FieldType,SPOKEID,sourcename,SOURCEFIELDID,SOURCEFIELDNAME SOURCEFIELDNAME,ISREQUIRED,
+		json_array_elements(datasrc) as Datasrc
+		from
+		(
+			Select parsesrc->>'FIELDNAME' as FieldType
+			,cast(parsesrc->>'SPOKEID' as int) SPOKEID
+			,parsesrc->>'SPOKENAME'  sourcename
+			,cast(parsesrc->>'SOURCEFIELDID' as int) SOURCEFIELDID
+			,parsesrc->>'SOURCEFIELDNAME' SOURCEFIELDNAME
+			,cast(parsesrc->>'ISREQUIRED' as bit) ISREQUIRED
+			,parsesrc->'DATASOURCE' as datasrc
+			from
+			(
+				Select json_array_elements(rdsrc) parsesrc
+				from
+				(
+					Select srcjson->'Source' rdsrc
+					from
+					(
+						Select json_array_elements(srces) srcjson
+						from
+						(
+							Select src->'SOURCES' srces
+							from
+							(
+								Select json_array_elements(Fields) src
+								from
+								(
+									Select matches->'FIELD' Fields
+									from
+									(
+										select json_array_elements(matchrule) as matches
+										from
+										(
+											Select ivalue->'CORRELATIONDETAILS'->'CORRELATION'->'MATHCHINGRULEDETAILS' matchrule
+											from
+											temps 
+											limit 1
+										)inp
+									) fie
+								)fieldtojson
+							) srctojson
+						)srcestojson
+					)readsrc
+				)redsrc	
+			)outs
+		)subinput	
+	) A on configmst.CorrelationID=A.CorrelationID and Configmst.DataSoureTypeID=A.Spokeid and A.SOURCEFIELDNAME=Configmst.SourceField
+			and Fields.FieldName=A.FieldType
+	WHERE configmst.CorrelationID = Vcorrelationid;
+
+   --Return(select array_to_json(array_Agg(row_to_json(a)))from (select * from ConfigDetails)a) ;
+   
+	VCnt:= (SELECT COUNT(*) FROM ConfigDetails);
+	VCnter:= 1;
+  
+   --WHILE(@Cnter <= @Cnt)
+	   BEGIN
+	   
+	   
+	   
+	   
+	   /* This is the details table that stores the Metric mapping data */
+		
+	   INSERT INTO CBCorrelationConfigDetails(CorrelationID,ConfigurationID,CriteriaID,param1,param2,Value1,Value2,CreatedBy,IsActive,
+	   MatchTypeID,DSTableColumnName,DataSourceID,SelectedDataSource,SelectedDSAttributeName,MstTableColumnName,Priority,Expression)
+	   SELECT Vcorrelationid
+	   ,CBC.ConfigurationID,CCM.CriteriaID
+	   ,Param1
+	   ,param2
+	   ,Case when param1value='NULL' OR param1value='EMPTY' Then '' Else param1value End  param1value
+	   ,param2value,Vcreated_by,'1'
+	   ,CMTM.matchtypeid,CMTM.MatchTypeName,SELECTEDDATASOURCEID,dsi.SELECTEDDATASOURCE,DSI.AttributeName,dsi.MasterTableName
+	   ,Priority
+	   ,ServiceExpression
+	   FROM 
+	   ConfigDetails CBC
+	   INNER JOIN (
+			Select FieldType ,SpokeID,SourceName,SOURCEFIELDId,Sourcefield,matchtype,matchrule,matchparam,param1,param2
+			,param1value,param2value,MasterTableName,MasterRecordName,SELECTEDDATASOURCEID,SELECTEDDATASOURCE
+			,AttributeName,Ncharacters,IsRequired ,0 Priority,'' as ServiceExpression
+			from DataSourcesInfo 
+			where matchtype!='Custom Match'
+			union all
+			Select  FieldType ,A.SpokeID,SourceName,A.SOURCEFIELDId,Sourcefield,matchtype,NULL MatchRule,NULL MatchParam
+			,cast(B.RuleID as varchar(50)) Param1,NULL Param2
+			,case when B.value Is Null then Value1 Else B.Value End Param1Value
+			,case when B.value Is Null then Value2 Else NULL End Param2Value
+			,NULL MasterTableName, NULL MasterRecordName,A.SELECTEDDATASOURCEID,A.SELECTEDDATASOURCE 
+			,AttributeName,A.Ncharacters,IsRequired,Priority,B.ServiceExpression
+			from DataSourcesInfo A
+			Left Outer Join 
+			FuzzyLogic B on A.SOURCEFIELDId=B.SOURCEFIELDId and A.Rowindex=B.Rowindex and A.ServiceExpression=B.ServiceExpression
+			where matchtype='Custom Match'
+			) DSI 
+			ON CBC.SourceID = DSI.SpokeID and CBC.FieldName=DSI.FieldType
+	   INNER JOIN CBCorrelationFieldsMst CBFM ON CBFM.FieldName = DSI.FieldType
+	   LEFT JOIN CBMCriteriaMst CCM ON CCM.CriteriaName = DSI.matchrule
+	   LEFT JOIN CBMatchTypeMst CMTM ON CMTM.MatchTypeName=DSI.matchtype 
+	   where DSI.matchtype is not null;
+	 
+	   END;
+ 
+ 
+ 
+ /* Reading the Metric weightage information coming in the input */
+ 
+ 
+	Insert into AttWeightInfo(id ,UniqueID ,SelectDataSources --,DSIds 
+	,FieldName ,FieldValue , POSOFFSET ,NEGOFFSET ,UOM ,NID ,RuleIndex,iCutoffweight, maxcutoffweight, mincutoffweight
+	,DSID,ConditionSymbol,CONDTIONVALUE1,CONDTIONVALUE2
+	) 
+	SELECT 	NULL,NULL,SELECTEDDATASOURCE ,NAME,WEIGHTAGE,POSOFFSET,NEGOFFSET,UOM,RuleCount ,RuleIndex,mains.Cutoffweight,mains.maxcutoffweight,mains.Mincutoffweight 
+	,DSID,ConditionSymbol,CONDITIONVALUE1,CONDITIONVALUE2
+	FROM 
+	(
+		Select 	
+		SELECTEDDATASOURCE, RULECOUNT,RuleIndex,
+		flddata->> 'NAME' as NAME
+		,cast(flddata->>'VALUE'as int) Weightage
+		,flddata->>'POSOffSET' as POSOffSET
+		,flddata->>'NAGOffSET' NEGOffSET
+		,flddata->>'TimeUnit' UOM
+		,Cutoffweight
+		,maxcutoffweight
+		,Mincutoffweight
+		,DSID,CONDITIONSYMBOL,CONDITIONVALUE1,CONDITIONVALUE2 
+		from 
+		(	
+			Select SELECTEDDATASOURCE, RULECOUNT,RuleIndex,cast(DSID as int) DSID,CONDITIONSYMBOL,CONDITIONVALUE1,CONDITIONVALUE2 ,Cutoffweight,Mincutoffweight,maxcutoffweight
+			,json_array_elements(fld)as flddata
+			from
+			(
+				Select sourcedata->>'SELECTEDDATASOURCE' as SELECTEDDATASOURCE
+				,cast(sourcedata->>'RULECOUNT' as int)  as RULECOUNT
+				,cast(sourcedata->>'RuleIndex' as int) as RuleIndex
+				,cast(sourcedata->>'CUTOFFWEIGHTAGE' as smallint) as Cutoffweight
+				,cast(sourcedata->>'MinCUTOFFWEIGHTAGE' as smallint) as Mincutoffweight
+				,cast(sourcedata->>'MaxCUTOFFWEIGHTAGE' as smallint) as maxcutoffweight
+				,sourcedata->'FIELD' as fld
+				,Replace(sourcedata->>'RULECOUNT','#CWDB01#','')AS DSID
+				,CONDITIONSYMBOL,CONDITIONVALUE1,CONDITIONVALUE2 
+				From
+				(
+					Select json_array_elements(dsrc) as sourcedata,
+					CONDITIONSYMBOL,CONDITIONVALUE1,CONDITIONVALUE2
+					from
+					(
+						Select sds->'SELECTEDDATASOURCES' as dsrc 
+						,sds->>'CONDITIONSYMBOL' as CONDITIONSYMBOL
+						,sds->>'CONDITIONVALUE1' as CONDITIONVALUE1
+						,sds->>'CONDITIONVALUE2' as CONDITIONVALUE2
+						from
+						(
+							Select json_array_elements(CFV) as sds
+							From
+							(
+								Select Rd->'CORRELATIONFIELDSVALUES' as CFV
+								from
+								(
+									Select json_array_elements(Ruldetails) as Rd
+									from
+									(
+										Select ivalue->'CORRELATIONDETAILS'->'CORRELATION'->'RULESDETAILS' as Ruldetails
+										from 
+										temps 
+										limit 1	
+									) CorFv
+								)CF
+							)Selds
+						)srcs
+					)srcdata
+				)fds
+			)outs				
+		)ds	
+	)mains	
+;
+
+--return(select Array_to_json(array_Agg(row_to_json(a))) from (select * from AttWeightInfo)a);
+
+	Update AttWeightInfo 
+	set id= Temp.id
+	From
+	(Select DENSE_RANK() Over(Order by Nid) ID, SelectDataSources,NID
+	from AttWeightInfo 
+	)   Temp where AttWeightInfo .NID=Temp.Nid;
+
+	VCnt=(Select COUNT(distinct NID) from AttWeightInfo);
+	VCnter:=1;
+
+	While VCnter<=VCnt Loop
+
+	VUniqueID:=(SELECT md5(random()::text || clock_timestamp()::text)::uuid);
+
+	Update AttWeightInfo set UniqueID=VUniqueID 
+	where id=Vcnter;
+
+	VCnter := VCnter+1;
+
+	End Loop;
+
+/* This is the master table that will generate a unique id for each rule defined in a correlation*/
+
+	Insert into CBWeightageConfigurations(WeightageConfigurationID,CorrelationID,AssociatedSourcesList,IsActive,CreatedBy,ModifiedBy,CutOffWeightage,MinCutOffWeightage,MaxCutOffWeightage)
+	select Distinct UniqueID, Vcorrelationid Correlationid, SelectDataSources,'1' IsActive,Vcreated_by CreatedBy, Vcreated_by ModifiedBy,iCutoffweight,maxcutoffweight,Mincutoffweight
+	from AttWeightInfo;
+
+/* This table stores the Attribute weightages per rule */
+
+	INSERT INTO CBAttributeWeightageMst(WeightageConfigurationID,CorrelationID,FieldID,weightage,CreatedBy,Pos_Offset,New_Offset,UOM,RuleIndex)
+	select UniqueID,Vcorrelationid,FieldID,FieldValue weightage,Vcreated_by CreatedBy
+	,POSOFFSET,NEGOFFSET,UOM,RuleIndex
+	FROM AttWeightInfo AWI
+	INNER JOIN CBCorrelationFieldsMst   CBCF ON CBCF.FieldName = AWI.FieldName
+	ORder by UniqueID;
+
+-- Update A set A.UniqueID=B.UniqueID
+-- From AttributeRule A 
+-- Join AttWeightInfo B on A.DSID=B.NID;
+--  
+/* The below tal=ble stores the Rule defined */ 
+
+	INSERT INTO CBAttributeWeightRule (WeightageConfigurationID,EffectiveFrom,CorrelationID,ParamType,ParamValue1,ParamValue2,IsActive,CreatedBy)
+	SELECT Distinct UniqueID,VActiondate,Vcorrelationid,ConditionSymbol,CONDTIONVALUE1,CONDTIONVALUE2,cast('1' as bit),Vcreated_by
+	FROM AttWeightInfo;
+
+	INSERT INTO Latency(SourceName,MaxTime,TimeUnits,Weightage,LegTime,LegTimeUnit)
+	Select datasrc->>'NAME' as iNAME
+	,datasrc->>'MaximumTime' as MaximumTime
+	,datasrc->>'TimeUnit' as TimeUnit
+	,50 DataSourceWeight
+	--,cast(datasrc->>'DataSourceWeight' as int) as DataSourceWeight
+	,cast(datasrc->>'LegTime' as int) as LegTime
+	,datasrc->>'LegTimeUnit' as LegTimeUnit
+	From
+	(
+		Select json_array_elements(LD) as datasrc
+		from
+		(
+			Select RD->'DATASOURCE' as LD
+			from
+			(
+				Select json_array_elements(Ruldetails) as Rd
+				from
+				(
+				Select ivalue->'CORRELATIONDETAILS'->'CORRELATION'->'LATENCYRULE' as Ruldetails
+				from 
+				temps 
+				limit 1	
+				) LData
+			)dsrc	
+		)lat
+	)ldsrc
+;
+ 
+	INSERT INTO CBDataExpectencyMst(CorrelationID,DataSourceID,LatencyValue,LatencyVolume,DataSourceWeight,CreatedBy,IsActive,Latency_BufferTime,Latency_UOM)
+	SELECT VCorrelationID,sources.sourcetype_id,cast(MaxTime as int),TimeUnits ,Weightage,Vcreated_by,'1', LegTime,LegTimeUnit
+	FROM Latency LMST
+	Join kbsourcetypemst sources on cast(lmst.sourcename as int)=sources.sourcetype_id
+	;
+	VExpectencyID:= ( SELECT currval(pg_get_serial_sequence('CBDataExpectencyMst','cbid')));      
+
+	-- INSERT INTO @LatencyRule(ConditionSymbol,CONDTIONVALUE1,CONDTIONVALUE2)
+-- 	SELECT xmlList.rows.value('@CONDITIONSYMBOL','nvarchar(10)') AS CONDTIONSYMBOL
+-- 	      ,xmlList.rows.value('@CONDITIONVALUE1','nvarchar(10)') AS CONDTIONVALUE1
+-- 		,xmlList.rows.value('@CONDITIONVALUE2','nvarchar(10)') AS CONDTIONVALUE2
+-- 	  FROM @Trans_xml.nodes('CORRELATIONDETAILS/CORRELATION/LATENCYRULE') xmlList(rows) 
+-- 
+-- 	 
+-- 	/* The below table stores the rule defined for each of the record stored in the above table */ 
+-- 
+	INSERT INTO CBDataExpectencyRule (CorrelationID,ExpectencyRuleID,ParamType,ParamValue1,ParamValue2,CreatedBy,IsActive)
+	SELECT Vcorrelationid,VExpectencyID,NULL,NULL,NULL,VCreated_By,'1' ;
+	--,conditionsymbol,CONDTIONVALUE1,CONDTIONVALUE2,VCreated_By,'1' 
+	--FROM @LatencyRule 
+
+	/*NEW IMPLEMENTATION FOR INSERTING THE DETAILS*/
+	
+	
+	VCORRELATIONNAMES:= (select CorrelationName FROM TEMPCORRELATION);
+	
+	Insert into KBSPOKETABLE
+	(SPOKE_ID,SPOKE_TYPE,TABLE_NAME,TABLE_TYPE,XPATH,TYPE,CorrelationId,CreatedBy, ModifiedBy, CreatedDate, ModifiedDate)
+	SELECT DISTINCT S.SOURCENAMES,'SPOKEMETRICDETAILS','FACT_'||MST.ALIAS||'METRICDETAILS','','ROWS/ROW/DATA/row',2,Vcorrelationid
+	,VCreated_By CreatedBy, VCreated_By ModifiedBy,VActiondate CreatedDate,VActiondate ModifiedDate
+	FROM SELECTEDSOURCES S 
+	JOIN KBSOURCETYPEMST MST ON  S.SOURCENAMES=MST.SOURCETYPE_ID
+	where S.SOURCENAMES not in
+	(select SPOKE_ID from KBSPOKETABLE where CorrelationId=Vcorrelationid)
+	;
+  
+	INSERT INTO CORRELATION(SPOKE_ID,TABLE_NAME,TABLE_COLUMNS,ATTRIBUTES,IS_NULLABLE ,IS_PRIMARY,OPERATION_TYPE,DATATYPE,XPATH,SpokeID)
+	SELECT distinct Vcorrelationid,'DM_DRIVER_'||VCORRELATIONNAMES,SRC.SOURCETYPE_NAME||'_'||Coalesce(CON.Metricalias,CON.METRICNAME)
+	as TABLE_COLUMNS,CON.METRICNAME as ATTRIBUTES,cast('0' as bit),cast('0' as bit),'INSERT',Mets.METRICDATATYPE,'ROWS/ROW/DATA/row', s.SOURCENAMES
+	FROM SELECTEDSOURCES S
+	JOIN KBSPOKECONFIGURATIONS CON ON  CON.SOURCETYPEID= S.SOURCENAMES
+	join kbmetricMst Mets on CON.METRICNAME=Mets.METRICNAME
+	JOIN KbsourcetypeMst SRC on SRC.SOURCETYPE_ID=S.SOURCENAMES
+	where con.SOURCETYPEID=Mets.source_ID 
+	and Mets.Template_ID=1 and CON.IsPRIMARYKEY='1'
+	and S.SOURCENAMES not in
+	(select SPOKE_ID from KBSPOKETABLE where CorrelationId=Vcorrelationid)
+	;
+ 
+ 
+	INSERT INTO CORRELATION(SPOKE_ID,TABLE_NAME,TABLE_COLUMNS,ATTRIBUTES,IS_NULLABLE ,IS_PRIMARY,OPERATION_TYPE,DATATYPE,XPATH,SpokeId)
+	SELECT  distinct Vcorrelationid,'DM_DRIVER_'||VCORRELATIONNAMES,Mst.SOURCETYPE_NAME||'_Weightage','PERCENTAGE',cast('0' as bit),cast('0' as bit),'INSERT','varchar(255)','ROWS/ROW', s.SOURCENAMES
+	FROM SELECTEDSOURCES S
+	JOIN KBSPOKECONFIGURATIONS CON ON  CON.SOURCETYPEID= S.SOURCENAMES
+	JOIN KbsourcetypeMst Mst on Mst.SOURCETYPE_ID=S.SOURCENAMES
+	where S.SOURCENAMES not in
+	(select SPOKE_ID from KBSPOKETABLE where CorrelationId=Vcorrelationid)
+	;
+	
+	
+	
+	INSERT INTO CORRELATION(SPOKE_ID,TABLE_NAME,TABLE_COLUMNS,ATTRIBUTES,IS_NULLABLE ,IS_PRIMARY,OPERATION_TYPE,DATATYPE,XPATH,SpokeId)
+	SELECT distinct Vcorrelationid,'DM_DRIVER_'||VCORRELATIONNAMES,Mst.SOURCETYPE_NAME||'_Seq','seq',cast('0' as bit),cast('0' as bit),'INSERT','varchar(255)','ROWS/ROW/DATA/row', s.SOURCENAMES
+	FROM SELECTEDSOURCES S
+	JOIN KBSPOKECONFIGURATIONS CON ON  CON.SOURCETYPEID= S.SOURCENAMES
+	JOIN KbsourcetypeMst Mst on Mst.SOURCETYPE_ID=S.SOURCENAMES;
+	
+	INSERT INTO KBSPOKETABLEDETAILS(TABLE_ID,TABLE_COLUMNS,ATTRIBUTES,IS_PRIMARY,IS_NULLABLE,OPERATION_TYPE,DATATYPE,XPATH,SPOKE_ID,CreatedBy, ModifiedBy, CreatedDate, ModifiedDate)
+	SELECT MST.RECORDID,A.TABLE_COLUMNS,A.ATTRIBUTES,cast(A.IS_PRIMARY as int),cast(A.IS_NULLABLE as int),A.OPERATION_TYPE,A.DATATYPE,A.XPATH,A.SpokeId
+	,VCreated_By CreatedBy, VCreated_By ModifiedBy,VActiondate CreatedDate,VActiondate ModifiedDate
+	FROM CORRELATION A 
+	JOIN KBSPOKETABLE MST ON MST.TABLE_NAME=A.TABLE_NAME 
+	where exists (Select 1 from users B where Mst.Createdby=B.userid) 
+	and not exists (select 1 from KBSPOKETABLEDETAILS B where MST.RECORDID=B.table_id and A.TABLE_COLUMNS=B.TABLE_COLUMNS)
+	Order by A.ID;
+ 	
+	Return(
+			
+		Select Row_to_json(cors)
+		from
+		(
+		select Row_to_json(cor) as "CORRELATIONDETAILS"
+		From
+		(
+		Select Row_to_json(output) as "CORRELATION"
+		from
+		(
+			Select Vcorrelationid as "CORRELATIONID", VCorrelationName "NAME"
+			,Row_to_json(tabstr) "tablestructure"
+			from
+			(
+				Select Array_to_json(Array_Agg(row_to_json(tabs))) as "table"
+				From
+				(
+					select  AA.TABLE_NAME	as "name"					
+					,
+					(
+						Select Array_to_json(Array_agg(Row_to_json(cols))) as "column"
+						from
+						(
+							SELECT mst.TABLE_COLUMNS as "TABLECOL", case when mst.DATATYPE='INT' then 'BIGINT' else mst.DATATYPE end as "METRICDATATYPE"
+							FROM 
+							(
+								Select A.Id, A.TABLE_COLUMNS, MSt.TABLE_NAME,A.DATATYPE								
+								from
+								CORRELATION A 
+								JOIN KBSPOKETABLE MST ON MST.TABLE_NAME=A.TABLE_NAME 
+								where exists (Select 1 from users B where Mst.Createdby=B.userid)
+								Union
+								Select A.TABLE_DETAIL_ID, A.TABLE_COLUMNS, MSt.TABLE_NAME,A.DATATYPE		
+								from
+								KBSPOKETABLE MST 
+								Join KBSPOKETABLEDETAILS A on MST.RECORDID=A.TABLE_id
+								where mst.SPOKE_TYPE='CORRELATION' and TABLE_TYPE='ProcessedData'
+								and exists (Select 1 from users B where Mst.Createdby=B.userid)
+							) mst
+							where  AA.TABLE_NAME=mst.TABLE_NAME
+							Order by mst.ID
+						)cols
+						--for xml raw('column')
+					)
+					from KBSPOKETABLE AA
+					where  Spoke_type='CORRELATION' and spoke_id=Vcorrelationid 
+					and exists (Select 1 from users B where AA.Createdby=B.userid)
+					Group by AA.TABLE_NAME
+				)tabs
+			)tabstr	
+		)output	
+			-- for xml raw('table'),root('tablestructure')
+		) cor
+		)cors	
+		)
+;
+
+end;
+ELSEIF Lower(VTRAN) = 'selecteddatasources' Then
+BEGIN
+
+select ivalue->'CORRELATIONDETAILS'->> 'SOURCEDETAILS' into VSname
+from temps 
+limit 1;
+
+INSERT INTO SOURCEDETAILS(item)
+SELECT SUBSTRING(item,0,strpos(item,';')) SourceNames 
+FROM 
+(
+	Select regexp_split_to_table(VSname,'#CWDB01#') as item
+)a
+where item!=''
+
+;
+
+	Return(
+		Select Row_to_json(outs)
+		from
+		(
+			Select Row_to_json(srces) "SOURCEFIELDDETAILS"
+			from
+			(
+				Select Array_to_json(Array_Agg(row_to_json(src))) "SOURCES"
+				from
+				(
+					Select A.item "SOURCEID"
+						, Sources.SOURCETYPE_NAME "SOURCENAME"
+						, Coalesce(Sources.ENTITYIDENTIFIER,'') "CUSTOMERIDENTIFIER" 
+					,
+					(
+
+						Select Row_to_json(mets) "METRICS"
+						from
+						(
+							Select Array_to_json(Array_Agg(row_to_json(met))) "METRIC"
+							from
+							(
+								Select distinct B.SourceID "SOURCEID"
+								,B.MSTTableColumns "FIELDNAME"
+								,Mets.METRICALIAS	"METRICALIAS"
+								,B.MSTTableColumnDataType "TYPE"
+								,case when B.MSTTableColumns='recorddateutc' then 'DateTime'  When B.MSTTableColumnDataType='LatitudeLongitude' Then B.MSTTableColumnDataType 
+								else Mets.METRICDATATYPE 
+								end as "DBDATATYPE"
+								,B.CBID "ID"
+								,Mst.IsPrimaryKey as "IsPrimary"
+								,Case when Mst.IsPRIMARYKEY='1' then METRICORDER else 0 end as "KeyOrder"
+								From 
+								CBSourceInfo B 
+								Left outer join KBSPOKECONFIGURATIONS Mst on Mst.SOURCETYPEID=B.SourceID and MST.METRICNAME=B.MSTTableColumns 
+								Left JOIN KbMetricMst Mets on Mets.SOURCE_ID=Mst.SOURCETYPEID and MST.METRICNAME=Mets.METRICNAME and Mets.Template_id=1
+								--Left outer join KbMetricMst Mst on Mst.SOURCE_ID=B.SourceID and MST.METRICNAME=B.MSTTableColumns and Mst.Template_id=1
+								where cast(A.item as int)=B.SourceID
+								Order by  B.MSTTableColumns
+								--FOR XML RAW('METRIC'),ROOT('METRICS')
+							)as met
+						)mets	
+					) 
+					,
+					(
+						Select Row_to_json(tabs) "TABLES"
+						from
+						(
+							Select Array_to_json(Array_Agg(row_to_json(tab))) "TABLE"
+							from
+							(
+								Select C.SourceID "SOURCEID", C.MSTTableName "TABLENAME" 
+								from CBSourceInfo C 
+								Where cast(A.item as int)=C.SourceID
+								Group By C.SourceID, C.MSTTableName 
+								--FOR XML RAW('TABLE'),ROOT('TABLES')
+							) as Tab
+						)tabs	
+					)
+
+					from SOURCEDETAILS A
+					Join KBSourceTypeMst Sources On cast(A.item as int)=Sources.SOURCETYPE_ID
+					where coalesce(sources.masterspokeid,0)=0  
+					Group By A.item, Sources.SOURCETYPE_NAME , Sources.ENTITYIDENTIFIER 
+					--For XML RAW('SOURCES'),Root ('SOURCEFIELDDETAILS')
+				)src
+			)srces	
+		) outs
+		);			
+
+End;
+
+End if;
+
+End
+
+$function$;
+
+ALTER FUNCTION public.usp_cbcorrelation(json)
+    OWNER TO postgres;
+
+

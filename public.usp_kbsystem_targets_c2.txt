@@ -1,0 +1,173 @@
+-- FUNCTION: public.usp_kbsystem_targets_c2json
+
+-- DROP FUNCTION public.usp_kbsystem_targets_c2json;
+
+CREATE OR REPLACE FUNCTION public.usp_kbsystem_targets_c2(
+	input json)
+RETURNS json
+    LANGUAGE 'plpgsql'
+    COST 100.0
+    VOLATILE 
+AS $function$
+
+DECLARE
+	VTRAN			VARCHAR(30);
+	Ventityscreen		json;
+	VEntityDefId		bigint;
+	VEntityName		varchar(255);
+	VEntityType		smallint;
+	VTypeOfEntity		varchar(50);
+	VCreated_By		int;
+	VCustomerName		varchar(255);
+	VID			int;
+	VEntdefTablename 	Varchar(255);
+	VEntInstName		varchar(500);
+	VEntInstId		int;
+	VLegacy_system_id	varchar(50);
+	VEDMasterdata		json;
+	VInput			json;
+	VActiondate		timestamp default(current_timestamp at time zone 'utc')	;	
+begin
+
+drop table if exists temps;
+
+create temp table temps(id serial,ivalue json);
+
+insert into temps(ivalue)
+select input;
+
+select ivalue->'ENTITYDETAILS'->> 'TRANSTYPE' 
+,cast(ivalue->'ENTITYDETAILS'->> 'LoginId' as int)
+,ivalue->'ENTITYDETAILS'->> 'EntityName'
+,ivalue->'ENTITYDETAILS'->> 'EntityType'
+,ivalue->'ENTITYDETAILS'-> 'EntityScreen'
+,cast(ivalue->'ENTITYDETAILS'->> 'VID' as int)
+,cast(ivalue->'ENTITYDETAILS'->> 'EntityDefId' as int)
+,ivalue->'ENTITYDETAILS'->> 'TypeOfEntity'
+,ivalue->'ENTITYDETAILS'-> 'EntityScreen'->'Entity'->'Master'
+,ivalue->'ENTITYDETAILS'->> 'EntityDefName'
+into
+VTRAN,VCreated_By,VEntInstName,VEntityType,Ventityscreen,VID,VEntityDefId,VTypeOfEntity,VEDMasterdata,VEntityName
+from temps limit 1;
+
+If Lower(vtran)='checktarget' then
+begin
+
+	IF VEntityDefId is NULL or VEntityDefId =0 
+	then
+	begin
+		VEntityDefId:=(select entitydef_id from kbentitymst where entity_name=VEntityName);
+	end;
+	End if;
+
+-- 	Return(
+-- 	select Array_to_json(Array_agg(row_to_json(a)))
+-- 	from
+-- 	(
+-- 	Select screenj->>'Label' ,screenj->>'InputValue'
+-- 	from
+-- 	(
+-- 		Select json_array_elements(escreen) as screenj
+-- 		from
+-- 		(
+-- 			select VEDMasterdata escreen
+-- 		)a 
+-- 	) scr
+-- 
+-- 	)a
+-- 	);
+-- 	--where screenj->>'Label'='legacy_system_id'
+
+	Select lvalue into VLegacy_system_id
+	from
+	(
+		Select screenj->>'Label' ilabel ,screenj->>'InputValue' lvalue
+		from
+		(
+			Select json_array_elements(escreen) as screenj
+			from
+			(
+				select VEDMasterdata escreen
+			)a 
+		) scr
+
+	)a
+	where lower(ilabel)='legacy_system_id'
+	;
+
+	
+	If not Exists(select 1 from  "KB_ENTITY_Circles_Target" where legacy_system_id=VLegacy_system_id) then
+	begin
+
+		VInput:=
+			(
+				Select Row_to_json(outs)
+				from
+				(
+					Select Row_to_json(a) as "ENTITYDETAILS"
+					from
+					(
+					select 'CreateDynamicEntity' as "TRANSTYPE"
+					,VCreated_By "LoginId"
+					,VEntInstName "EntityName"
+					,VEntityName as "EntityDefName"
+					,VEntityType "EntityType"
+					,Ventityscreen as "EntityScreen"
+					,VID "VID"
+					,VEntityDefId "EntityDefId"
+					,VTypeOfEntity as "TypeOfEntity"
+					) a
+				) outs
+			);
+
+		Return(select usp_kbentity_c2(VInput));
+	end;
+	else
+	begin
+	
+		VInput:=
+			(
+				Select Row_to_json(outs)
+				from
+				(
+					Select Row_to_json(a) as "ENTITYDETAILS"
+					from
+					(
+					select 'Partialupdate' as "TRANSTYPE"
+					,VCreated_By "LoginId"
+					,VEntInstName "EntityName"
+					,VEntityName as "EntityDefName"
+					,VEntityType "EntityType"
+					,Ventityscreen as "EntityScreen"
+					,VID "VID"
+					,VEntityDefId "EntityDefId"
+					,VTypeOfEntity as "TypeOfEntity"
+					) a
+				) outs
+			);
+
+		Return(select usp_kbentity_c2(VInput));
+	end;
+	End if;
+
+end;
+end if;
+
+exception when others then 
+		Return(
+
+				Select row_to_json(a) 
+				from
+				(select 500 "code", 'error' "message")a
+
+		);
+
+End
+
+$function$;
+
+ALTER FUNCTION public.usp_kbsystem_targets_c2(json)
+    OWNER TO postgres;
+
+
+

@@ -1,0 +1,265 @@
+-- FUNCTION: public.usp_kbentitysearch_c2json
+
+-- DROP FUNCTION public.usp_kbentitysearch_c2json;
+
+CREATE OR REPLACE FUNCTION public.usp_kbentitysearch_c2(
+	input json)
+RETURNS json
+    LANGUAGE 'plpgsql'
+    COST 100.0
+    VOLATILE 
+AS $function$
+ 
+Declare 
+	VType varchar(255);
+	VEntitydefid int;
+	VEntitydeftablename	varchar(255);
+	Voperator	varchar(10);
+	VWhereClause	varchar(1000);
+	VAttribname	varchar(255);
+	VprevAttribname	varchar(255);
+	Vattribid	smallint;
+	VValue		varchar(255);
+	VCnt 		smallint;
+	VCnter		smallint;
+	VResult		json;
+	VHasmultiple	bit;
+	Vpageno		int;
+	Vpagesize	smallint;
+	vfromrecord	int;
+	Vtorecord	int;
+BEGIN
+
+Drop table if exists Temps;
+Drop table if exists Searchlist;
+
+create temp table temps(id serial,ivalue json);
+
+create temp table Searchlist(id serial,ikey varchar(255),ivalue varchar(255),attributename varchar(255),otype smallint);
+
+insert into temps(ivalue)
+select input;
+
+	Select ivalue->>'type',ivalue->>'operator',ivalue->>'pageno',ivalue->>'pagesize'
+		into
+		VType,Voperator,Vpageno,Vpagesize
+	from 
+	temps
+	limit 1;
+
+	vfromrecord:=((Vpageno*Vpagesize)-Vpagesize)+1;
+	vtorecord:=(Vpageno*Vpagesize);
+	 
+	select Entitydef_id, entitytablename into VEntitydefid, VEntitydeftablename from kbentitymst where lower(entity_name)= case when lower(VType)='nontarget' then 'target' else lower(VType) end limit 1;
+	
+	Insert into Searchlist(ikey,ivalue)
+	Select ikey, regexp_split_to_table(ivalue,'#flo01#') ivalue
+	from
+	(
+		Select searchfields->>'key' ikey,  Lower(searchfields->>'value') ivalue
+		from
+		(
+			select json_array_elements(fields) as searchfields
+			from
+			(
+				select ivalue->'fields' as fields
+				from
+				temps
+				limit 1
+			)a
+		) searc		
+	) inp	order by ikey;
+
+	Update Searchlist  set otype=1
+	from
+	(
+		Select ikey,count(1) icount
+		from Searchlist
+		group by ikey 
+	) itemp
+	where Searchlist.ikey=itemp.ikey and itemp.icount>1;
+
+	If exists(select 1 from Searchlist where otype=1) then
+	begin
+		VHasmultiple:='1';
+	end;
+	else
+	begin
+		VHasmultiple:='0';
+	end;
+	end if;
+
+	If (select count(1) from Searchlist A Left join kbentityscreenconfigurationmst mst on A.ikey=controltitle and entitydefid= VEntitydefid where mst.screenid is null )>0 then
+	Begin
+
+		Return(
+
+				Select row_to_json(a) 
+				from
+				(select 500 "code", 'invalid metric' "message")a
+
+		);
+
+	End;
+	End if;
+
+	Update 	Searchlist set attributename=controltitle
+	from kbentityscreenconfigurationmst mst
+	where entitydefid= VEntitydefid and searchlist.ikey=controltitle;
+
+	If (select max(id) from Searchlist)>1 then
+	Begin
+		
+		VWhereClause:=coalesce(VWhereClause,'')||
+				(
+					select String_agg(cols,Voperator)
+					from
+					(
+						Select ' lower(cast("'|| attributename ||'" as varchar(50))) like (''%'|| ivalue ||'%'') ' cols
+						from 
+						Searchlist
+						where otype is null
+
+					)inp
+				);
+
+			If exists(select 1 from Searchlist where coalesce(otype,0)=1) then
+			Begin
+				VWhereClause:= VWhereClause || ' AND ' ;
+			End;
+			End if;
+
+			 while exists(select 1 from Searchlist	where coalesce(otype,0)=1) loop
+
+				
+				select attributename,id,ivalue  into VAttribname,Vattribid,vvalue from Searchlist where coalesce(otype,0)=1 order by attributename;
+
+				If coalesce(VprevAttribname,'')='' then
+				begin
+				
+					VWhereClause:=coalesce(VWhereClause,'')|| '( lower(cast("'|| VAttribname ||'" as varchar(50))) like (''%'|| vvalue ||'%'')  ';
+				End;
+				Else
+				begin
+				
+					If coalesce(VAttribname,'')=coalesce(VprevAttribname,'') then
+					begin
+						VWhereClause:=coalesce(VWhereClause,'')|| ' OR lower(cast("'|| VAttribname ||'" as varchar(50))) like (''%'|| vvalue ||'%'')  ';
+					end;
+					Else
+					begin
+				
+						VWhereClause:=coalesce(VWhereClause,'')|| ' ) AND ( lower(cast("'|| VAttribname ||'" as varchar(50))) like (''%'|| vvalue ||'%'') ';
+					end;
+					end if;
+				
+				end;
+				end if;
+					
+				VprevAttribname:=VAttribname;
+				
+				delete from Searchlist where id=Vattribid;
+			end loop;
+
+			If VHasmultiple='1' then
+			Begin
+			
+				VWhereClause:=VWhereClause|| ')';		
+			End;
+			End if;
+			
+
+				
+	End;
+	Else
+	Begin
+		VWhereClause:=(
+			Select ' Lower(cast("'|| attributename ||'" as varchar(50))) like (''%'|| ivalue ||'%'') ' cols
+			from 
+			Searchlist
+		);
+
+	End;
+	End if;
+
+	 
+				 
+				 
+--return(select row_to_json(a) from (select VWhereClause)a);
+
+ 
+	If lower(VType) like '%target%' then
+	begin
+
+		If lower(VType) = 'target' then
+		begin
+			--return(select row_to_json(a) from (select VWhereClause)a);
+			Execute(' select row_to_json(outs) from ( select array_to_json(array_Agg(row_to_json(a))) "output" from ( select id,"first_name","legacy_system_id" from ( '|| 
+			'  select row_number()over(order by "ModifiedDate" desc) serials, "ID" id,"first_name","legacy_system_id" from ' 
+			|| VEntitydeftablename ||  ' A Join kbentities B on A."ID"=b.entity_id where is_target=''1'' and "ISACTIVE"=''1'' and ( ' 
+			|| VWhereClause || ' ) ) inps where inps.serials between ' || vfromrecord || ' and ' || vtorecord ||  '  ) a ) outs' ) into VResult;
+
+			Return(VResult)	;
+
+		end;
+		elseif lower(VType) like 'non%target%' then
+		begin
+
+		--return(select row_to_json(a) from (select VWhereClause)a);
+
+			Execute(' select row_to_json(outs) from ( select array_to_json(array_Agg(row_to_json(a))) "output" from ( select id,"first_name","legacy_system_id" from ( '|| 
+			'  select row_number()over(order by "ModifiedDate" desc) serials, "ID" id,"first_name","legacy_system_id" from ' 
+			|| VEntitydeftablename ||  ' A Join kbentities B on A."ID"=b.entity_id where is_target=''0'' and "ISACTIVE"=''1'' and ( ' 
+			|| VWhereClause || ' ) ) inps where inps.serials between ' || vfromrecord || ' and ' || vtorecord ||  '  ) a ) outs' ) into VResult;
+
+			Return(VResult)	;
+
+		end;
+		end if;
+	end;
+	Elseif lower(VType) = 'security_tag' or  lower(VType) = 'identifier' then
+	Begin
+
+		Execute(' select row_to_json(outs) from ( select array_to_json(array_Agg(row_to_json(a))) "output" from ( select id,"name","legacy_system_id" from ( '|| 
+			'  select row_number()over(order by "ModifiedDate" desc) serials, "ID" id,"name","legacy_system_id" from ' 
+			|| VEntitydeftablename ||  ' A Join kbentities B on A."ID"=b.entity_id where   "ISACTIVE"=''1'' and ( ' 
+			|| VWhereClause || ' ) ) inps where inps.serials between ' || vfromrecord || ' and ' || vtorecord ||  '  ) a ) outs' ) into VResult;
+	
+	-- 	Execute(' select row_to_json(outs) from ( select array_to_json(array_Agg(row_to_json(a))) "output" from ( select "ID" id,"name","legacy_system_id" from ' 
+-- 		|| VEntitydeftablename ||  ' A Join kbentities B on A."ID"=b.entity_id where  "ISACTIVE"=''1'' and ( ' || VWhereClause || ' ) ) a ) outs' ) into VResult;
+
+		Return(VResult)	;
+	End;
+	Elseif lower(VType) = 'device' or lower(VType) = 'directive' or lower(VType) = 'site' or lower(VType) = 'case' then
+	Begin
+		Execute(' select row_to_json(outs) from ( select array_to_json(array_Agg(row_to_json(a))) "output" from ( select id,"name" from ( '|| 
+			'  select row_number()over(order by "ModifiedDate" desc) serials, "ID" id,"name" from ' 
+			|| VEntitydeftablename ||  ' A Join kbentities B on A."ID"=b.entity_id where   "ISACTIVE"=''1'' and ( ' 
+			|| VWhereClause || ' ) ) inps where inps.serials between ' || vfromrecord || ' and ' || vtorecord ||  '  ) a ) outs' ) into VResult;
+	
+		-- Execute(' select row_to_json(outs) from ( select array_to_json(array_Agg(row_to_json(a))) "output" from ( select "ID" id,"name" from ' 
+-- 		|| VEntitydeftablename ||  ' A Join kbentities B on A."ID"=b.entity_id where "ISACTIVE"=''1'' and ( ' || VWhereClause || ' ) ) a ) outs' ) into VResult;
+
+		Return(VResult)	;
+	End;
+	end if;
+
+ 
+exception when others then 
+		Return(
+
+				Select row_to_json(a) 
+				from
+				(select 500 "code", 'error' "message")a
+
+		);
+
+End
+
+$function$;
+
+ALTER FUNCTION public.usp_kbentitysearch_c2(json)
+    OWNER TO postgres;
+
+
+

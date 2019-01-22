@@ -1,0 +1,144 @@
+-- FUNCTION: public.usp_historicaldatajson
+
+-- DROP FUNCTION public.usp_historicaldatajson;
+
+CREATE OR REPLACE FUNCTION public.usp_historicaldata(
+	input json)
+RETURNS json
+    LANGUAGE 'plpgsql'
+    COST 100.0
+    VOLATILE 
+AS $function$
+
+ Declare 
+	VTRAN		VARCHAR(30);
+	VActiondate	timestamp default(current_timestamp at time zone 'utc')	;	
+	VResult 	json;
+	VCorrelationID int;
+ Begin
+
+drop table if exists temps;
+drop table if exists itemp;
+
+create temp table temps(id serial,ivalue json);
+
+create temp table itemp(Id serial,collectionid int,itype varchar(100),itimestamp timestamp,epochtimestamp varchar(100),Reporton int,Status bit);
+ 
+ 
+		insert into temps(ivalue)
+		select input;
+
+		select ivalue->'root'->> 'transtype' ,
+		ivalue->'root'->> 'correlationid' 
+		into VTRAN,VCorrelationID
+		from temps 
+		limit 1;
+
+		Insert into iTemp(collectionid,itype,itimestamp,epochtimestamp,Reporton,Status)
+		select 
+		cast(ivalue->'root'->> 'id'  as int)
+		,ivalue->'root'->> 'type' 
+		,cast(ivalue->'root'->> 'timestamp'  as timestamp)
+		,ivalue->'root'->> 'epochtimestamp'
+		,NULL 
+		,cast( ivalue->'root'->> 'status'  as bit)
+		from temps 
+		limit 1;
+		 
+		 
+		 update iTemp set Reporton=Mst.Reporton
+		 from kbreportsconfigurationMst Mst 
+		 where Mst.ReportConfigurationID=iTemp.id and Mst.isactive=1;
+		 
+		 
+		if(Lower(VTran)='getsourcesbycorrelation') then
+		Begin
+		  
+				/*sending the participated sources in a given correlation*/
+			 
+			return(
+					Select row_to_json(outs)
+					from
+					(
+						Select Row_to_json(cors) "correlations"
+						from
+						(
+							select row_to_json(cor) "correlation"
+							from
+							(
+								Select Cmst.CORRELATIONID "correlationid", CORRELATIONNAME "correlationname",TypeID  "typeid"
+								,
+								(
+									select string_agg(sources,',') "selecteddatasources"	
+									from
+									(
+										Select cast(CDetails.SourceID as varchar(50)) sources
+										From
+										CBCorrelationDetails CDetails 
+										Join KBSourceTypeMst Sources on CDetails.SourceID=Sources.SOURCETYPE_ID
+										where CMst.CorrelationID=CDetails.CorrelationID  
+										--For XML PATH('')
+									)aa	
+								) 
+								,'correlationid,correlationname,typeid,selecteddatasources' "Attribute_list"	
+								from CBCorrelationMst CMst
+								where CMst.CorrelationID=VCorrelationID and cmst.IsActive=1
+								ORder by CORRELATIONNAME
+								--FOR XML RAW('CORRELATION'),ROOT('CORRELATIONS')	
+							)cor	
+						) cors	
+					)outs
+				);
+						 
+		END;		
+		
+		else
+		 
+		
+		Begin
+			/*Updating when Matched else inserting*/
+			
+			Update 
+			kbhistoricaldatastatus SET "timestamp" = source.itimestamp,epochtimestamp=source.epochtimestamp
+			,ModifiedDate=Vactiondate,Reporton=source.Reporton,Status=source.Status
+			from
+			iTemp AS source
+			where kbhistoricaldatastatus.collectionid = source.collectionid ;
+
+			INSERT into kbhistoricaldatastatus(collectionid,"timestamp", epochtimestamp,collectiontype,Reporton,Status,createddate,modifieddate)  
+			select  source.collectionid,source.itimestamp,source.epochtimestamp ,source.itype,source.Reporton,source.Status,Vactiondate,Vactiondate
+			from
+			iTemp AS source
+			where not exists(select 1 from kbhistoricaldatastatus where kbhistoricaldatastatus.collectionid = source.collectionid)
+			;
+
+			Return(
+
+				Select row_to_json(a) 
+				from
+				(select 200 "code", 'success' "message")a
+
+		);
+		
+		END	;	 
+		
+		END IF;
+
+		exception when others then 
+		Return(
+
+				Select row_to_json(a) 
+				from
+				(select 500 "code", 'error' "message")a
+
+		);
+		
+
+End
+
+$function$;
+
+ALTER FUNCTION public.usp_historicaldata(json)
+    OWNER TO postgres;
+
+

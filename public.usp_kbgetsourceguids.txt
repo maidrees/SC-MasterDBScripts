@@ -1,0 +1,56 @@
+-- FUNCTION: public.usp_kbgetsourceguidsjson
+
+-- DROP FUNCTION public.usp_kbgetsourceguidsjson;
+
+CREATE OR REPLACE FUNCTION public.usp_kbgetsourceguids(
+	input json DEFAULT NULL::json)
+RETURNS json
+    LANGUAGE 'plpgsql'
+    COST 100.0
+    VOLATILE 
+AS $function$
+
+begin
+
+return(select row_to_json(outs)
+from
+(  
+	select array_to_json(array_agg(row_to_json(a))) "sources"
+	from
+	(
+		select distinct sources.sourcetype_id, license.licensekeyid VID, sources.sourceguid,'source'  sourcetype, formattype spokedataformat
+		,case when lower(formattype)='json' then case when mainseparator='0' then 'single' when mainseparator='1' then 'array' end else NULL end formattype
+		,SubSeparator rootelement
+		,SubSeparator 
+		,MainSeparator 
+		from kbsourcetypemst sources
+		join kbusercustomermapping users on sources.createdby=users.userid
+		join kblicensedetails license on users.customerid=license.customerid
+		join kbspokedataformats dform on sources.dataformat =dform.id
+		where sources.sourcetype_id!=1 
+        --and sources.sourcetype=0
+
+		union all
+
+		select distinct entitydef_id, license.licensekeyid VID, entityguid, 'entity' etype, 'Json' spokedataformat
+		, 'single'  formattype
+		,'' rootelement
+		,'' SubSeparator 
+		,'' MainSeparator 
+		from kbentitymst entity
+		join kbusercustomermapping users on entity.createdby=users.userid
+		join kblicensedetails license on users.customerid=license.customerid
+		where entitydef_id!=1
+	)a
+	
+)outs)
+;
+
+End
+
+$function$;
+
+ALTER FUNCTION public.usp_kbgetsourceguids(json)
+    OWNER TO postgres;
+
+

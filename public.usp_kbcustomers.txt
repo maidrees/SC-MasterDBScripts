@@ -1,0 +1,246 @@
+-- FUNCTION: public.usp_kbcustomersjson
+
+-- DROP FUNCTION public.usp_kbcustomersjson;
+
+CREATE OR REPLACE FUNCTION public.usp_kbcustomers(
+	input json)
+RETURNS json
+    LANGUAGE 'plpgsql'
+    COST 100.0
+    VOLATILE 
+AS $function$
+
+DECLARE
+	VTRAN		VARCHAR(30);
+	VCreated_By	int;
+	VCustomerId	int;
+	VCustomerName	varchar(255);
+	VCustomerKey	varchar(255);
+	VCacheName	varchar(255);
+	VCachePort	varchar(255);
+	VCacheDb	varchar(255);
+	VServerName	varchar(255);
+	VAuthenticationType	int;
+	VUserName	varchar(255);
+	VPassword	varchar(255);
+	VConnectionType	varchar(255);
+	Vdb_name	varchar(255);
+	VID		int;
+	VLicenseid	int;
+	Vopcode		smallint;
+	Vcustomerlevel	smallint;
+	VActiondate	timestamp default(current_timestamp at time zone 'utc')	;
+
+Begin
+
+drop table if exists temps;
+drop table if exists users;
+
+create temp table temps(id serial,ivalue json);
+create temp table users (id serial,userid int);
+
+insert into temps(ivalue)
+select input;
+
+select ivalue->'MetaDataInformation'->> 'TRANSTYPE' 
+,ivalue->'MetaDataInformation'->> 'LoginId' 
+,ivalue->'MetaDataInformation'->> 'CustomerName' 
+,ivalue->'MetaDataInformation'->> 'CustomerKey' 
+,ivalue->'MetaDataInformation'->> 'CacheName' 
+,ivalue->'MetaDataInformation'->> 'CachePort' 
+,ivalue->'MetaDataInformation'->> 'CacheDb' 
+,ivalue->'MetaDataInformation'->> 'ServerName' 
+,ivalue->'MetaDataInformation'->> 'AuthenticationType' 
+,ivalue->'MetaDataInformation'->> 'UserName' 
+,ivalue->'MetaDataInformation'->> 'Password' 
+,ivalue->'MetaDataInformation'->> 'CreatedBy' 
+,ivalue->'MetaDataInformation'->> 'Type' 
+,ivalue->'MetaDataInformation'->> 'VID' 
+,ivalue->'MetaDataInformation'->> 'DatabaseName'
+,ivalue->'MetaDataInformation'->> 'HierarchyLevel'
+into
+VTRAN		
+,VCreated_By	
+,VCustomerName	
+,VCustomerKey	
+,VCacheName	
+,VCachePort	
+,VCacheDb	
+,VServerName	
+,VAuthenticationType
+,VUserName	
+,VPassword	
+,VCreated_By	
+,VConnectionType		
+,VID	
+,VDB_Name
+,Vcustomerlevel	
+from temps 
+limit 1;
+
+insert into users(userid)
+select userid
+From
+KBUserCustomerMapping A
+Inner join
+(
+	Select customerid 
+	from KBUserCustomerMapping
+	where userid=VCreated_By 
+) B  on A.customerid=B.customerid
+where userid!=1
+ 
+;
+
+If lower(Vtran)='create'   then
+begin
+
+Insert into kbcustomersmst(CustomerName,IsActive,hierarchy_level,CreatedBy,ModifiedBy)
+select  VCustomerName,'1',Vcustomerlevel,VCreated_By,VCreated_By;
+
+VCustomerId:=( SELECT currval(pg_get_serial_sequence('kbcustomersmst','customerid')));
+
+Insert into KBUserCustomerMapping(UserID,CustomerID,CreatedBy,CreatedDate,ModifiedDate,ModifiedBy,IsActive)
+select 1, VCustomerId,VCreated_By, VActiondate, VActiondate, VCreated_By,1 isactive
+union
+select VCreated_By, VCustomerId,VCreated_By, VActiondate, VActiondate, VCreated_By,1
+;
+
+ 
+Insert into KBLicenseDetails(LicenceKey,CustomerId,customername,createdby)
+Select VCustomerKey LicenseKey, VCustomerId,VCustomerName,VCreated_By;
+ 
+VLicenseid:= ( SELECT currval(pg_get_serial_sequence('KBLicenseDetails','licensekeyid')));
+
+INSERT INTO NMSMetadata(ServerType,DatabaseName,ServerName,ScaleType,Spokename,Time_Start_ID,Time_End_ID,Customer_Start_ID
+                          ,location_id,authenticationtype,username,"password",CreatedBy,Time_Start,Time_End,SpokeID,IsServiceBrokerEnabled
+                          ,SBPrefix,OPCode,Bcolumn,CreatedDate,ModifiedBy,ConnectionType,IsActive,CollectionName,CacheServerName,CachePort,CacheDbName)
+SELECT 'Child','datamart'||lower(VDB_Name),VServerName,'Database','Datamart'
+,NULL,NULL
+,VCustomerid
+,NULL  --VLocation_id
+,VAuthenticationType,VUsername,VPassword,VCreated_By,NULL From_Date
+,NULL TED
+,VLicenseid
+,NULL
+,VDB_Name
+
+,case when VOPCode=0 then null
+else VOPCode end --OPCode
+,NULL VMDFPath
+,VActiondate
+,1
+,VConnectionType
+,'1'
+,'DATAMART'
+,VCacheName
+,VCachePort
+,VCacheDb
+;
+
+return(
+	
+	select row_to_json(aa) 
+	from
+	(
+		select row_to_json(a) as "Customer"
+		from
+		(
+		select 1 as "Result", 0 as "ErrorMessage", 0 as "ErrorCode", VLicenseid  as "CustomerID"
+		)a
+	) aa
+);
+
+end;
+elseif lower(VTran)='gettooltip' then
+begin
+
+if VCreated_By=1 then
+Begin
+
+	return(
+	Select row_to_json(a)
+	from
+	(
+	select array_to_json(array_agg(row_to_json(output)))  as "Customer"
+	from
+	(
+		select customerid "CustomerID", customername "CustomerName",  users.user_name "CreatedBy", customers.createddate "CreatedDate"
+		, musers.user_name "ModifiedBy", customers.Modifieddate "ModifiedDate"
+		, customers.hierarchy_level "Customer_Level"
+		, case when users.user_id=1 then 0 else users.hierarchy_level end "CreatedByUser_Level"
+		from kbcustomersmst customers
+		join kbusermst users on customers.createdby=users.user_id
+		Left join kbusermst musers on customers.modifiedby=musers.user_id
+		where customerid!=1 
+	)output
+	)a
+	)
+	;
+End;
+else
+begin
+	return(
+	Select row_to_json(a)
+	from
+	(
+		select array_to_json(array_agg(row_to_json(output)))  as "Customer"
+		from
+		(
+			select customerid "CustomerID", customername "CustomerName",  users.user_name "CreatedBy", customers.createddate "CreatedDate"
+			, musers.user_name "ModifiedBy", customers.Modifieddate "ModifiedDate"
+			from kbcustomersmst customers
+			join kbusermst users on customers.createdby=users.user_id
+			Left join kbusermst musers on customers.modifiedby=musers.user_id
+			where customerid!=1 and exists (Select 1 from kbusercustomermapping B where customers.customerid=B.customerid and b.userid=vcreated_by)
+
+		)output
+	)a
+	)
+	;
+end;
+end if;
+
+end;
+elseif lower(VTran)='getdetails' then
+begin
+
+VCustomerId:=(select ivalue->'MetaDataInformation'->> 'customerId' from temps limit 1);
+
+return(
+Select row_to_json(a)
+from
+(
+select array_to_json(array_agg(row_to_json(output)))  as "Customer"
+from
+(
+select customers.customerid "CustomerID", customers.customername "CustomerName",licencekey "CustomerKey",ServerName as "ServerName"
+,Metadata.CacheServerName "CacheName",CachePort "CachePort",CacheDbName "CacheDb",authenticationtype "AuthenticationType"
+,username "UserName",metadata.password as "Password",ConnectionType "Type"
+,  users.user_name "CreatedBy", customers.createddate "CreatedDate"
+, musers.user_name "ModifiedBy", customers.Modifieddate "ModifiedDate"
+from kbcustomersmst customers
+join kbusermst users on customers.createdby=users.user_id
+Join NMSMetadata metadata on customers.customerid=metadata.Customer_Start_ID
+join KBLicenseDetails license on customers.customerid=license.customerid
+Left join kbusermst musers on customers.modifiedby=musers.user_id
+where customers.customerid!=1 and customers.customerid=VCustomerId
+)output
+)a
+)
+;
+ 
+ 
+end;
+
+end if;
+
+End
+
+$function$;
+
+ALTER FUNCTION public.usp_kbcustomers(json)
+    OWNER TO postgres;
+
+
+

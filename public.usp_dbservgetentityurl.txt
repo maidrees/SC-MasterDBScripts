@@ -1,0 +1,1098 @@
+-- FUNCTION: public.usp_dbservgetentityurljson
+
+-- DROP FUNCTION public.usp_dbservgetentityurljson;
+
+CREATE OR REPLACE FUNCTION public.usp_dbservgetentityurl(
+	input json)
+RETURNS json
+    LANGUAGE 'plpgsql'
+    COST 100.0
+    VOLATILE 
+AS $function$
+
+DECLARE
+	VTRAN			VARCHAR(30);
+	VCreated_By		int;
+	VID			int;
+	Vsource 		int;
+	VSourceid 		int;
+	Vipaddress 		varchar(255);
+	VResult 		json;
+	VInstanceID 		varchar(255);
+	VConfigid 		bigint;
+	VEngineCount 		int;
+	VTotalUrlCount 		int;
+	VConfigidcount 		int;
+	VConfigUrlIdCount 	int;
+	VSTATUS 		smallint;
+	VURLID 			bigint;
+	VMasterInstanceID 	varchar(100);
+	VMasterInstanceStatus 	bit;
+	VEngineInstanceID 	varchar(200);
+	VRangeStart 		int;
+	VProfileid 		int;
+	VTotalrecordsproccessed int;
+	VProcesstype 		smallint;
+	VprevConfigid 		int;
+	VLimit			int;
+	VResultWeb		json;
+	VResultdb		json;
+	VResultuser		json;
+	VResultdb1		json;
+	VResultftp		json;
+	VResultsh		json;
+	VResultLDAP		json;
+	Ventitydefid		bigint;
+	VActiondate		timestamp default(current_timestamp at time zone 'utc')	;	
+Begin
+
+drop table if exists temps;	
+drop table if exists users;
+drop table if exists UrlTemp;
+drop table if exists DynamicParameters;
+drop table if exists EnginePaginDetails;
+
+create temp table temps(id serial,ivalue json);
+create temp table users (id serial,userid int);
+Create temp table UrlTemp(id serial,Configid varchar(255), UrlId bigint,SourceId bigint,DataFetchType varchar(50));
+Create temp table DynamicParameters( id serial,iKey varchar(100),iValue varchar(100));
+Create temp table EnginePaginDetails(ID Serial,EngineInstanceID varchar(200),CurrentRangeStart int, CurrentRangeEnd int);
+
+insert into temps(ivalue)
+select input;
+
+select ivalue->'INPUT'->> 'TransType'
+,cast(ivalue->'INPUT'->> 'SOURCE' as int)
+,ivalue->'INPUT'->> 'IPADDRESS'
+,ivalue->'INPUT'->> 'PullInstanceKey'
+,cast(ivalue->'INPUT'->> 'URLID' as int)
+,cast(ivalue->'INPUT'->> 'STATUS' as int)
+,cast(ivalue->'INPUT'->> 'SOURCEID' as int)
+,cast(ivalue->'INPUT'->> 'PROFILEID' as int)
+,cast(ivalue->'INPUT'->> 'COUNT' as int)
+,cast(ivalue->'INPUT'->> 'ProcessType' as int)
+,ivalue->'INPUT'->> 'ServiceInstance'
+,cast(ivalue->'INPUT'->> 'ENTITYDEFID' as bigint)
+into VTRAN,Vsource,vipaddress,vInstanceId,vURLID,vSTATUS,vSourceid,vProfileid,VEngineInstanceID,Ventitydefid
+from temps limit 1;
+
+If Lower(VTran) is NULL or Lower(VTran)='' then  
+begin
+/* Forming the output */
+
+If VSource is not Null and VSource!=0 then
+Begin
+
+	VResult:= (
+			Select Row_to_json(outs)
+			from
+			(
+				Select Row_to_json(outp) as "OUTPUT"
+				from
+				(	
+					select Array_to_json(Array_agg(Row_to_json(web))) as "URL"
+					From
+					(
+					SELECT 
+					SOURCEURL 				AS "NAME"
+					,Vsource 				AS "SOURCEID"
+					,SPOKETYPE 				AS "SPOKETYPE"
+					,MainSeparator 				AS "MainSeparator"
+					,SubSeparator 				AS "SubSeparator"
+					,TIMEOFFSETS.TIMEZONENAME 		AS "TIMEZONENAME"
+					,TIMEOFFSETS.UTCDurationinMinutes  	AS "UTCOFFSET"
+					,TIMEOFFSETS.TIMEZONEID 		AS "TIMEZONEID"
+					,'' 					AS "DATABASETYPE"
+					,'' 					AS "PORTNUMBER"
+					,ROW_NUMBER() OVER(ORDER BY SOURCEURL DESC) *100000 AS  "TIMEINTERVAL"
+					,'SECONDS' 				AS "UOM"
+					,ksdf.FORMATTYPE 			AS "TYPE"
+					,( 
+						Select Array_To_json(Array_agg(row_to_json(cust))) as "CUSTOMER"
+						From
+						(
+							select DISTINCT kcp.ENTITY_ID as "ID" , kcp.Location_id as "LOCATIONID" 
+							,'' "PHONENO"
+							--,(select DBfnCustomerTemplateSpokeDetailsPhoneNO(kcp.ENTITY_ID,kcp.Location_id,';',SM.SourceName,Vsource)) AS "PHONENO"
+							,'ID,LOCATIONID,PHONENO' as "Attribute_list"
+							from 
+							KBSOURCEMST SM
+							Join KBEntityPhone kcp ON kcp.ENTITY_ID = sm.ENTITY_ID and kcp.Location_ID = Sm.Location_id 
+							and kcp.SOURCETYPEID = SM.SOURCETYPE_ID
+							where sources.SOURCETYPE_ID = SM.SOURCETYPE_ID
+						)cust
+						--for XML raw('CUSTOMER')
+						)
+						,
+						(
+							Select Row_to_json(params) as "PARAMETERS"
+							from
+							(
+								Select Array_To_json(Array_agg(row_to_json(param))) as "PARAMETER"
+								from
+								(	
+								Select PARAM_NAME "Key",PARAM_VALUE "Value" ,PARAM_TYPE "Type" ,FORMULA "Formula",LocationDimId "GroupID"
+								,'Key,Value,Type,Formula,GroupID'	"Attribute_list"
+								From KBSOURCEURLDETAILS UrlDetails 
+								where  Sources.SOURCETYPE_ID=UrlDetails.SOURCEID and UrlDetails.PARAM_TYPE='static'  
+								--For XML RAW('PARAMETER'),ROOT('PARAMETERS')
+								)param
+							) params
+						)
+						,'NAME,SOURCEID,SPOKETYPE,MainSeparator,SubSeparator,SOURCEID,SOURCENAME,TIMEZONENAME,UTCOFFSET,TIMEZONEID'
+						||',DATABASETYPE,PORTNUMBER,TIMEINTERVAL,UOM,TYPE' as "Attribute_list"
+						
+					FROM 
+					KBSourceTypeMst Sources 
+					JOIN KBTIMEZONEOFFSETS AS TIMEOFFSETS  ON sources.TIMEZONEID = TIMEOFFSETS.TIMEZONEID
+					join KbSpokeDataFormats ksdf on sources.DataFormat=ksdf.ID
+					where Sources.SOURCETYPE_ID = Vsource and Sources.IsActive='1'
+					Group BY Sources.SOURCETYPE_ID,	SOURCEURL ,TIMEOFFSETS.TIMEZONENAME ,TIMEOFFSETS.UTCDurationinMinutes ,TIMEOFFSETS.TIMEZONEID,sources.TIMEZONEID
+					,ksdf.FORMATTYPE,MainSeparator,SubSeparator,SPOKETYPE
+					)web
+				)outp
+			)outs		--FOR XML RAW('URL'),ROOT('OUTPUT')
+		);
+
+End;
+Else
+Begin
+
+	/* Web Service Start*/
+
+	-- VResultweb:=
+-- 			
+-- 			(	 	Select Array_to_json(Array_agg(row_to_json(ur))) as "URL"
+-- 					From
+-- 					(	
+-- 						SELECT 
+-- 						 
+-- 						DATASOURCENAME 		"DATASOURCENAME"
+-- 						,Coalesce(AA.Configid,'0') "Configid"
+-- 						,SPOKETYPE 		"SPOKETYPE"
+-- 						,urls.ID 		"URLID"	
+-- 						,URL 			"NAME"
+-- 						,MainSeparator		"MainSeparator"
+-- 						,SubSeparator		"SubSeparator"
+-- 						, '&' 			"CONCATS"
+-- 						,Sources.SOURCETYPE_ID  "SOURCEID"
+-- 						,Sources.SOURCETYPE_NAME "SOURCENAME"
+-- 						,TIMEOFFSETS.TIMEZONENAME "TIMEZONENAME"
+-- 						,TIMEOFFSETS.UTCDurationinMinutes as "UTCOFFSET"
+-- 						,TIMEOFFSETS.TIMEZONEID AS "TIMEZONEID"
+-- 						,Coalesce(DATA_FETCH_TYPE,'CurrentData') "DATA_FETCH_TYPE"
+-- 						,'' 			"DATABASETYPE"
+-- 						,'' 			"PORTNUMBER"
+-- 						,(Case when (lower(DATA_RETRIEVAL_UOM) ='mins' or lower(DATA_RETRIEVAL_UOM) ='min' or lower(DATA_RETRIEVAL_UOM)='minutes') 
+-- 							Then DATA_RETRIEVAL_TIME * 60 
+-- 						when (lower(DATA_RETRIEVAL_UOM)='hours' or lower(DATA_RETRIEVAL_UOM)='hour') Then (DATA_RETRIEVAL_TIME * 60)*60 
+-- 
+-- 						when (lower(DATA_RETRIEVAL_UOM)='days'  or lower(DATA_RETRIEVAL_UOM)='day') Then ((DATA_RETRIEVAL_TIME * 24) * 60)*60 
+-- 						End ) * 1000  as "TIMEINTERVAL"
+-- 
+-- 						
+-- 						,'Milliseconds' "UOM"
+-- 						,ksdf.FORMATTYPE as "TYPE"
+-- 						,Coalesce(WSDLURL,'') "WSDLURL"
+-- 						,Coalesce(WSDLClassName,'') "WSDLClassName"
+-- 						,Coalesce(WSDLAction,'') "WSDLAction"
+-- 						,IsRestBased		"IsRestBased"
+-- 						,(
+-- 							Select Array_to_json(Array_agg(row_to_json(cust))) "CUSTOMER"
+-- 							from
+-- 							( 
+-- 							select DISTINCT kcp.ENTITY_ID as "ID" , kcp.Location_id as "LOCATIONID" 
+-- 							,'' "PHONENO"
+-- 							--,(Select DBfnCustomerTemplateSpokeDetailsPhoneNO(kcp.ENTITY_ID,kcp.Location_id,';',SM.SourceName,sm.SOURCETYPE_ID)) AS "PHONENO"
+-- 							,'ID,LOCATIONID,PHONENO' as "Attribute_list"
+-- 							  from 
+-- 							  KBSOURCEMST SM
+-- 							  Join KBEntityPhone kcp ON kcp.ENTITY_ID = sm.entity_id and kcp.Location_ID = Sm.Location_id 
+-- 							  and kcp.SOURCETYPEID = SM.SOURCETYPE_ID
+-- 							  where   Sources.SOURCETYPE_ID=Sm.SOURCETYPE_ID
+-- 							  --for XML raw('CUSTOMER')
+-- 							) as cust
+-- 						)
+-- 						,
+-- 						(
+-- 							Select Row_to_json(params) as "PARAMETERS"
+-- 							from
+-- 							(
+-- 								Select Array_To_json(Array_agg(row_to_json(param))) as "PARAMETER"
+-- 								from
+-- 								(	
+-- 								Select PARAM_NAME "Key",PARAM_VALUE "Value" ,PARAM_TYPE "Type" ,FORMULA "Formula",LocationDimId "GroupID"
+-- 								,'Key,Value,Type,Formula,GroupID'	"Attribute_list"
+-- 								From KBSOURCEURLDETAILS UrlDetails 
+-- 								where  Sources.SOURCETYPE_ID=UrlDetails.SOURCEID and lower(UrlDetails.PARAM_TYPE)='static'  
+-- 								--For XML RAW('PARAMETER'),ROOT('PARAMETERS')
+-- 								)param
+-- 							) params
+-- 						)
+-- 						,USERNAME	"USERNAME"
+-- 						,PASSWORD	"PASSWORD"
+-- 						,
+-- 						(	
+-- 							Select Row_to_json(metdet) as "METRICDETAILS"
+-- 							From
+-- 							(
+-- 								Select Array_To_json(Array_agg(row_to_json(mets))) as "METRIC"
+-- 								from
+-- 								(
+-- 								select METRIC_ID "METRIC_ID",METRICNAME "METRICNAME" 
+-- 								,'METRIC_ID,METRICNAME' as "Attribute_list"
+-- 								from kbMetricMst Metric 
+-- 								where Metric.SOURCE_ID=Sources.SOURCETYPE_ID and Metric.TEMPLATE_ID=1 
+-- 										--for xml raw('METRICS'),root('METRICDETAILS')
+-- 								)mets
+-- 							)metdet	
+-- 						)
+-- 						 ,
+-- 						 (
+-- 							Select licensekeyid from kblicensedetails Maps 
+-- 							where Customerid= (Select CustomerId from kbusercustomermapping where userid= Sources.CreatedBy)
+-- 							limit 1
+-- 						) 				"VID"
+-- 						,urls.DBIDColumn		"DBIDColumn"
+-- 						,DBIDColumnDataType		"DBIDColumnDataType"
+-- 						,'DATASOURCENAME,Configid,SPOKETYPE,URLID,NAME,MainSeparator,SubSeparator,CONCATS,SOURCEID,SOURCENAME,TIMEZONENAME,UTCOFFSET'
+-- 						||',TIMEZONEID,DATA_FETCH_TYPE,DATABASETYPE,PORTNUMBER,TIMEINTERVAL,UOM,TYPE,WSDLURL,WSDLClassName,WSDLAction,IsRestBased,USERNAME'
+-- 						||',PASSWORD,VID,DBIDColumn,DBIDColumnDataType' as "Attribute_list"	
+-- 						FROM  
+-- 						kbsourcetypemst Sources
+-- 						Join kbsourceurlmst urls on Sources.SOURCETYPE_ID=urls.SOURCEID
+-- 						JOIN KBTIMEZONEOFFSETS AS TIMEOFFSETS  ON Sources.TIMEZONEID = TIMEOFFSETS.TIMEZONEID
+-- 						Left Outer Join KbSpokeDataFormats DataFormats on Sources.DataFormat=Dataformats.ID
+-- 						join  KbSpokeDataFormats ksdf on Sources.DataFormat=ksdf.ID
+-- 						Join KBDataSourceMst DataSources on Urls.DataSourceID=DataSources.DataSourceID
+-- 						Join UrlTemp AA on urls.ID=AA.UrlId
+-- 						where Sources.SOURCETYPE=1 and Urls.DataSourceID=2  and Lower(ObjectType)='entity' and Sources.IsActive='1' 
+-- 						Group BY 	Sources.SOURCETYPE_ID,URL,DataSourceName,TIMEOFFSETS.TIMEZONENAME ,TIMEOFFSETS.UTCDurationinMinutes ,Sources.DataFormat
+-- 						,TIMEOFFSETS.TIMEZONEID,Sources.TIMEZONEID,DATA_RETRIEVAL_TIME,DATA_RETRIEVAL_UOM,AA.Configid,
+-- 						ksdf.FORMATTYPE,urls.SOURCEID,urls.ID,USERNAME,PASSWORD,MainSeparator,SubSeparator,SPOKETYPE,WSDLURL,WSDLAction,IsRestBased,WSDLClassName
+-- 						,DATA_FETCH_TYPE,Sources.CreatedBy,urls.DBIDColumn,DBIDColumnDataType,Sources.SOURCETYPE_NAME  
+-- 						--FOR XML RAW('URL')
+-- 					)ur
+-- 				 
+-- 			);
+/* Web Service End*/
+
+/* Database Start */
+
+	VResultdb:= 
+		(
+		 
+			Select Array_to_json(Array_agg(row_to_json(ur))) as "URL"
+			From
+			(	
+				SELECT 
+				ENTITY_NAME "ENTITY_NAME" 
+				, Entitydef_id "ENTITYDEF_ID"
+				, DATASOURCENAME	"DATASOURCENAME"
+				, '&' 		"CONCATS"
+				,urls.ID AS 	"URLID"
+				,Coalesce(createurl,'') "CREATEURL"
+				,URL 			"NAME"
+				,Coalesce(dsdetails.DSADetailName,'') "DATABASETYPE"
+				,Coalesce(urls.PortNumber,0) as  "PORTNUMBER"
+				,(Case when (lower(DATA_RETRIEVAL_UOM) ='mins' or lower(DATA_RETRIEVAL_UOM) ='min' or lower(DATA_RETRIEVAL_UOM)='minutes') Then DATA_RETRIEVAL_TIME * 60 
+				when (lower(DATA_RETRIEVAL_UOM)='hours' or lower(DATA_RETRIEVAL_UOM)='hour') Then (DATA_RETRIEVAL_TIME * 60)*60 
+				when (lower(DATA_RETRIEVAL_UOM)='days'  or lower(DATA_RETRIEVAL_UOM)='day') Then ((DATA_RETRIEVAL_TIME * 24) * 60)*60 
+				End ) * 1000  as "TIMEINTERVAL"
+				,'Milliseconds' 		"UOM"
+				 
+				,(
+					Select Row_to_json(params) as "PARAMETERS"
+					from
+					(
+						Select Array_To_json(Array_agg(row_to_json(param))) as "PARAMETER"
+						from
+						(	
+						Select PARAM_NAME "Key",PARAM_VALUE "Value" ,PARAM_TYPE "Type" ,FORMULA "Formula"
+						,'Key,Value,Type,Formula'	"Attribute_list"
+						From KBSOURCEURLDETAILS UrlDetails 
+						where  urls.id=urldetails.URLID
+						--For XML RAW('PARAMETER'),ROOT('PARAMETERS')
+						)param
+					) params
+				)
+				,urls.USERNAME			"USERNAME"
+				,urls.PASSWORD			"PASSWORD"
+				,DBAuthType 			"DBAUTHTYPE" 
+				,SERVERNAME			"SERVERNAME" 
+				,DATABASENAME			"DATABASENAME"
+				,DBQUERY			"DBQUERY"
+				,Coalesce(PORTNUMBER,0)		"PORTNUMBER"
+				,Coalesce(ORGANISATION,'')	"ORGANISATION"
+				,Coalesce("group",'')		"GROUP"
+				,TABLEQUERY 			"METRICQUERY"	
+				,HasPaging 			"HASPAGING"
+				,PagingColumn 			"PAGINGCOLUMN"
+				,NoofRecords 			"NOOFRECORDS"
+				,DATA_FETCH_TYPE		"DATA_FETCH_TYPE"
+				,(	
+					Select Row_to_json(metdet) as "METRICDETAILS"
+					From
+					(
+						Select Array_To_json(Array_agg(row_to_json(mets))) as "METRIC"
+						from
+						(  
+						select NULL "METRIC_ID",Metrics.ControlTitle "METRICNAME" , controldatatype "CONTROLDATATYPE"
+						,'METRIC_ID,METRICNAME,CONTROLDATATYPE' as "Attribute_list"
+						from KBEntityScreenConfigurationMst Metrics 
+						where Sources.EntityDef_Id=Metrics.EntityDefID
+						--for xml raw('METRICS'),root('METRICDETAILS')
+						)mets
+					)metdet	
+				)
+				 ,
+				 (
+					Select licensekeyid 
+					from kblicensedetails Maps 
+					where Customerid= (Select CustomerId from kbusercustomermapping where userid= Sources.CreatedBy)
+					limit 1
+				) 			"VID"
+				,urls.DBIDColumn	"DBIDColumn"
+				,DBIDColumnDataType	"DBIDColumnDataType"
+				,createurltype		"CREATEURLTYPE"
+				,AttributeMapping	"ATTRIBUTEMAPPING"
+				,cast(screenjson as text)		"GENERICURLINPUT"
+				,(
+					Select row_to_json(scr)
+					from
+					(
+					Select  Array_to_json(Array_Agg(Row_to_json(relat))) "screen"
+					from
+					(
+						select ID "ID", cast(edef.screenjson as text)
+						from
+						(
+							select cast(rel->>'RelatedEntityDefinitionId' as int) ID
+							from
+							(
+							Select json_array_elements(cast(Attributemapping as json)) rel
+							from
+							kbsourceurlmst rels
+							where urls.id=rels.id
+							)A
+							where rel->>'RelatedEntityDefinitionId' !=''
+						)Rels
+						Join kbentitymst edef on Rels.Id=Edef.Entitydef_id
+					)Relat
+					)scr
+
+				) "RELATIONMAPPING"
+				,sources.createdby	"LoginId"
+				,'ENTITY_NAME,ENTITYDEF_ID,DATASOURCENAME,CONCATS,URLID,CREATEURL,NAME,LoginId'
+				||',DATABASETYPE,TIMEINTERVAL,UOM,TYPE,USERNAME,PASSWORD,SERVERNAME,PORTNUMBER,ORGANISATION,GROUP,DATABASENAME,DBQUERY,METRICQUERY'
+				||',HASPAGING,PAGINGCOLUMN,NOOFRECORDS,VID,DBIDColumn,DBIDColumnDataType,DATA_FETCH_TYPE,CREATEURLTYPE' as "Attribute_list"		
+				FROM   
+				kbentitymst Sources
+				Join kbsourceurlmst urls on Sources.ENTITYDEF_ID=urls.SOURCEID
+				Join KBDataSourceMst DataSources on Urls.DataSourceID=DataSources.DataSourceID
+				Inner join KBDataSourceAttributes dsatt on dsatt.DataSourceID=DataSources.DataSourceID   --newlyadded
+				LEft outer join KBDataSourceAttributeDetails dsdetails on dsatt.DSAttributeID=dsdetails.DSAttributeID 
+						and   dsdetails.DSAttributeDetailID=urls.DATABASETYPE  --newlyadded
+				where  Lower(ObjectType)='entity' 
+				Group BY 	Sources.ENTITY_NAME,DataSourceName,DATA_RETRIEVAL_TIME,DATA_RETRIEVAL_UOM
+				,urls.SOURCEID,urls.ID,URL,USERNAME,urls.PASSWORD,SERVERNAME,DATABASENAME,DBQUERY,TABLEQUERY
+				,HasPaging ,PagingColumn ,NoofRecords , dsdetails.DSADetailName,urls.PortNumber,Sources.CreatedBy
+				,urls.DBIDColumn,DBIDColumnDataType,DBAuthType,Sources.EntityDef_Id,ORGANISATION,"group",urls.attributemapping,DATA_FETCH_TYPE
+				,createurl,createurltype,AttributeMapping,cast(screenjson as text),Entitydef_id,sources.createdby
+			)ur
+			
+		);  
+
+	VResultuser:= 
+				(
+				 
+					Select Array_to_json(Array_agg(row_to_json(ur))) as "URL"
+					From
+					(	
+					SELECT 
+					user_NAME "USER_NAME" 
+					, DATASOURCENAME	"DATASOURCENAME"
+					, '&' 		"CONCATS"
+					,urls.ID AS 	"URLID"
+					,Coalesce(createurl,'') "CREATEURL"
+					,URL 			"NAME"
+					,Coalesce(dsdetails.DSADetailName,'') "DATABASETYPE"
+					,Coalesce(urls.PortNumber,0) as  "PORTNUMBER"
+					,(Case when (lower(DATA_RETRIEVAL_UOM) ='mins' or lower(DATA_RETRIEVAL_UOM) ='min' or lower(DATA_RETRIEVAL_UOM)='minutes') Then DATA_RETRIEVAL_TIME * 60 
+					when (lower(DATA_RETRIEVAL_UOM)='hours' or lower(DATA_RETRIEVAL_UOM)='hour') Then (DATA_RETRIEVAL_TIME * 60)*60 
+					when (lower(DATA_RETRIEVAL_UOM)='days'  or lower(DATA_RETRIEVAL_UOM)='day') Then ((DATA_RETRIEVAL_TIME * 24) * 60)*60 
+					End ) * 1000  as "TIMEINTERVAL"
+					,'Milliseconds' 		"UOM"
+					 
+					,(
+						Select Row_to_json(params) as "PARAMETERS"
+						from
+						(
+							Select Array_To_json(Array_agg(row_to_json(param))) as "PARAMETER"
+							from
+							(	
+							Select PARAM_NAME "Key",PARAM_VALUE "Value" ,PARAM_TYPE "Type" ,FORMULA "Formula"
+							,'Key,Value,Type,Formula'	"Attribute_list"
+							From KBSOURCEURLDETAILS UrlDetails 
+							where  urls.id=urldetails.URLID
+							--For XML RAW('PARAMETER'),ROOT('PARAMETERS')
+							)param
+						) params
+					)
+					,USERNAME			"USERNAME"
+					,urls.PASSWORD			"PASSWORD"
+					,DBAuthType 			"DBAUTHTYPE" 
+					,SERVERNAME			"SERVERNAME" 
+					,DATABASENAME			"DATABASENAME"
+					,DBQUERY			"DBQUERY"
+					,Coalesce(PORTNUMBER,0)		"PORTNUMBER"
+					,Coalesce(ORGANISATION,'')	"ORGANISATION"
+					,Coalesce("group",'')		"GROUP"
+					,urls.AttributeMapping		"AttributeMapping"
+					,TABLEQUERY 			"METRICQUERY"	
+					,HasPaging 			"HASPAGING"
+					,PagingColumn 			"PAGINGCOLUMN"
+					,NoofRecords 			"NOOFRECORDS"
+					,DATA_FETCH_TYPE		"DATA_FETCH_TYPE"
+					 ,
+					 (
+						Select licensekeyid 
+						from kblicensedetails Maps 
+						where Customerid= (Select CustomerId from kbusercustomermapping where userid= Sources.CreatedBy)
+						limit 1
+					) 			"VID"
+					,urls.DBIDColumn	"DBIDColumn"
+					,DBIDColumnDataType	"DBIDColumnDataType"
+					,'USER_NAME,DATASOURCENAME,CONCATS,URLID,CREATEURL,NAME'
+					||',DATABASETYPE,TIMEINTERVAL,UOM,TYPE,USERNAME,PASSWORD,SERVERNAME,PORTNUMBER,ORGANISATION,GROUP,DATABASENAME,DBQUERY,METRICQUERY'
+					||',HASPAGING,PAGINGCOLUMN,NOOFRECORDS,VID,DBIDColumn,DBIDColumnDataType,DATA_FETCH_TYPE' as "Attribute_list"		
+					FROM  
+					kbusermst Sources
+					Join kbsourceurlmst urls on Sources.user_ID=urls.SOURCEID
+					Join KBDataSourceMst DataSources on Urls.DataSourceID=DataSources.DataSourceID
+					Inner join KBDataSourceAttributes dsatt on dsatt.DataSourceID=DataSources.DataSourceID   --newlyadded
+					LEft outer join KBDataSourceAttributeDetails dsdetails on dsatt.DSAttributeID=dsdetails.DSAttributeID 
+							and   dsdetails.DSAttributeDetailID=urls.DATABASETYPE  --newlyadded
+					where  Lower(ObjectType)='user' 
+					Group BY 	Sources.user_NAME,DataSourceName,DATA_RETRIEVAL_TIME,DATA_RETRIEVAL_UOM
+					,urls.SOURCEID,urls.ID,URL,USERNAME,urls.PASSWORD,SERVERNAME,DATABASENAME,DBQUERY,TABLEQUERY
+					,HasPaging ,PagingColumn ,NoofRecords , dsdetails.DSADetailName,urls.PortNumber,Sources.CreatedBy
+					,urls.DBIDColumn,DBIDColumnDataType,DBAuthType,ORGANISATION,"group",urls.attributemapping,DATA_FETCH_TYPE
+					,createurl
+					--FOR XML RAW('URL')
+					)ur
+				 	
+				);  
+
+		
+	/*Getting the historical data*/
+	
+	-- VResultdb1:=
+-- 			(		
+-- 				 	Select Array_to_json(Array_agg(row_to_json(ur))) as "URL"
+-- 					From
+-- 					(	
+-- 					SELECT  
+-- 					ENTITY_NAME "ENTITY_NAME" 
+-- 					,DATASOURCENAME	"DATASOURCENAME"
+-- 					, '&' 		"CONCATS"
+-- 					,urls.ID AS 	"URLID"
+-- 					,Coalesce(dsdetails.DSADetailName,'') "DATABASETYPE"
+-- 					,Coalesce(urls.PortNumber,0) as  "PORTNUMBER"
+-- 					,(Case when (lower(DATA_RETRIEVAL_UOM) ='mins' or lower(DATA_RETRIEVAL_UOM) ='min' or lower(DATA_RETRIEVAL_UOM)='minutes') Then DATA_RETRIEVAL_TIME * 60 
+-- 					when (lower(DATA_RETRIEVAL_UOM)='hours' or lower(DATA_RETRIEVAL_UOM)='hour') Then (DATA_RETRIEVAL_TIME * 60)*60 
+-- 					when (lower(DATA_RETRIEVAL_UOM)='days'  or lower(DATA_RETRIEVAL_UOM)='day') Then ((DATA_RETRIEVAL_TIME * 24) * 60)*60 
+-- 					End ) * 1000  as  "TIMEINTERVAL"
+-- 					,'Milliseconds' 		"UOM"
+-- 					-- ,(
+-- -- 						Select Array_to_json(Array_agg(row_to_json(cust))) "CUSTOMER"
+-- -- 						from
+-- -- 						( 
+-- -- 						select DISTINCT kcp.ENTITY_ID as "ID" , kcp.Location_id as "LOCATIONID" 
+-- -- 						,'' "PHONENO"
+-- -- 						--,(Select DBfnCustomerTemplateSpokeDetailsPhoneNO(kcp.ENTITY_ID,kcp.Location_id,';',SM.SourceName,sm.SOURCETYPE_ID)) AS "PHONENO"
+-- -- 						,'ID,LOCATIONID,PHONENO' as "Attribute_list"
+-- -- 						  from 
+-- -- 						  KBSOURCEMST SM
+-- -- 						  Join KBEntityPhone kcp ON kcp.ENTITY_ID = sm.entity_id and kcp.Location_ID = Sm.Location_id 
+-- -- 						  and kcp.SOURCETYPEID = SM.SOURCETYPE_ID
+-- -- 						  where   Sources.SOURCETYPE_ID=Sm.SOURCETYPE_ID
+-- -- 						  --for XML raw('CUSTOMER')
+-- -- 						) as cust
+-- -- 					)
+-- 					,(
+-- 						Select Row_to_json(params) as "PARAMETERS"
+-- 						from
+-- 						(
+-- 							Select Array_To_json(Array_agg(row_to_json(param))) as "PARAMETER"
+-- 							from
+-- 							(	
+-- 							Select PARAM_NAME "Key",PARAM_VALUE "Value" ,PARAM_TYPE "Type" ,FORMULA "Formula"
+-- 							,'Key,Value,Type,Formula'	"Attribute_list"
+-- 							From KBSOURCEURLDETAILS UrlDetails 
+-- 							where  urls.id=urldetails.URLID
+-- 							--For XML RAW('PARAMETER'),ROOT('PARAMETERS')
+-- 							)param
+-- 						) params
+-- 					)
+-- 					,USERNAME			"USERNAME"
+-- 					,PASSWORD			"PASSWORD"
+-- 					,DBAuthType 			"DBAUTHTYPE" 
+-- 					,SERVERNAME			"SERVERNAME" 
+-- 					,DATABASENAME			"DATABASENAME"
+-- 					,DBQUERY			"DBQUERY"
+-- 					,TABLEQUERY 			"METRICQUERY"	
+-- 					,HasPaging 			"HASPAGING"
+-- 					,PagingColumn 			"PAGINGCOLUMN"
+-- 					,NoofRecords 			"NOOFRECORDS"
+-- 					,DATA_FETCH_TYPE		"DATA_FETCH_TYPE"
+-- 					,(	
+-- 						Select Row_to_json(metdet) as "METRICDETAILS"
+-- 						From
+-- 						(
+-- 							Select Array_To_json(Array_agg(row_to_json(mets))) as "METRIC"
+-- 							from
+-- 							(
+-- 							select NULL "METRIC_ID",Metrics.ControlTitle "METRICNAME" 
+-- 							,'METRIC_ID,METRICNAME' as "Attribute_list"
+-- 							from KBEntityScreenConfigurationMst Metrics
+-- 								where Sources.EntityDef_Id=Metrics.EntityDefID 
+-- 									--for xml raw('METRICS'),root('METRICDETAILS')
+-- 							)mets
+-- 						)metdet	
+-- 					)
+-- 					 ,
+-- 					 (
+-- 						Select licensekeyid 
+-- 						from kblicensedetails Maps 
+-- 						where Customerid= (Select CustomerId from kbusercustomermapping where userid= Sources.CreatedBy)
+-- 						limit 1
+-- 					) 			"VID"
+-- 					,urls.DBIDColumn	"DBIDColumn"
+-- 					,DBIDColumnDataType	"DBIDColumnDataType"
+-- 					,'ENTITY_NAME,DATASOURCENAME,CONCATS,URLID,,TIMEZONENAME,UTCOFFSET,TIMEZONEID'
+-- 					||',DATABASETYPE,TIMEINTERVAL,UOM,TYPE,USERNAME,PASSWORD,SERVERNAME,PORTNUMBER,DATABASENAME,DBQUERY,METRICQUERY'
+-- 					||',HASPAGING,PAGINGCOLUMN,NOOFRECORDS,VID,DBIDColumn,DBIDColumnDataType' as "Attribute_list"	
+-- 					FROM  
+-- 					kbentitymst Sources
+-- 					Join kbsourceurlmst urls on Sources.ENTITYDEF_ID=urls.SOURCEID
+-- 					Join KBDataSourceMst DataSources on Urls.DataSourceID=DataSources.DataSourceID
+-- 					Inner join KBDataSourceAttributes dsatt on dsatt.DataSourceID=DataSources.DataSourceID   --newlyadded
+-- 					Inner join KBDataSourceAttributeDetails dsdetails on dsatt.DSAttributeID=dsdetails.DSAttributeID 
+-- 							and   dsdetails.DSAttributeDetailID=urls.DATABASETYPE  --newlyadded
+-- 					where  Urls.DataSourceID =1 /*(1,6)*/  and Lower(ObjectType)='entity' 
+-- 					and Urls.DATA_FETCH_TYPE='HistoricalData' and Sources.IsActive='1'
+-- 					Group BY 	Sources.ENTITY_NAME,DataSourceName
+-- 					,DATA_RETRIEVAL_TIME,DATA_RETRIEVAL_UOM
+-- 					,urls.SOURCEID,urls.ID,USERNAME,PASSWORD,SERVERNAME,DATABASENAME,DBQUERY,TABLEQUERY
+-- 					,HasPaging ,PagingColumn ,NoofRecords , dsdetails.DSADetailName,urls.PortNumber,Sources.CreatedBy
+-- 					,urls.DBIDColumn,DBIDColumnDataType,DBAuthType ,Sources.EntityDef_Id,DATA_FETCH_TYPE
+-- 					--FOR XML RAW('URL')
+-- 					)ur
+-- 				 
+-- 				);
+
+/* Database End */
+
+/* FTP Start */
+
+	-- VResultFTP:= 
+-- 			(
+-- 			 
+-- 					Select Array_to_json(Array_agg(row_to_json(ur))) as "URL"
+-- 					From
+-- 					(	
+-- 					SELECT 
+-- 					ENTITY_NAME				"ENTITY_NAME" 
+-- 					,DATASOURCENAME				"DATASOURCENAME"
+-- 					, '&' 					"CONCATS"
+-- 					,Sources.ENTITYDEF_ID 			AS "ENTITYDEFID"
+-- 					,urls.ID AS 				"URLID"
+-- 					,Coalesce(DataSources.Datasourcename,'') "DATABASETYPE"
+-- 					,(Case when (lower(DATA_RETRIEVAL_UOM) ='mins' or lower(DATA_RETRIEVAL_UOM) ='min' or lower(DATA_RETRIEVAL_UOM)='minutes') Then DATA_RETRIEVAL_TIME * 60 
+-- 					when (lower(DATA_RETRIEVAL_UOM)='hours' or lower(DATA_RETRIEVAL_UOM)='hour') Then (DATA_RETRIEVAL_TIME * 60)*60 
+-- 					when (lower(DATA_RETRIEVAL_UOM)='days'  or lower(DATA_RETRIEVAL_UOM)='day') Then ((DATA_RETRIEVAL_TIME * 24) * 60)*60 
+-- 					End ) * 1000  as  	"TIMEINTERVAL"
+-- 					,'Milliseconds' 			"UOM"
+-- 					
+-- 					-- ,(
+-- -- 						Select Array_to_json(Array_agg(row_to_json(cust))) "CUSTOMER"
+-- -- 						from
+-- -- 						( 
+-- -- 						select DISTINCT kcp.ENTITY_ID as "ID" , kcp.Location_id as "LOCATIONID" 
+-- -- 						, '' "PHONENO"
+-- -- 						--,(Select DBfnCustomerTemplateSpokeDetailsPhoneNO(kcp.ENTITY_ID,kcp.Location_id,';',SM.SourceName,sm.SOURCETYPE_ID)) AS "PHONENO"
+-- -- 						,'ID,LOCATIONID,PHONENO' as "Attribute_list"
+-- -- 						  from 
+-- -- 						  KBSOURCEMST SM
+-- -- 						  Join KBEntityPhone kcp ON kcp.ENTITY_ID = sm.entity_id and kcp.Location_ID = Sm.Location_id 
+-- -- 						  and kcp.SOURCETYPEID = SM.SOURCETYPE_ID
+-- -- 						  where   Sources.SOURCETYPE_ID=Sm.SOURCETYPE_ID
+-- -- 						  --for XML raw('CUSTOMER')
+-- -- 						) as cust
+-- -- 					)
+-- 					,(
+-- 						Select Row_to_json(params) as "PARAMETERS"
+-- 						from
+-- 						(
+-- 							Select Array_To_json(Array_agg(row_to_json(param))) as "PARAMETER"
+-- 							from
+-- 							(	
+-- 							Select PARAM_NAME "Key",PARAM_VALUE "Value" ,PARAM_TYPE "Type" ,FORMULA "Formula"
+-- 							,'Key,Value,Type,Formula' "Attribute_list"
+-- 							From KBSOURCEURLDETAILS UrlDetails 
+-- 							where  urls.id=urldetails.URLID 
+-- 							--For XML RAW('PARAMETER'),ROOT('PARAMETERS')
+-- 							)param
+-- 						) params
+-- 					)
+-- 					,USERNAME				"USERNAME"
+-- 					,PASSWORD				"PASSWORD"
+-- 					,SERVERNAME 				"SERVERNAME"
+-- 					,DATABASENAME				"DATABASENAME"
+-- 					,DBQUERY				"DBQUERY"
+-- 					,TABLEQUERY 				"METRICQUERY"	
+-- 					,HasPaging 				"HASPAGING"
+-- 					,PagingColumn 				"PAGINGCOLUMN"
+-- 					,NoofRecords 				"NOOFRECORDS"
+-- 					,(	
+-- 						Select Row_to_json(metdet) as "METRICDETAILS"
+-- 						From
+-- 						(
+-- 							Select Array_To_json(Array_agg(row_to_json(mets))) as "METRIC"
+-- 							from
+-- 							(
+-- 							select NULL "METRIC_ID",ControlTitle "METRICNAME"
+-- 							,'METRIC_ID,METRICNAME' as "Attribute_list" 
+-- 							from KBEntityScreenConfigurationMst Metrics  
+-- 							where  Sources.EntityDef_Id=Metrics.EntityDefID
+-- 							--for xml raw('METRICS'),root('METRICDETAILS')
+-- 							)mets
+-- 						)metdet	
+-- 					)
+-- 					 ,
+-- 					 (
+-- 						Select licensekeyid 
+-- 						from kblicensedetails Maps 
+-- 						where Customerid= (Select CustomerId from kbusercustomermapping where userid= Sources.CreatedBy)
+-- 						limit 1
+-- 					) 					"VID"
+-- 					,urls.DBIDColumn			"DBIDColumn"
+-- 					,DBIDColumnDataType			"DBIDColumnDataType"
+-- 					,'ENTITY_NAME,DATASOURCENAME,CONCATS,URLID,ENTITYDEFID'
+-- 					||',DATABASETYPE,TIMEINTERVAL,UOM,TYPE,USERNAME,PASSWORD,SERVERNAME,PORTNUMBER,DATABASENAME,DBQUERY,METRICQUERY'
+-- 					||',HASPAGING,PAGINGCOLUMN,NOOFRECORDS,VID,DBIDColumn,DBIDColumnDataType' as "Attribute_list"	
+-- 					FROM  
+-- 					kbentitymst Sources
+-- 					Join kbsourceurlmst urls on Sources.ENTITYDEF_ID=urls.SOURCEID
+-- 					Join KBDataSourceMst DataSources on Urls.DataSourceID=DataSources.DataSourceID
+-- 					Join UrlTemp AA on urls.ID=AA.UrlId
+-- 					where  uploadtype=6 and Lower(ObjectType)='entity' 
+-- 					Group BY  ENTITY_NAME ,Sources.ENTITYDEF_ID,DATA_RETRIEVAL_TIME,DATA_RETRIEVAL_UOM
+-- 					,urls.SOURCEID,urls.DBIDColumn,DBIDColumnDataType   ,urls.ID,PASSWORD,SERVERNAME,DATABASENAME,DBQUERY,TABLEQUERY,URL
+-- 					,DataSourceName,USERNAME,PORTNUMBER,ORGANISATION,"group",AttributeMapping, HasPaging, PagingColumn, NoofRecords
+-- 					--FOR XML RAW('URL')
+-- 					)ur
+-- 			 
+-- 				);
+
+	
+/* FTP End */
+
+/* Shared File Start */
+
+	-- VResultsh:= 	(
+-- 				 	Select Array_to_json(Array_agg(row_to_json(ur))) as "URL"
+-- 					From
+-- 					(
+-- 					SELECT 
+-- 					ENTITY_NAME				"ENTITY_NAME"
+-- 					,DATASOURCENAME				"DATASOURCENAME"
+-- 					, '&' 					"CONCATS"
+-- 					,urls.ID AS 				"URLID"
+-- 					,Coalesce(DataSources.Datasourcename,'') "DATABASETYPE"
+-- 					,Coalesce(urls.PortNumber,0) as  	"PORTNUMBER"
+-- 					,(Case when (lower(DATA_RETRIEVAL_UOM) ='mins' or lower(DATA_RETRIEVAL_UOM) ='min' or lower(DATA_RETRIEVAL_UOM)='minutes') Then DATA_RETRIEVAL_TIME * 60 
+-- 					when (lower(DATA_RETRIEVAL_UOM)='hours' or lower(DATA_RETRIEVAL_UOM)='hour') Then (DATA_RETRIEVAL_TIME * 60)*60 
+-- 					when (lower(DATA_RETRIEVAL_UOM)='days'  or lower(DATA_RETRIEVAL_UOM)='day') Then ((DATA_RETRIEVAL_TIME * 24) * 60)*60 
+-- 					End ) * 1000  as  	"TIMEINTERVAL"
+-- 					,'Milliseconds' 			"UOM"
+-- 					
+-- 					-- ,(
+-- -- 						Select Array_to_json(Array_agg(row_to_json(cust))) "CUSTOMER"
+-- -- 						from
+-- -- 						( 
+-- -- 						select DISTINCT kcp.ENTITY_ID as "ID" , kcp.Location_id as "LOCATIONID" 
+-- -- 						, '' "PHONENO"
+-- -- 						--,(Select DBfnCustomerTemplateSpokeDetailsPhoneNO(kcp.ENTITY_ID,kcp.Location_id,';',SM.SourceName,sm.SOURCETYPE_ID)) AS "PHONENO"
+-- -- 						,'ID,LOCATIONID,PHONENO' as "Attribute_list"
+-- -- 						  from 
+-- -- 						  KBSOURCEMST SM
+-- -- 						  Join KBEntityPhone kcp ON kcp.ENTITY_ID = sm.entity_id and kcp.Location_ID = Sm.Location_id 
+-- -- 						  and kcp.SOURCETYPEID = SM.SOURCETYPE_ID
+-- -- 						  where   Sources.SOURCETYPE_ID=Sm.SOURCETYPE_ID
+-- -- 						  --for XML raw('CUSTOMER')
+-- -- 						) as cust
+-- -- 					)
+-- 					,(
+-- 						Select Row_to_json(params) as "PARAMETERS"
+-- 						from
+-- 						(
+-- 							Select Array_To_json(Array_agg(row_to_json(param))) as "PARAMETER"
+-- 							from
+-- 							(	
+-- 							Select PARAM_NAME "Key",PARAM_VALUE "Value" ,PARAM_TYPE "Type" ,FORMULA "Formula"
+-- 							,'Key,Value,Type,Formula' "Attribute_list"
+-- 							From KBSOURCEURLDETAILS UrlDetails 
+-- 							where  urls.id=urldetails.URLID 
+-- 							--For XML RAW('PARAMETER'),ROOT('PARAMETERS')
+-- 							)param
+-- 						) params
+-- 					)
+-- 					,USERNAME				"USERNAME"
+-- 					,PASSWORD				"PASSWORD"
+-- 					,SERVERNAME 				"SERVERNAME"
+-- 					,DATABASENAME				"DATABASENAME"
+-- 					,DBQUERY				"DBQUERY"
+-- 					,TABLEQUERY 				"METRICQUERY"	
+-- 					,HasPaging 				"HASPAGING"
+-- 					,PagingColumn 				"PAGINGCOLUMN"
+-- 					,NoofRecords 				"NOOFRECORDS"
+-- 					,(	
+-- 						Select Row_to_json(metdet) as "METRICDETAILS"
+-- 						From
+-- 						(
+-- 							Select Array_To_json(Array_agg(row_to_json(mets))) as "METRIC"
+-- 							from
+-- 							(
+-- 							select NULL "METRIC_ID",Metrics.ControlTitle "METRICNAME"
+-- 							,'METRIC_ID,METRICNAME' as "Attribute_list" 
+-- 							from KBEntityScreenConfigurationMst Metrics 
+-- 							where Sources.EntityDef_Id=Metrics.EntityDefID
+-- 									--for xml raw('METRICS'),root('METRICDETAILS')
+-- 							)mets
+-- 						)metdet	
+-- 					)
+-- 					 ,
+-- 					 (
+-- 						Select licensekeyid 
+-- 						from kblicensedetails Maps 
+-- 						where Customerid= (Select CustomerId from kbusercustomermapping where userid= Sources.CreatedBy)
+-- 						limit 1
+-- 					) 					"VID"
+-- 					,urls.DBIDColumn			"DBIDColumn"
+-- 					,DBIDColumnDataType			"DBIDColumnDataType"
+-- 					,'ENTITY_NAME,DATASOURCENAME,CONCATS,URLID'
+-- 					||',DATABASETYPE,TIMEINTERVAL,UOM,TYPE,USERNAME,PASSWORD,SERVERNAME,PORTNUMBER,DATABASENAME,DBQUERY,METRICQUERY'
+-- 					||',HASPAGING,PAGINGCOLUMN,NOOFRECORDS,VID,DBIDColumn,DBIDColumnDataType' as "Attribute_list"	
+-- 					FROM  
+-- 					kbentitymst Sources
+-- 					Join kbsourceurlmst urls on Sources.ENTITYDEF_ID=urls.SOURCEID
+-- 					Join KBDataSourceMst DataSources on Urls.DataSourceID=DataSources.DataSourceID
+-- 					where Lower(ObjectType)='entity' and uploadtype=7
+-- 					Group BY 	Sources.ENTITY_NAME,DATA_RETRIEVAL_TIME,DATA_RETRIEVAL_UOM
+-- 					,urls.SOURCEID,urls.ID,USERNAME,PASSWORD,SERVERNAME,DATABASENAME,DBQUERY,TABLEQUERY
+-- 					,HasPaging ,PagingColumn ,NoofRecords ,urls.PortNumber,DataSources.DataSourceName
+-- 					,Sources.CreatedBy,urls.DBIDColumn,DBIDColumnDataType,Sources.EntityDef_Id
+-- 					)ur
+-- 			 	--FOR XML RAW('URL')
+-- 				);
+			
+
+/* Shared File  END*/
+
+/*LDAP Start*/
+
+	-- VResultLDAP:= (
+-- 				 	Select Array_to_json(Array_agg(row_to_json(ur))) as "URL"
+-- 					From
+-- 					(
+-- 					SELECT  
+-- 					DATASOURCENAME				"DATASOURCENAME"
+-- 					, '&' 					"CONCATS"
+-- 					,urls.ID AS 				"URLID"
+-- 					,MainSeparator				"MainSeparator"
+-- 					,SPOKETYPE				"SPOKETYPE"
+-- 					,SubSeparator				"SubSeparator"
+-- 					
+-- 					,Sources.SOURCETYPE_NAME AS 		"SOURCENAME"
+-- 					,TIMEOFFSETS.TIMEZONENAME AS 		"TIMEZONENAME"
+-- 					,TIMEOFFSETS.UTCDurationinMinutes as 	"UTCOFFSET"
+-- 					,TIMEOFFSETS.TIMEZONEID AS 		"TIMEZONEID"
+-- 					,DATA_FETCH_TYPE			"DATA_FETCH_TYPE"
+-- 					,'' 					"DATABASETYPE"
+-- 					,(Case when (lower(DATA_RETRIEVAL_UOM) ='mins' or lower(DATA_RETRIEVAL_UOM) ='min' or lower(DATA_RETRIEVAL_UOM)='minutes') Then DATA_RETRIEVAL_TIME * 60 
+-- 					when (lower(DATA_RETRIEVAL_UOM)='hours' or lower(DATA_RETRIEVAL_UOM)='hour') Then (DATA_RETRIEVAL_TIME * 60)*60 
+-- 					when (lower(DATA_RETRIEVAL_UOM)='days'  or lower(DATA_RETRIEVAL_UOM)='day') Then ((DATA_RETRIEVAL_TIME * 24) * 60)*60 
+-- 					End ) * 1000  as  	"TIMEINTERVAL"
+-- 					,'Milliseconds' 			"UOM"
+-- 					,ksdf.FORMATTYPE as 			"TYPE"
+-- 					,(
+-- 						Select Array_to_json(Array_agg(row_to_json(cust))) "CUSTOMER"
+-- 						from
+-- 						( 
+-- 						select DISTINCT kcp.ENTITY_ID as "ID" , kcp.Location_id as "LOCATIONID" 
+-- 						, '' "PHONENO"	
+-- 						--,(Select DBfnCustomerTemplateSpokeDetailsPhoneNO(kcp.ENTITY_ID,kcp.Location_id,';',SM.SourceName,sm.SOURCETYPE_ID)) AS "PHONENO"
+-- 						,'ID,LOCATIONID,PHONENO' as "Attribute_list"
+-- 						  from 
+-- 						  KBSOURCEMST SM
+-- 						  Join KBEntityPhone kcp ON kcp.ENTITY_ID = sm.entity_id and kcp.Location_ID = Sm.Location_id 
+-- 						  and kcp.SOURCETYPEID = SM.SOURCETYPE_ID
+-- 						  where   Sources.SOURCETYPE_ID=Sm.SOURCETYPE_ID
+-- 						  --for XML raw('CUSTOMER')
+-- 						) as cust
+-- 					)
+-- 					,(
+-- 						Select Row_to_json(params) as "PARAMETERS"
+-- 						from
+-- 						(
+-- 							Select Array_To_json(Array_agg(row_to_json(param))) as "PARAMETER"
+-- 							from
+-- 							(	
+-- 							Select PARAM_NAME "Key",PARAM_VALUE "Value" ,PARAM_TYPE "Type" ,FORMULA "Formula",LocationDimId "GroupID"
+-- 							,'Key,Value,Type,Formula,GroupID'	"Attribute_list"
+-- 							From KBSOURCEURLDETAILS UrlDetails 
+-- 							where  Sources.SOURCETYPE_ID=UrlDetails.SOURCEID and lower(UrlDetails.PARAM_TYPE)='static'  
+-- 							--For XML RAW('PARAMETER'),ROOT('PARAMETERS')
+-- 							)param
+-- 						) params
+-- 					)
+-- 					,USERNAME				"USERNAME"
+-- 					,PASSWORD				"PASSWORD"
+-- 					,SERVERNAME 				"SERVERNAME"
+-- 					,Coalesce(PORTNUMBER,0)		"PORTNUMBER"
+-- 					,Coalesce(ORGANISATION,'')		"ORGANISATION"
+-- 					,Coalesce("group",'')			"GROUP"
+-- 					,
+-- 					(
+-- 						Select licensekeyid 
+-- 						from kblicensedetails Maps 
+-- 						where Customerid= (Select CustomerId from kbusercustomermapping where userid= Sources.CreatedBy)
+-- 						limit 1
+-- 					) 	"VID"
+-- 					,'DATASOURCENAME,CONCATS,URLID,MainSeparator,SPOKETYPE,SubSeparator,SOURCEID,SOURCENAME,TIMEZONENAME,UTCOFFSET,TIMEZONEID,DATA_FETCH_TYPE'
+-- 						 ||',DATABASETYPE,TIMEINTERVAL,UOM,TYPE,USERNAME,PASSWORD,SERVERNAME,PORTNUMBER,ORGANISATION,GROUP,VID' as "Attribute_list"							
+-- 					FROM  
+-- 					kbsourcetypemst Sources
+-- 					Join kbsourceurlmst urls on Sources.SOURCETYPE_ID=urls.SOURCEID
+-- 					JOIN KBTIMEZONEOFFSETS AS TIMEOFFSETS  ON Sources.TIMEZONEID = TIMEOFFSETS.TIMEZONEID
+-- 					Left Outer Join KbSpokeDataFormats DataFormats on Sources.DataFormat=Dataformats.ID
+-- 					join  KbSpokeDataFormats ksdf on Sources.DataFormat=ksdf.ID
+-- 					Join KBDataSourceMst DataSources on Urls.DataSourceID=DataSources.DataSourceID
+-- 					where Sources.SOURCETYPE=1 and Urls.DataSourceID=3  and  Lower(ObjectType)='entity'
+-- 					Group BY Sources.SOURCETYPE_ID,DataSourceName
+-- 					,TIMEOFFSETS.TIMEZONEID,Sources.TIMEZONEID,DATA_RETRIEVAL_TIME,DATA_RETRIEVAL_UOM
+-- 					,ksdf.FORMATTYPE,urls.SOURCEID,urls.ID,USERNAME,PASSWORD,SERVERNAME,PORTNUMBER,ORGANISATION,"group"	
+-- 					,MainSeparator,SubSeparator,SPOKETYPE,DATA_FETCH_TYPE
+-- 					)ur
+-- 				 	--FOR XML RAW('URL')
+-- 				)
+			--;
+End;
+
+End if;
+
+VResult:=	(	
+		Select row_to_json(a)
+		from
+		(
+		Select 
+		--(select VResultWeb as "URL" )
+		--,
+		(select VResultdb as "URL")
+		,(select VResultuser as "URL")
+-- 		,(select VResultftp as "URL")
+-- 		,(select VResultsh as "URL")
+-- 		,(select VResultLDAP as "URL")
+		)a
+		)
+		;
+
+Begin
+
+	VResult:=(
+		
+			Select Row_to_json(outs)
+			from
+			(
+			Select VResult as "OUTPUT" -- For XML Path('OUTPUT')
+			)outs
+				
+		);
+
+--VResult:= (Replace(Replace(Replace(VResult,'\',''),':"[',':['),']""',']"')); 
+Return(select VResult as "OUTPUT");
+
+End;
+end;
+Elseif Lower(VTran)='getscreenconfiguration' then
+begin
+	return(
+		Select row_to_json(outs)
+		from
+		(
+			Select row_to_json(aa) "ENTITYDETAILS"
+			from
+			(
+			select Ventitydefid as "EntityDefId",(select screenjson from kbentitymst where entitydef_id=Ventitydefid)
+			,
+			(
+				
+				(
+					select cast(AttributeMapping as xml) 
+					from kbsourceurlmst	
+					where SOURCEID=Ventitydefid and lower(ObjectType)='entity' 
+					--For XML Path('') 
+				) 
+			) 
+			)aa
+		--for xml path(''),root('ENTITYDETAILS')
+		) outs
+		
+		);
+end;
+Elseif Lower(VTran)='getentitypushurl' then
+begin
+
+		return(
+			Select Row_to_json(outs)
+			from
+			(
+				Select Array_to_json(Array_agg(row_to_json(ur))) as "URL"
+				From
+				(	
+				SELECT 
+				ENTITY_NAME "ENTITY_NAME" 
+				, Entitydef_id "ENTITYDEF_ID"
+				, DATASOURCENAME	"DATASOURCENAME"
+				, '&' 		"CONCATS"
+				,urls.ID AS 	"URLID"
+				,Coalesce(createurl,'') "CREATEURL"
+				,URL 			"NAME"
+				,Coalesce(dsdetails.DSADetailName,'') "DATABASETYPE"
+				,Coalesce(urls.PortNumber,0) as  "PORTNUMBER"
+				,(Case when (lower(DATA_RETRIEVAL_UOM) ='mins' or lower(DATA_RETRIEVAL_UOM) ='min' or lower(DATA_RETRIEVAL_UOM)='minutes') Then DATA_RETRIEVAL_TIME * 60 
+				when (lower(DATA_RETRIEVAL_UOM)='hours' or lower(DATA_RETRIEVAL_UOM)='hour') Then (DATA_RETRIEVAL_TIME * 60)*60 
+				when (lower(DATA_RETRIEVAL_UOM)='days'  or lower(DATA_RETRIEVAL_UOM)='day') Then ((DATA_RETRIEVAL_TIME * 24) * 60)*60 
+				End ) * 1000  as "TIMEINTERVAL"
+				,'Milliseconds' 		"UOM"
+				 
+				,(
+					Select Row_to_json(params) as "PARAMETERS"
+					from
+					(
+						Select Array_To_json(Array_agg(row_to_json(param))) as "PARAMETER"
+						from
+						(	
+						Select PARAM_NAME "Key",PARAM_VALUE "Value" ,PARAM_TYPE "Type" ,FORMULA "Formula"
+						,'Key,Value,Type,Formula'	"Attribute_list"
+						From KBSOURCEURLDETAILS UrlDetails 
+						where  urls.id=urldetails.URLID
+						--For XML RAW('PARAMETER'),ROOT('PARAMETERS')
+						)param
+					) params
+				)
+				,urls.USERNAME			"USERNAME"
+				,urls.PASSWORD			"PASSWORD"
+				,DBAuthType 			"DBAUTHTYPE" 
+				,SERVERNAME			"SERVERNAME" 
+				,DATABASENAME			"DATABASENAME"
+				,DBQUERY			"DBQUERY"
+				,Coalesce(PORTNUMBER,0)		"PORTNUMBER"
+				,Coalesce(ORGANISATION,'')	"ORGANISATION"
+				,Coalesce("group",'')		"GROUP"
+				,TABLEQUERY 			"METRICQUERY"	
+				,HasPaging 			"HASPAGING"
+				,PagingColumn 			"PAGINGCOLUMN"
+				,NoofRecords 			"NOOFRECORDS"
+				,DATA_FETCH_TYPE		"DATA_FETCH_TYPE"
+				,(	
+					Select Row_to_json(metdet) as "METRICDETAILS"
+					From
+					(
+						Select Array_To_json(Array_agg(row_to_json(mets))) as "METRIC"
+						from
+						(  
+						select NULL "METRIC_ID",Metrics.ControlTitle "METRICNAME" , controldatatype "CONTROLDATATYPE"
+						,'METRIC_ID,METRICNAME,CONTROLDATATYPE' as "Attribute_list"
+						from KBEntityScreenConfigurationMst Metrics 
+						where Sources.EntityDef_Id=Metrics.EntityDefID
+						--for xml raw('METRICS'),root('METRICDETAILS')
+						)mets
+					)metdet	
+				)
+				 ,
+				 (
+					Select licensekeyid 
+					from kblicensedetails Maps 
+					where Customerid= (Select CustomerId from kbusercustomermapping where userid= Sources.CreatedBy)
+					limit 1
+				) 			"VID"
+				,urls.DBIDColumn	"DBIDColumn"
+				,DBIDColumnDataType	"DBIDColumnDataType"
+				,createurltype		"CREATEURLTYPE"
+				,AttributeMapping	"ATTRIBUTEMAPPING"
+				,cast(screenjson as text)		"GENERICURLINPUT"
+				,(
+					Select row_to_json(scr)
+					from
+					(
+					Select  Array_to_json(Array_Agg(Row_to_json(relat))) "screen"
+					from
+					(
+						select ID "ID", edef.entity_name "EntityDefName", cast(edef.screenjson as text)
+						from
+						(
+							select cast(rel->>'RelatedEntityDefinitionId' as int) ID
+							from
+							(
+							Select json_array_elements(cast(Attributemapping as json)) rel
+							from
+							kbsourceurlmst rels
+							where urls.id=rels.id
+							)A
+							where rel->>'RelatedEntityDefinitionId' !=''
+						)Rels
+						Join kbentitymst edef on Rels.Id=Edef.Entitydef_id
+					)Relat
+					)scr
+
+				) "RELATIONMAPPING"
+				,sources.createdby	"LoginId"
+				,urls.objectname	"Objectname"
+				,'ENTITY_NAME,ENTITYDEF_ID,DATASOURCENAME,CONCATS,URLID,CREATEURL,NAME,LoginId'
+				||',DATABASETYPE,TIMEINTERVAL,UOM,TYPE,USERNAME,PASSWORD,SERVERNAME,PORTNUMBER,ORGANISATION,GROUP,DATABASENAME,DBQUERY,METRICQUERY'
+				||',HASPAGING,PAGINGCOLUMN,NOOFRECORDS,VID,DBIDColumn,DBIDColumnDataType,DATA_FETCH_TYPE,CREATEURLTYPE' as "Attribute_list"		
+				FROM   
+				kbentitymst Sources
+				Join kbsourceurlmst urls on Sources.ENTITYDEF_ID=urls.SOURCEID
+				Join KBDataSourceMst DataSources on Urls.DataSourceID=DataSources.DataSourceID
+				Inner join KBDataSourceAttributes dsatt on dsatt.DataSourceID=DataSources.DataSourceID   --newlyadded
+				LEft outer join KBDataSourceAttributeDetails dsdetails on dsatt.DSAttributeID=dsdetails.DSAttributeID 
+						and   dsdetails.DSAttributeDetailID=urls.DATABASETYPE  --newlyadded
+				where  Lower(ObjectType)='entity' and urls.pulltype=0
+				Group BY 	Sources.ENTITY_NAME,DataSourceName,DATA_RETRIEVAL_TIME,DATA_RETRIEVAL_UOM
+				,urls.SOURCEID,urls.ID,URL,USERNAME,urls.PASSWORD,SERVERNAME,DATABASENAME,DBQUERY,TABLEQUERY
+				,HasPaging ,PagingColumn ,NoofRecords , dsdetails.DSADetailName,urls.PortNumber,Sources.CreatedBy
+				,urls.DBIDColumn,DBIDColumnDataType,DBAuthType,Sources.EntityDef_Id,ORGANISATION,"group",urls.attributemapping,DATA_FETCH_TYPE
+				,createurl,createurltype,AttributeMapping,cast(screenjson as text),Entitydef_id,sources.createdby,urls.objectname
+				--FOR XML RAW('URL')
+				)ur
+			)outs	
+				
+			);  
+
+end;
+
+end if;
+
+End
+
+$function$;
+
+ALTER FUNCTION public.usp_dbservgetentityurl(json)
+    OWNER TO postgres;
+
+
+

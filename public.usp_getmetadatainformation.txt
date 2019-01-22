@@ -1,0 +1,130 @@
+-- FUNCTION: public.usp_getmetadatainformationjson
+
+-- DROP FUNCTION public.usp_getmetadatainformationjson;
+
+CREATE OR REPLACE FUNCTION public.usp_getmetadatainformation(
+	input json DEFAULT NULL::json)
+RETURNS json
+    LANGUAGE 'plpgsql'
+    COST 100.0
+    VOLATILE 
+AS $function$
+
+Declare 
+
+	VResult json;
+	VSOURCEKPIMAPPING Json;
+	Voutput Json;
+	VSOURCEIDNAMEMAPPING Json;
+	VTEMPLATESOURCEIDMAPPING Json;
+	
+begin
+
+	VResult:= (
+
+			Select Row_to_json(output)
+			from
+			(
+			Select Array_to_json(Array_agg(row_to_json(geo))) as "SERVER"
+			from
+			(
+			SELECT ID "ID",SERVERTYPE "SERVERTYPE",DATABASENAME "DATABASENAME", SERVERNAME "SERVERNAME",Coalesce(SCALETYPE,'') "SCALETYPE",SPOKENAME "SPOKENAME"
+			,TIME_START_ID "TIME_START_ID", TIME_END_ID "TIME_END_ID",CUSTOMER_START_ID "CUSTOMER_START_ID",CUSTOMER_END_ID "CUSTOMER_END_ID",LOCATION_ID "LOCATION_ID"
+			,AUTHENTICATIONTYPE "AUTHENTICATIONTYPE",USERNAME "USERNAME",PASSWORD "PASSWORD",CREATEDBY "CREATEDBY",CREATEDDATE "CREATEDDATE"
+			,MODIFIEDBY "MODIFIEDBY",MODIFIEDDATE "MODIFIEDDATE",BCOLUMN "BCOLUMN", TIME_START "TIME_START",TIME_END "TIME_END",SPOKEID "SPOKEID"
+			,ConnectionType "CONNECTIONTYPE",CollectionName "COLLECTIONNAME",Coalesce(SpokeID,0) "VID"
+			FROM NMSMetadata 
+			where isactive='1' --and IsDefault=1
+			--FOR XML PATH('SERVER'), root('SERVERS')
+			) geo
+			) output
+		);
+
+	VSOURCEKPIMAPPING:= (
+
+				Select Row_to_json(output)
+				from
+				(
+				select Array_to_json(Array_agg(row_to_json(geo)))  as "SOURCEKPIMAPPING"
+				from
+				(
+				select KPI_ID AS "KPIID", 
+				KPI_NAME as "KPINAME", 
+				k.SOURCE_ID as "SOURCEID", 
+				s.SOURCETYPE_NAME AS "SOURCENAME" 
+				from KBSourceTypeMst s 
+				Left outer  join  KBKpiMst k  on k.SOURCE_ID = s.SOURCETYPE_ID
+				where s.isactive='1'
+				--for XML path('SOURCEKPIMAPPING'), root('SOURCEKPIMAPPINGS')
+				) geo
+				)output
+			);
+
+	VSOURCEIDNAMEMAPPING:= (
+				Select Row_to_json(output)
+				from
+				(
+				select Array_to_json(Array_agg(row_to_json(geo)))  as "SOURCEIDNAMEMAPPING"
+				from
+				(
+				select SOURCETYPE_ID as "SOURCEID", SOURCETYPE_NAME as "SOURCENAME" 
+				from KBSourceTypeMst where isactive='1'
+				--for XML path('SOURCEIDNAMEMAPPING'), root('SOURCEIDNAMEMAPPINGS')
+				) geo
+				) output
+				); 
+
+	VTEMPLATESOURCEIDMAPPING:= (
+
+				Select Row_to_json(output)
+				from
+				(
+					select Array_to_json(Array_agg(row_to_json(geo)))  as "TEMPLATESOURCEIDMAPPING"
+					from
+					(
+					Select TEMPLATE_ID "TEMPLATEID",SPOKEID "SOURCEID" 
+					from 
+					KBTEMPLATESPOKES  
+					where SPOKESELECTED=1
+					) geo
+				)output	
+					--for XML path('TEMPLATESOURCEIDMAPPING'), root('TEMPLATESOURCEIDMAPPINGS')
+				); 
+
+	-- DECLARE @SERVICEBROKERDETAILS VARCHAR(MAX)
+-- 
+--  	SET @SERVICEBROKERDETAILS =	(SELECT DISTINCT ServerName AS SERVERNAME, 
+-- 				DatabaseName AS DATABASENAME, 
+-- 				IsServiceBrokerEnabled AS ISSERVICEBROKERENABLED  
+-- 				FROM NMSMetadata (nolock) where isactive=1 and IsDefault=1 FOR XML PATH('SERVERBROKERDETAIL'), ROOT('SERVERBROKERDETAILS'))
+
+	--DECLARE @SBPREFIXES VARCHAR(MAX)
+	
+	-- SET @SBPREFIXES= (SELECT DatabaseName as DATABASENAME, SBPrefix as PREFIX FROM NMSMetadata (nolock)
+-- 						FOR XML PATH('SBPREFIX'), ROOT('SBPREFIXS'))
+
+	Return(
+		Select Row_to_json(output)
+		from
+		(
+		Select Row_to_json(dets) "Details"
+		from
+		(
+			SELECT VResult as "SERVERS",
+			vSOURCEKPIMAPPING "SOURCEKPIMAPPINGS", 
+			vSOURCEIDNAMEMAPPING "SOURCEKPIMAPPINGS", 
+			vTEMPLATESOURCEIDMAPPING "TEMPLATESOURCEIDMAPPINGS"
+			--for xml path('Details')
+		) dets	
+		) output
+		);
+
+End
+
+$function$;
+
+ALTER FUNCTION public.usp_getmetadatainformation(json)
+    OWNER TO postgres;
+
+
+

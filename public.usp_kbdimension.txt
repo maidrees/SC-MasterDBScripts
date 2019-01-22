@@ -1,0 +1,1092 @@
+-- FUNCTION: public.usp_kbdimensionjson
+
+-- DROP FUNCTION public.usp_kbdimensionjson;
+
+CREATE OR REPLACE FUNCTION public.usp_kbdimension(
+	input json)
+RETURNS json
+    LANGUAGE 'plpgsql'
+    COST 100.0
+    VOLATILE 
+AS $function$
+
+declare 
+	vtran		varchar(30);
+	vcreated_by	int;
+	vsourceid	int;
+	vdimensionid	int;
+	vid int;
+	vresult		json;
+	VFirstRec	int;
+	VLastRec	int;
+	VPage		smallint;
+	VRecsPerPage	smallint;
+	VDIMENSION	json;
+	VDatatypes	json;
+	VCustomername	varchar(255);
+	VDimensionName varchar(255);
+	VSql		text;
+	VColsql		text;
+	VDESCRIPTION	varchar(255);
+	VServiceTime	int;
+	VServiceTimeUOM	varchar(50);
+	VRes		json;
+	vactiondate	timestamp default(current_timestamp at time zone 'utc')	;
+
+begin
+
+drop table if exists temps;
+drop table if exists users;
+drop table if exists Metrics;
+drop table if exists DimAttributes;
+drop table if exists FuzzyLogic;
+drop table if exists Structuralupdate;
+drop table if exists TempStructuralupdate;
+
+create temp table temps(id serial,ivalue json);
+create temp table users(recordid serial,createdby int);
+
+create temp table Metrics(ID serial,SourceID int ,MetricId Bigint,srcmetricname  varchar(100), MetricName varchar(100),MetricDataType Varchar(255), MatchType varchar(100),Value varchar(1000),RuleId int
+,NewlyAdded INT,Attributecolumntype int,Attributechangetype int,isprimary int);
+
+create temp table DimAttributes(ID serial,AttributeName varchar(100),AttributeDataType Varchar(255),IsPrimary varchar(10),RuleId int,AttributeColumnType int ,AttributeChangeType int);
+
+create temp table FuzzyLogic (ID serial,RULEID INT,FIELDID INT,ROWINDEX INT,PRIORITY INT,INPUTVALUE varchar(1000));
+
+create temp table Structuralupdate(Id serial,targetcolumn varchar(500),targetdatatype varchar(255),targetidcolumn varchar(255),"type" varchar(255),
+sourcetable varchar(500),sourcecolumn varchar(500),sourceidcolumn varchar(500),"rule" varchar(500),isprimary varchar(10),selectedMetric bigint,SourceID bigint
+,ServiceTime bigint,ServiceTimeUOM varchar(50));
+	
+create temp table TempStructuralupdate(Id serial,targetcolumn varchar(500),targetdatatype varchar(255),targetidcolumn varchar(255),"type" varchar(255),
+sourcetable varchar(500),sourcecolumn varchar(500),sourceidcolumn varchar(500),"rule" varchar(500),isprimary varchar(10),selectedMetric bigint,SourceID bigint
+,ServiceTime bigint,ServiceTimeUOM varchar(50));
+	
+
+insert into temps(ivalue)
+select input;
+
+select ivalue->'DIMENSIONDETAILS'->> 'TRANSTYPE' 
+,ivalue->'DIMENSIONDETAILS'->> 'LoginId'
+,ivalue->'DIMENSIONDETAILS'->> 'VID'
+,ivalue->'DIMENSIONDETAILS'->> 'DIMENSIONNAME'
+,ivalue->'DIMENSIONDETAILS'->> 'DESCRIPTION'
+,cast(ivalue->'DIMENSIONDETAILS'->> 'ServiceTime' as int) servicetime
+,ivalue->'DIMENSIONDETAILS'->> 'ServiceTimeUOM'
+into vtran,vcreated_by,vid,VDimensionName,VDESCRIPTION,VServiceTime,VServiceTimeUOM	
+from temps 
+limit 1;
+
+insert into users(createdby)
+select userid
+From
+KBUserCustomerMapping A
+Inner join
+(
+	Select customerid 
+	from KBUserCustomerMapping
+	where userid=VCreated_by
+) B  on A.customerid=B.customerid
+;
+  
+If lower(VTran)='create' or lower(VTran)='update' then
+
+	
+VCustomername :=(Select Customername from KBCustomersMst where Customerid= (Select Distinct customerid from KBUserCustomerMapping where userid= vcreated_by));
+end if;
+	
+
+if lower(vtran) = 'getsource' then
+begin
+
+	vresult :=(
+			select array_to_json(array_agg(row_to_json(spks)))  as "SPOKES"
+			from
+			(
+				select array_to_json(array_agg(row_to_json(spk)))  as "SPOKE"
+				from
+				(
+					select  kstm.sourcetype_id "SPOKEID"
+					,coalesce(kstm.sourcetype_name,'') as  "SPOKENAME"
+					,coalesce(kstm.alias,kstm.sourcetype_name) as "SPOKEALIAS" 
+					,
+					(
+						select array_to_json(array_agg(row_to_json(mets))) as "METRICS"
+						from
+						(
+							select array_to_json(array_agg(row_to_json(met))) as "METRIC"
+							from
+							(	
+								select distinct metric_id "METRICID" 
+								,coalesce(metricname,'') as "METRICTITLE"
+								,case when metricalias='' or metricalias is null then metricname else metricalias end as "METRICNAME"
+								,coalesce(metricdatatype,'') as "DATATYPE"
+								from kbmetricmst metrics 
+								where template_id=1 and kstm.sourcetype_id=metrics.source_id
+								order by coalesce(metricname,'') 
+								--for xml raw ('metric'), root ('metrics')
+							) as met
+						) mets
+					)	
+					from 
+					kbsourcetypemst kstm 
+					where   kstm.sourcetype_name is not null  and isactive='1'
+					and exists (select 1 from users b where kstm.createdby=b.createdby)
+					--for xml raw('spoke'),root('spokes')
+				)spk
+			)spks	
+				--for xml path(''),root('dimensiondetails')
+		); 
+					 
+	return(select row_to_json(outs) from( select vresult as "DIMENSIONDETAILS") outs);
+	
+				 
+end;
+elseIF lower(VTRAN) = 'gettooltip'	then
+Begin
+ 
+			  
+	VFirstRec := ((VPage - 1) * VRecsPerPage)+1;
+	VLastRec := (VPage * VRecsPerPage );
+	
+	if VFirstRec =0 or VFirstRec is null then
+	VFirstRec:=NULL;
+	end if;
+	
+	if VLastRec =0 or VLastRec is null then
+	VLastRec:=NULL;
+	end if;
+
+			 
+			VDIMENSION:=
+					
+					(
+					
+						select array_to_json(array_agg(row_to_json(dim))) as "DIMENSION"
+						from
+						(
+							SELECT 	ROWNUMBER "ROWNUMBER", DIMENSIONNAME "DIMENSIONNAME",CREATEDDATE "CREATEDDATE",(RowNumber+RevRowNumber )-1 as "TotalRows"
+							,CreatedBy	"CreatedBy"
+							FROM
+							(
+								select row_number() over(Order by a.id desc) as RowNumber
+								,ROW_NUMBER() OVER(ORDER BY a.id ) RevRowNumber, A.DIMENSIONNAME,A. CREATEDDATE ,A.CreatedBy
+								from
+										(
+
+											select  distinct Mst.ID as ID, DIMENSIONNAME /*DIMCOL*/ DIMENSIONNAME 
+											,Mst.CREATEDDATE ,users.USER_NAME CreatedBy
+											from Kb_DIM_Dimensionmst  Mst 
+											Join KBUserMst users on mst.CREATEDBY=users.USER_ID
+											LEFT JOIN KB_DIM_SOURCELINK Links On Mst.ID=Links.ID
+											where Mst.ID NOT IN(1,2)
+											and Mst.isactive=1 and exists (Select 1 from users B where mst.createdby=B.createdby)
+											 --where  coalesce(Mst.IsActive,1)=1 
+											group by   Mst.id,DIMENSIONNAME,Mst.CREATEDDATE,users.USER_NAME
+										)A
+							)b
+							where RowNumber BETWEEN coalesce(VFirstRec,1) AND coalesce(VLastRec,20)
+							order by DIMENSIONNAME
+							--For  XML RAW('DIMENSION'),ROOT('DIMENSIONS')
+						) dim
+					);
+							
+			VDatatypes:=
+				(
+					select array_to_json(array_agg(row_to_json(dat))) as "DATATYPE"
+					from
+					(
+						select Distinct  
+						case 
+						when lower(DataTypeAlias) /*DataTypeName*/ like '%string%' then 'String' 
+						when Lower(DataTypeAlias) /*DataTypeName*/ like '%decimal%' then 'Decimal(13,5)' 	
+						else Lower(DataTypeAlias) /*DataTypeName*/ END as "NAME"
+						from Kbmasterdatatypes 
+						where IsActive='1' 
+						--for xml raw('DATATYPE'),ROOT('DATATYPES')
+					)dat
+				);
+											
+											
+			Return(
+					select row_to_json(outs)
+					from
+					(
+						select row_to_json(datas) "DIMENSIONDETAILS"
+						from
+						(
+						select VDIMENSION "DIMENSIONS", VDatatypes  "DATATYPES"
+						--for xml path(''),root('DIMENSIONDETAILS')
+						)datas
+					) outs	
+			);
+							 
+
+End;
+ElseIF Lower(VTRAN) = 'create' then
+BEGIN 
+		
+ 	
+		
+--ColumnType--->0  History
+--ColumnType--->1  Change
+--ColumnType--->0  Fixed 		
+
+--ChangeType--->0  Column
+--ChangeType--->1  All Column
+
+/*for secondary attributes consider changetype when columntype =1 (change)*/
+	
+		
+		Insert into Metrics(SourceID,MetricId,srcmetricname,METRICNAME,MatchType,Value,RuleId)
+		Select cast(inpdata->>'SourceID' as int) SourceID
+		,cast(inpdata->>'SelectedMetric' as int) MetricId
+		, inpdata->>'MetricName' srcMETRICNAME
+		, inpdata->>'AttributeName' METRICNAME
+		, inpdata->>'MatchType'  MatchType
+		,inpdata->>'Value' "Value"
+		,cast(inpdata->>'RowIndex' as int) RuleID
+		From
+		(
+
+			Select json_array_elements(srcdata) inpdata
+			from
+			(
+				select ivalue->'DIMENSIONDETAILS'-> 'MappingData'-> 'Source' srcdata
+				from temps 
+				limit 1
+			) inp	
+		)A	;
+
+		
+		Insert into DimAttributes(AttributeName,AttributeDataType,IsPrimary,RuleId,AttributeColumnType,AttributeChangeType)
+		Select inpdata->>'Name' AttributeName
+		,inpdata->>'DataType' AttributeDataType
+		, inpdata->>'IsPrimary' IsPrimary
+		, cast(inpdata->>'RowIndex' as int)   RowIndex
+		,cast(inpdata->>'ColumnType' as int)  AttributeColumnType
+		,case when  inpdata->>'IsPrimary'='0'
+				and cast(inpdata->>'ColumnType' as int) =1 then cast(inpdata->>'ChangeType' as int) 
+				else -1 end  AttributeChangeType
+		From
+		(
+
+			Select json_array_elements(srcdata) inpdata
+			from
+			(
+				select ivalue->'DIMENSIONDETAILS'-> 'AttributeDetails'-> 'Attribute' srcdata
+				from temps 
+				limit 1
+			) inp	
+		)A	;
+
+		 
+		 
+	 
+			Insert into KBSPOKETABLEDETAILS(TABLE_ID,TABLE_COLUMNS,ATTRIBUTES,DATATYPE,XPATH) 
+			select distinct
+				A.Recordid
+				,Src.SOURCETYPE_NAME||'_'||VDimensionName||'_'||'ID'
+				
+				--Src.SOURCETYPE_NAME||'_'||VDimensionName||'_'||Mets.MetricName
+				
+				,replace(VDimensionName,' ','')||'ID',Mets.Datatype,'ROWS/ROW'
+				
+				from
+				(
+					select 
+					distinct 
+					 srcmetricname
+					,'BIGINT' Datatype
+					 
+					,SourceID
+					, metricname AttributeName
+					from Metrics
+				)Mets
+				JOIN Kbspoketable A on A.SPOKE_ID=Mets.SourceID  
+				JOin kbsourcetypeMst Src on Src.SOURCETYPE_ID=mets.SourceID
+				JOIN DimAttributes ATT on ATT.AttributeName=Mets.AttributeName
+				where upper(A.SPOKE_TYPE)='NORMAL' and upper(A.TABLE_TYPE)='METRICS' and A.Table_Name='Fact_'||Src.Alias||'MetricDetails'
+				and A.type=1;
+				
+			
+ -- Insert into FuzzyLogic(RuleID,FIELDID,INPUTVALUE,PRIORITY,ROWINDEX )
+--    SELECT 
+--     	Filter.value('@RuleID','int') AS RuleID  
+--           ,Filter.value('@FieldID','int') AS FieldID  
+--           ,Opt2.value('@Value','nvarchar(1000)') AS INPUTVALUE
+--           ,Filter.value('@Priority','int') AS Priority  
+--            ,Filter.value('@RowIndex','int') AS RowIndex  
+--      FROM @Trans_xml.nodes('DIMENSIONDETAILS/MappingData/Source/FuzzyLogic/Rule') AS Rep(Filter)
+-- 		OUTER APPLY 
+-- 		Filter.nodes('Values/Input') AS Rep2(Opt2)
+		
+		 
+		
+		
+
+	UPdate Metrics set MetricDataType=MST.MetricDataType
+	FROM KBMETRICMST MST
+	where Metrics.MetricId=MST.METRIC_ID;
+
+	 
+	Update DimAttributes Set AttributeDataType=Case when lower(AttributeDataType)='string' Then 'Varchar(200)' 
+							when lower(AttributeDataType)='unixdatetime' then 'BIGINT' 
+							when lower(AttributeDataType)='date time' then 'timestamp'
+							Else AttributeDataType End;
+	
+	VColsql:= 
+
+		(
+			Select string_agg(Ecolumns,',') as cols
+			From
+			(
+				select '"'||AttributeName||'"'||' '||AttributeDataType as Ecolumns
+				from DimAttributes
+				Order by id
+			)cols	
+		);
+
+	VColsql := VColsql||'%' ;
+
+	
+	VColsql :=Replace(VColsql,'%','');
+
+	
+	VSql :=' Create Table "KB_DIM_'||VCustomername||'_'||VDimensionName || '"('|| 'ID bigint  ,"'|| VDimensionName ||'" Varchar(200),'||VColsql ||')' ;
+	  
+	Execute(VSql);
+		  
+	/* Creating the Mapping Table */
+		
+		If Not Exists ( Select 1 from INFORMATION_SCHEMA.TABLES where upper(TABLE_NAME)='KB_DIM_DIMENSIONMST') then
+		Begin
+		
+			VSql :=' Create Table KB_DIM_DIMENSIONMST (ID serial,DIMENSIONNAME varchar(100),CREATEDBY INT,CREATEDDATE timestamp DEFAULT timezone(''utc''::text, now()),MODIFIEDBY INT,MODIFIEDDATE timestamp DEFAULT timezone(''utc''::text, now()))' ;
+		
+			Execute(VSql);
+		
+		END;
+		end if;
+		
+ 		if not exists(select 1 from KB_DIM_DIMENSIONMST A where DIMENSIONNAME=RTRIM(LTRIM(VDimensionName)) and isactive=1 
+		and Exists(Select 1 from users B where A.CREATEDBY=B.createdby)) then
+		BEGIN
+				
+				
+			INSERT INTO KB_DIM_DIMENSIONMST(DIMENSIONNAME,DimDescription,DIMALIAS,IsActive,ServiceTime,ServiceTimeUOM,createdby)
+			SELECT replace(VDimensionName,' ',''),VDESCRIPTION,VDimensionName,1,VServiceTime,VServiceTimeUOM,vcreated_by;
+			
+		 
+				VDimensionID :=(SELECT ID FROM KB_DIM_DIMENSIONMST A WHERE DIMENSIONNAME=replace(VDimensionName,' ','') and Isactive=1 
+				and Exists(Select 1 from users B where A.CREATEDBY=B.createdby)
+				);
+		 
+				
+		 		Insert into KB_DIM_SOURCELINK(ID,SOURCEID,MetricId,METRICNAME,DIM_tbl, DIMCol, SurrogateCol,MetricDataType,AttributeName,MatchType,Value,RuleID,CreatedBy
+				,ModifiedBy, ModifiedDate
+				)
+				Select VDimensionID,SOURCE_ID, MetricId,Metrics.METRICNAME ,'KB_DIM_'||VCustomername||'_'||VDimensionName,VDimensionName,'ID', A.MetricDataType
+				,Dima.AttributeName,MatchType,Value,A.RuleId,VCreated_By , VCreated_By ModifiedBy,VActiondate ModifiedDate
+				From Metrics A
+				Join DimAttributes DimA on A.MetricName=DimA.AttributeName
+				Join KBMetricMst Metrics on A.MetricId=Metrics.METRIC_ID;
+						
+		End ;
+		end if;
+		
+		Insert into DIM_DIMENSIONATTRIBUTES(DimensionID,AttributeName,DataType,IsPrimary,createdby,AttributeColumnType,AttributeChangeType,Modifiedby,ModifiedDate)
+		Select VDimensionID,Attrib.AttributeName,case when lower(attrib.AttributeDataType) = 'timestamp' then 'Datetime' else attrib.AttributeDataType end AttributeDataType
+		,cast(IsPrimary as smallint) IsPrimary,vcreated_by,AttributeColumnType,AttributeChangeType,vcreated_by, VActiondate
+		From
+		DimAttributes Attrib;
+		
+		Insert into KB_DIMENSIONATTRIBUTEDETAILS(DIMENSIONID,RULEID,FIELDID,ROWINDEX,PRIORITY,INPUTVALUE,CreatedBy, ModifiedBy)
+		Select VDimensionID , RULEID,FIELDID,ROWINDEX,PRIORITY,INPUTVALUE,vcreated_by CreatedBy, vcreated_by ModifiedBy
+		From
+		FuzzyLogic  ;
+
+		Update Metrics set Value=B.recordId
+		 from DIM_DIMENSIONATTRIBUTES B
+		where Metrics.METRICNAME=B.AttributeName
+		 and   B.DimensionID=VDimensionID;
+
+		UPDATE KB_DIMENSIONATTRIBUTEDETAILS SET MAPPINGID=cast(Met.Value as int),ModifiedBy=vcreated_by
+		FROM   
+		Metrics MET 
+		where KB_DIMENSIONATTRIBUTEDETAILS.FIELDID=Met.MetricId
+		and KB_DIMENSIONATTRIBUTEDETAILS.DimensionID=VDimensionID AND MET.MatchType='Custom Match';
+		
+		 
+		/* custom dimension prefilling in dimension table and updating the factual table*/
+		--"X Mobile_dimension1_ID" dimension column format in Factula table
+
+		Insert into Structuralupdate(targetcolumn,targetdatatype,targetidcolumn,"type",sourcetable,sourcecolumn,sourceidcolumn,"rule",isprimary,selectedMetric,SourceID
+		,ServiceTime,ServiceTimeUOM)
+		select distinct Mst.SOURCETYPE_NAME||'_'||dim.dimensionName||'_ID',MetricMst.METRICDATATYPE,MetricMst.METRICNAME,'Dimension'
+		,'DIM_'||Dim.DimensionName,Mets.METRICNAME,'ID',Mst.Alias||'rule',Att.Isprimary
+		,Mets.MetricId,Mets.SourceID,Dim.ServiceTime,Dim.ServiceTimeUOM
+		from Metrics Mets
+		JOIn DimAttributes Att on Att.AttributeName=Mets.METRICNAME
+		join KbsourcetypeMst Mst on Mets.SourceID=Mst.SOURCETYPE_ID
+		JOin kb_dim_sourcelink link on link.SOURCEID=Mets.SourceID
+		join kb_dim_dimensionMst Dim on dim.ID=Link.ID
+		join kbmetricMst MetricMst on MetricMst.METRIC_ID=Mets.MetricId
+		where Link.ID=VDimensionID and MetricMst.template_ID=1;
+		
+ 
+		
+	  /*GETTING THE TOP 1 PRIMARY COLUMNS FROM EACH GROUPS*/
+
+		 insert into TempStructuralupdate(targetcolumn,targetdatatype,targetidcolumn,"type",sourcetable,sourcecolumn,sourceidcolumn,"rule",isprimary,selectedMetric,SourceID
+		,ServiceTime,ServiceTimeUOM)
+		 select  targetcolumn,targetdatatype,targetidcolumn,"type",sourcetable,sourcecolumn,sourceidcolumn,"rule",isprimary,selectedMetric,SourceID
+		,ServiceTime,ServiceTimeUOM 
+		 from
+		 (
+			 select targetcolumn,targetdatatype,targetidcolumn,"type",sourcetable,sourcecolumn,sourceidcolumn,"rule",isprimary,selectedMetric,SourceID
+			,ServiceTime,ServiceTimeUOM 
+			 from Structuralupdate
+			 where id in (select max(id) from Structuralupdate group by sourceid,isprimary)
+			 and Isprimary='1'
+		 )A;
+		
+
+	return(	
+
+		select row_to_json(outs)	
+		from
+		(
+
+			select array_to_json(array_agg(row_to_json(roo))) "root"
+			from
+			(
+			select ServiceTime "delaytime",ServiceTimeUOM "uom"
+			,
+				(
+					select row_to_json(pro) "customprocesstype"
+					from
+					(
+						select 'customdimensionprefill' "type",VDimensionID "dimensionid" ,1 as "seq"
+						,(
+								select array_to_json(array_agg(row_to_json(que))) "query"
+								from
+								(
+									select 'select' as "type"
+									,
+									(
+										select row_to_json(outs) "outputcolumns"
+										from
+										(
+											select array_to_json(array_agg(row_to_json(col))) as "column"
+											from
+											(
+												select distinct 'factual_xml' as "name"
+												,'Data_Fact_'||SMst.Alias as "tablename"
+												,'varchar(8000)' "datatype"
+												,SMst.Alias as "source"
+												,'fact_'||SMst.Alias||'MetricDetails' as "srctablename"
+												from Structuralupdate Stup 
+												join kbsourcetypeMst SMst on Stup.SourceID=SMst.SOURCETYPE_ID
+												where STup.SourceID=ST.SourceID
+												--for xml raw('column'),root('outputcolumns')
+											)as col
+										) outs	
+									)	
+									,
+									(		
+										Select row_to_json(cond) "conditioncolumns"
+										from
+										(
+											select 'where' as "name"
+											,
+											(
+												Select array_to_json(array_agg(row_to_json(col))) "column"
+												from
+												(
+													select distinct 'recorddate' as "sourcename"
+													,'Data_Fact_'||SMst.Alias as "sourcetablename"
+													,'DateTime' as "sourcedatatype"
+													,'' as "sourcevalue"
+													,'' "targetname"
+													,'' "targettablename"
+													,'' "targetdatatype"
+													,SMst.CreatedDate "targetvalue"
+													,'>=' "operator"
+													from Structuralupdate Stup 
+													join kbsourcetypeMst SMst
+													on Stup.SourceID=SMst.SOURCETYPE_ID
+													where Stup.SourceID=ST.SourceID
+													--for xml raw('column')														
+												)as col
+											)	
+											--for xml raw('conditioncolumns')	
+										) as cond
+										
+									)	
+									from Structuralupdate ST 
+									group by  SourceID
+									--for xml raw('query')
+																		
+								) as que
+							)	
+						--for xml raw('processtype')
+					) as pro
+				)
+		
+			,
+				(
+					select row_to_json(proc) "structuralprocesstype"
+					from
+					(
+						select 'structureupdate' as "type",VDimensionID "dimensionid" ,2 as "seq" 
+						,
+						(
+							select array_to_json(array_agg(row_to_json(tab))) "table"
+							from
+							(
+								select   'Fact_'||ksm.Alias||'MetricDetails' as "name",'factual' as "type"
+								,
+								(
+									select array_to_json(array_agg(row_to_json(cols))) as "column"
+									from
+									(
+										select DISTINCT targetcolumn "name",targetdatatype "datatype",targetidcolumn idcolumn,
+										"type",sourcetable inputtable,sourceidcolumn inputcolumn,sourcecolumn  inputidcolumn
+										,"rule"
+										from TempStructuralupdate UP
+										where UP.SOurceID=SU1.SOurceID
+										and up.selectedMetric=SU1.selectedMetric
+										--and up.Isprimary=1
+										--for xml raw('column')
+									) as cols
+								) 
+								from Structuralupdate SU1 
+								join kbsourcetypeMst ksm on ksm.SOURCETYPE_ID=SU1.SourceID
+								--where SU1.Isprimary=1
+								WHERE su1.ID IN (SELECT ID FROM TempStructuralupdate)
+								--for xml raw('table')
+							)as tab
+						)
+							
+					,
+						(
+							select array_to_json(array_agg(row_to_json(rul))) "rule"
+							from
+							(
+								select   "rule" as name,
+								
+									(
+
+										select Row_to_json(fil) "filter"
+										from
+										(
+											select  array_to_json(array_agg(row_to_json(conds))) "and"
+											from
+											(
+												select "idcolumn" , "inputidcolumn", "operator", "Coalesce" , "datatype"
+												from
+												(
+													select targetidcolumn "idcolumn"
+													, sourcecolumn 	"inputidcolumn"
+													,'=' "operator"
+													,1 as "Coalesce" 
+													,case when lower(targetdatatype) like '%char%' then 'Nvarchar'
+													when lower(targetdatatype) like '%decimal%' then 'decimal'
+													else targetdatatype end as "datatype"
+													from Structuralupdate SU2
+													where SU2.SourceID=SU3.SourceID
+													AND SU2.ID
+													NOT IN (SELECT ID FROM TempStructuralupdate)
+													--and SU2.Isprimary=0
+													
+													UNION 
+													
+													Select 'RECORDDATEUTC' "idcolumn",'ModifiedDate' "inputidcolumn",'<=' "operator"
+													,0 as "Coalesce",'' as "datatype"
+												)A
+												
+												--for xml raw('and'),root('filter')
+											
+											) as conds
+										)fil	
+									)	
+									
+								from TempStructuralupdate SU3	
+								--from @Structuralupdate SU3
+								--where SU3.Isprimary=0
+								group by "rule",SU3.SourceID
+								--for xml raw('rule')
+							
+							) as rul
+							
+						)			
+							
+						--for xml raw('processtype')
+					) as proc
+				)
+			from Structuralupdate
+			group by ServiceTime  ,ServiceTimeUOM  
+			--for xml raw('root')
+			)roo
+		)outs	
+	);
+			
+		
+END;
+ElseIf Lower(VTRAN) = 'getdetails' then
+Begin
+		
+		
+Return(
+		Select Row_to_json(dims)
+		from
+		(
+			Select Row_to_json(dim) "DIMENSIONDETAILS"
+			from
+			(
+				Select DimMst.id "DIMENSIONID", Coalesce(Dimmst.DIMALIAS,Dimmst.DIMENSIONNAME)  "DIMENSIONNAME", DimDescription "DESCRIPTION", servicetime "ServiceTime"
+				,servicetimeuom "ServiceTimeUOM"
+				,
+				(
+					select Row_to_json(atts) "AttributeDetails"
+					from
+					(
+						select array_to_json(array_agg(row_to_json(att))) "Attribute"
+						from
+						(
+							select Coalesce(AttributeName,'') "NAME"
+							,Case when lower(DataType) like '%char%' then 'String' ELSE Coalesce(DataType,'') END as "DataType"
+							,IsPrimary "IsPrimary"
+							,AttributeColumnType "ColumnType"
+							,AttributeChangeType "ChangeType"
+							from 
+							DIM_DIMENSIONATTRIBUTES Links1
+							where DimMst.ID=Links1.DimensionID
+							--FOR XML RAW ('Attribute'),ROOT('AttributeDetails')
+
+						)as att
+					)atts
+				)	
+
+				,
+				(
+					select Row_to_json(maps) "MappingData"
+					from
+					(
+						select array_to_json(array_agg(row_to_json(src))) "Source"
+						from
+						(	
+							select ATT1.SOURCEID "SourceID"
+							, METRICID "SelectedMetric"
+							, Coalesce(AttributeName,'') "NAME"
+							,Coalesce(MatchType,'') "MatchType"
+							,ATT1.Value "Value", ATT1.RuleId  as "RowIndex"
+							
+							,
+							(
+								select Row_to_json(ruls) "FuzzyLogic"
+								from
+								(
+									select array_to_json(array_agg(row_to_json(rul))) "Rule"
+									from
+									(
+										select DimMst.DimensionName as "DimensionName"
+										,RULEID AS "RuleID"
+										,FIELDID as "FieldID"
+										, ROWINDEX  as "RowIndex"
+										,PRIORITY as "Priority"
+										
+										,
+										(
+											select Row_to_json(atts) "Values"
+											from
+											(
+												select array_to_json(array_agg(row_to_json(att))) "Input"
+												from
+												(
+													select distinct INPUTVALUE as Value 
+													from KB_DIMENSIONATTRIBUTEDETAILS A
+													join  DIM_DIMENSIONATTRIBUTES b ON A.DIMENSIONID=B.DIMENSIONID 
+													where
+													A.RULEID=DET.RULEID and A.MAPPINGID=B.RecordID AND B.DIMENSIONID=DimMst.ID   
+													--FOR XML RAW('Input'),root('Values')
+												)as att
+											)atts
+										)
+										FROM KB_DIMENSIONATTRIBUTEDETAILS DET 
+										WHERE DET.DIMENSIONID=DimMst.ID
+										AND DET.FIELDID=cast(ATT1.METRICID as int)
+										GROUP BY RULEID  ,FIELDID  ,ROWINDEX  ,PRIORITY
+										--FOR XML RAW('Rule'),root('FuzzyLogic')
+
+									)as rul
+								)ruls
+							) 
+
+							FROM KB_DIM_SOURCELINK ATT1 
+							WHERE ATT1.id=DimMst.ID 
+							--FOR XML RAW('Source'),ROOT('MappingData')
+						)as src
+					)maps
+				)
+						
+				From
+				KB_DIM_DIMENSIONMST DimMst
+				where DIMENSIONNAME=replace(VDimensionName,' ','')
+				and isactive=1
+				--For XML PATH(''),ROOT('DIMENSIONDETAILS')
+			) dim
+		) dims		
+				
+	);
+
+			 
+End;
+ElseIF Lower(vTRAN) = 'update' then
+	BEGIN 
+
+		Insert into Metrics(SourceID,MetricId,srcmetricname,METRICNAME,MatchType,Value,RuleId,newlyadded)
+		Select cast(inpdata->>'SourceID' as int) SourceID
+		,cast(inpdata->>'SelectedMetric' as int) MetricId
+		, inpdata->>'MetricName' srcMETRICNAME
+		, inpdata->>'AttributeName' METRICNAME
+		, inpdata->>'MatchType'  MatchType
+		,inpdata->>'Value' "Value"
+		,cast(inpdata->>'RowIndex' as int) RuleID
+		,cast(inpdata->>'NewlyAdded' as int)  NewlyAdded
+		From
+		(
+
+			Select json_array_elements(srcdata) inpdata
+			from
+			(
+				select ivalue->'DIMENSIONDETAILS'-> 'MappingData'-> 'Source' srcdata
+				from temps 
+				limit 1
+			) inp	
+		)A	;
+
+		
+		Insert into DimAttributes(AttributeName,AttributeDataType,IsPrimary,RuleId,AttributeColumnType,AttributeChangeType)
+		Select inpdata->>'Name' AttributeName
+		,inpdata->>'DataType' AttributeDataType
+		, inpdata->>'IsPrimary' IsPrimary
+		, cast(inpdata->>'RowIndex' as int)   RowIndex
+		,cast(inpdata->>'ColumnType' as int)  AttributeColumnType
+		,case when  inpdata->>'IsPrimary'='0'
+				and cast(inpdata->>'ColumnType' as int) =1 then cast(inpdata->>'ChangeType' as int) 
+				else -1 end  AttributeChangeType
+		From
+		(
+
+			Select json_array_elements(srcdata) inpdata
+			from
+			(
+				select ivalue->'DIMENSIONDETAILS'-> 'AttributeDetails'-> 'Attribute' srcdata
+				from temps 
+				limit 1
+			) inp	
+		)A	;
+
+		Insert into KBSPOKETABLEDETAILS(TABLE_ID,TABLE_COLUMNS,ATTRIBUTES,DATATYPE,XPATH) 
+		select distinct
+		A.Recordid
+		,cast(Src.SOURCETYPE_NAME||'_'||VDimensionName||'_ID' as varchar(1000))
+		,cast(replace(VDimensionName,' ','')||'ID' as varchar(1000))
+		,Mets.Datatype
+		,'ROWS/ROW'
+		from
+		(
+
+			Select cast(inpdata->>'SourceID' as int) SourceID
+			,cast('BIGINT' as varchar(20)) Datatype
+			, inpdata->>'MetricName' METRICNAME
+			, inpdata->>'AttributeName' AttributeName
+			,cast( inpdata->>'SourceNewlyAdded'  as int) SourceNewlyAdded
+			,cast(inpdata->>'NewlyAdded' as int)  NewlyAdded
+			From
+			(
+
+				Select json_array_elements(srcdata) inpdata
+				from
+				(
+					select ivalue->'DIMENSIONDETAILS'-> 'MappingData'-> 'Source' srcdata
+					from temps 
+					limit 1
+				) inp	
+			)A
+		)Mets
+		JOIN Kbspoketable A on A.SPOKE_ID=Mets.SourceID  
+		JOin kbsourcetypeMst Src on Src.SOURCETYPE_ID=mets.SourceID
+		JOIN DimAttributes ATT on ATT.AttributeName=Mets.AttributeName
+		where  Mets.NewlyAdded=1
+		and A.SPOKE_TYPE='NORMAL' and A.TABLE_TYPE='Metrics' and lower(A.Table_Name)='fact_'||lower(Src.Alias)||'metricdetails'
+		and A.type=1 and Mets.SourceNewlyAdded=1 --and   ATT.ISPRIMARY=1
+		 ;
+		
+		
+		-- Insert into @FuzzyLogic(RuleID,FIELDID,INPUTVALUE,[PRIORITY],ROWINDEX )
+--  		SELECT 
+-- 		Filter.value('@RuleID','int') AS RuleID  
+-- 		,Filter.value('@FieldID','int') AS FieldID  
+-- 		,Opt2.value('@Value','nvarchar(1000)') AS INPUTVALUE
+-- 		,Filter.value('@Priority','int') AS Priority  
+-- 		,Filter.value('@RowIndex','int') AS RowIndex  
+-- 		FROM @Trans_xml.nodes('DIMENSIONDETAILS/MappingData/Source/FuzzyLogic/Rule') AS Rep(Filter)
+-- 		OUTER APPLY 
+-- 		Filter.nodes('Values/Input') AS Rep2(Opt2)
+		
+		
+	 
+
+	UPdate Metrics set MetricDataType=MST.MetricDataType
+	FROM KBMETRICMST MST
+	where Metrics.MetricId=MST.METRIC_ID;
+
+	 
+	Update DimAttributes Set AttributeDataType=Case when lower(AttributeDataType)='string' Then 'Varchar(200)' 
+							when lower(AttributeDataType)='unixdatetime' then 'BIGINT' 
+							when lower(AttributeDataType)='date time' then 'timestamp'
+							Else AttributeDataType End;
+		Begin
+		
+			 
+			VDimensionID:=(SELECT ID FROM KB_DIM_DIMENSIONMST WHERE DIMENSIONNAME=replace(VDimensionName,' ','') and isactive=1);
+
+			If (Select Count(*) from Metrics)>0 then
+
+				Update KB_DIM_DIMENSIONMST set dimdescription=VDESCRIPTION,MODIFIEDBY= VCreated_By where ID=VDimensionID;
+			 
+			 end if;
+			
+  
+			/*Updating the existing match type*/
+
+			update KB_DIM_SOURCELINK  set MatchType=Mets.MatchType,Value=Mets.Value,ModifiedBy=VCreated_By, ModifiedDate=VActiondate
+			from  
+			Metrics Mets 
+			where cast(KB_DIM_SOURCELINK.MetricId as int)= Mets.MetricId
+			and KB_DIM_SOURCELINK.SourceID=Mets.sourceid and KB_DIM_SOURCELINK.AttributeName=Mets.METRICNAME
+			and KB_DIM_SOURCELINK.ID=VDimensionID;
+		 
+ 
+			
+			Insert into KB_DIM_SOURCELINK(ID,SOURCEID,MetricId,METRICNAME,DIM_tbl, DIMCol, SurrogateCol,MetricDataType,AttributeName,MatchType,Value,CreatedBy,ModifiedBy, ModifiedDate)
+			Select VDimensionID,SOURCE_ID, MetricId,Metrics.METRICNAME ,'KB_DIM_'||VCustomername||'_'||VDimensionName,VDimensionName,'ID', A.MetricDataType
+			,Dima.AttributeName,MatchType,Value,1, VCreated_By ModifiedBy,VActiondate ModifiedDate
+			From Metrics A
+			Join DimAttributes DimA on A.MetricName=DimA.AttributeName
+			Join KBMetricMst Metrics on A.MetricId=Metrics.METRIC_ID
+			where A.NewlyAdded=1;
+			
+			
+			-- Insert into KB_DIMENSIONATTRIBUTEDETAILS(DIMENSIONID,RULEID,FIELDID,ROWINDEX,[PRIORITY],INPUTVALUE,CreatedBy, ModifiedBy)
+-- 			Select VDimensionID , RULEID,FIELDID,ROWINDEX,[PRIORITY],INPUTVALUE,@CreatedBy CreatedBy, @CreatedBy ModifiedBy
+-- 			From
+-- 			@FuzzyLogic  Fuzzy
+-- 			where not exists
+-- 			(select 1 from KB_DIMENSIONATTRIBUTEDETAILS details where Fuzzy.RULEID=details.RULEID and Fuzzy.FIELDID=Details.FIELDID and Fuzzy.ROWINDEX=Details.ROWINDEX
+-- 			and Fuzzy.[PRIORITY]=Details.[PRIORITY] and Fuzzy.INPUTVALUE=Details.INPUTVALUE and details.dimensionId=@DimensionID)
+			
+			UPDATE KB_DIMENSIONATTRIBUTEDETAILS SET MAPPINGID=B.RECORDID
+			FROM  
+			DIM_DIMENSIONATTRIBUTES B
+			JOIN Metrics MET ON MET.METRICNAME=B.AttributeName
+			where KB_DIMENSIONATTRIBUTEDETAILS.DIMENSIONID=B.DimensionID and B.DimensionID=VDimensionID AND MET.MatchType='Custom Match';
+			
+		End;
+	 		 
+		update kb_dim_dimensionMst set servicetime=VServiceTime, servicetimeuom=VServiceTimeuom, modifieddate=Vactiondate, modifiedby=Vcreated_by
+		where id=VDimensionID;
+	
+		Insert into Structuralupdate(targetcolumn,targetdatatype,targetidcolumn,"type",sourcetable,sourcecolumn,sourceidcolumn,"rule",isprimary,selectedMetric,SourceID
+		,ServiceTime,ServiceTimeUOM)
+		select distinct Mst.SOURCETYPE_NAME||'_'||dim.dimensionName||'_ID','bigint',MetricMst.METRICNAME,'Dimension','DIM_'||Dim.DimensionName,Mets.METRICNAME,'ID'
+		,Mst.Alias||'rule',Att.Isprimary
+		,Mets.MetricId,Mets.SourceID,Dim.ServiceTime,Dim.ServiceTimeUOM
+		from Metrics Mets
+		JOIn DimAttributes Att on Att.AttributeName=Mets.METRICNAME
+		join KbsourcetypeMst Mst on Mets.SourceID=Mst.SOURCETYPE_ID
+		JOin kb_dim_sourcelink link on link.SOURCEID=Mets.SourceID
+		join kb_dim_dimensionMst Dim on dim.ID=Link.ID
+		join kbmetricMst MetricMst on MetricMst.METRIC_ID=Mets.MetricId
+		where Link.ID=VDimensionID and MetricMst.template_ID=1 and Mets.NewlyAdded=1
+		and Dim.isactive=1;
+		
+	 
+	Return
+	(
+		select Row_To_json(outs)
+		from
+		(
+			select array_to_json(array_agg(row_to_json(roo)))  "root"
+			from	
+			(	
+				select ServiceTime delaytime,ServiceTimeUOM uom
+				,
+				(
+					select Row_to_json(proc) "customprocesstype"
+					from
+					(
+						select 'customdimensionprefill' "type",VDimensionID dimensionid ,1 as seq
+						,
+						(
+							select Row_to_json(que) "query"
+							from
+							(
+								select 'select' as "type"
+								,
+								(
+									select Row_to_json(cols) "outputcolumns"
+									from
+									(
+										select array_to_json(array_agg(row_to_json(col))) "column"
+										from
+										(
+											select distinct 'factual_xml' as "name",'Data_Fact_'||SMst.Alias as tablename,'varchar(6000)' datatype
+											,SMst.Alias as source,'fact_'||SMst.Alias||'MetricDetails' as srctablename
+											from Structuralupdate Stup 
+											join kbsourcetypeMst SMst
+												on Stup.SourceID=SMst.SOURCETYPE_ID
+											where STup.SourceID=ST.SourceID
+											--for xml raw('column'),root('outputcolumns')
+										)as col
+									)cols
+									
+								)	
+								,
+								(
+									select Row_to_json(wh) "conditioncolumns"
+									from
+									(
+										select 'where' as "name"
+										,
+										(
+
+											select array_to_json(array_agg(row_to_json(col))) "column"
+											from
+											(
+												select distinct 'recorddate' as sourcename,'Data_Fact_'||SMst.Alias as sourcetablename
+												,'DateTime' as sourcedatatype
+												,'' as sourcevalue,'' targetname,'' targettablename,'' targetdatatype
+												,SMst.CreatedDate targetvalue,'>=' "operator"
+												from Structuralupdate Stup 
+												join kbsourcetypeMst SMst
+													on Stup.SourceID=SMst.SOURCETYPE_ID
+												where Stup.SourceID=ST.SourceID
+												--for xml raw('column')														
+											)as col
+										)	
+											
+										--for xml raw('conditioncolumns')	
+									) as wh
+									
+								)	
+								from Structuralupdate ST 
+								group by  SourceID
+								--for xml raw('query')
+							) as que
+						)	
+						--for xml raw('processtype')
+					) as proc
+				)
+			
+				,
+				(
+					select Row_to_json(proc) "structuralprocesstype"
+					from
+					(
+						select 'structureupdate' as "type",VDimensionID dimensionid,2 as seq 
+						, 
+						(
+							select array_to_json(array_agg(row_to_json(tab))) "table"
+							from
+							(
+								select   'fact_'||ksm.Alias||'MetricDetails' as "name",'factual' as "type"
+								, 
+								(
+									select array_to_json(array_agg(row_to_json(col))) "column"
+									from
+									(
+									
+										select targetcolumn "name",targetdatatype datatype,targetidcolumn idcolumn,
+										type,sourcetable inputtable,sourceidcolumn inputcolumn,sourcecolumn  inputidcolumn
+										,rule
+										from Structuralupdate UP
+										where UP.SOurceID=SU1.SOurceID
+										and up.selectedMetric=SU1.selectedMetric
+										and up.Isprimary='1'
+										--for xml raw('column')
+									) as col
+								) 
+								from Structuralupdate SU1 
+								join kbsourcetypeMst ksm
+								on ksm.SOURCETYPE_ID=SU1.SourceID
+								where SU1.Isprimary='1'
+								--for xml raw('table')
+							)as tab
+						)
+						,
+						(
+							select Row_to_json(rul) "rule"
+							from
+							(
+								select   rule as "name"
+								,
+								(
+									select Row_to_json(cols) "filter"
+									from
+									(
+										select array_to_json(array_agg(row_to_json(col))) "and"
+										from
+										(
+										
+											select idcolumn, inputidcolumn, "operator"
+											from
+											(
+												select targetidcolumn idcolumn, sourcecolumn 	inputidcolumn
+												,'=' "operator"
+												from Structuralupdate SU2
+												where SU2.SourceID=SU3.SourceID
+												and SU2.Isprimary='0'
+												
+												UNION 
+												
+												Select 'RECORDDATEUTC' idcolumn,'ModifiedDate' inputidcolumn,'<=' "operator"
+											)A
+											--for xml raw('and'),root('filter')
+										) as col
+									) cols	
+									
+								)	
+								from Structuralupdate SU3
+								--where SU3.Isprimary=0
+								group by rule,SU3.SourceID
+								--for xml raw('rule')
+							) as rul
+						)			
+					--for xml raw('processtype')
+					) as proc
+			)
+			from Structuralupdate
+			group by ServiceTime ,ServiceTimeUOM 
+			--for xml raw('root')
+			)roo
+		) outs	
+	);
+			
+			 
+						
+END;
+
+End if;
+
+end
+
+$function$;
+
+ALTER FUNCTION public.usp_kbdimension(json)
+    OWNER TO postgres;
+
+
+

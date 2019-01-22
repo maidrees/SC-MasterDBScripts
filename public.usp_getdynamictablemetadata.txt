@@ -1,0 +1,58 @@
+-- FUNCTION: public.usp_getdynamictablemetadatajson
+
+-- DROP FUNCTION public.usp_getdynamictablemetadatajson;
+
+CREATE OR REPLACE FUNCTION public.usp_getdynamictablemetadata(
+	input json DEFAULT NULL::json)
+RETURNS json
+    LANGUAGE 'plpgsql'
+    COST 100.0
+    VOLATILE 
+AS $function$
+
+begin
+drop table if exists temps;
+
+create temp table temps(iType Varchar(50),TableName Varchar(200),Subtype Varchar(50));
+
+Insert into Temps(iType,TableName,Subtype)
+Select distinct "type",TableName,Subtype 
+from KB_DynamicTable_MetaData;
+
+Return(
+	Select Row_to_json(output)
+	from
+	(
+		Select Row_to_json(roo) as "Root"
+		from
+		(
+			Select Array_to_json(Array_agg(row_to_json(tab))) as  "TableInfo"
+			from
+			(
+				Select KB1.iType "Type",TableName "TableName",Subtype "Subtype"
+				,'Type,TableName,Subtype' "Attribute_list"
+				,
+				(
+					Select Array_to_json(Array_agg(row_to_json(cols))) as "Column"
+					from
+					(
+						Select ColumnName "ColumnName", Datatype "Datatype",DefaultValue "DefaultValue",'DefaultValue,Datatype,ColumnName' "Attribute_list"
+						from KB_DynamicTable_MetaData KB2 
+						Where KB2.Type=KB1.iType and KB2.TableName=KB1.TableName and KB2.isactive='1'
+						--for xml raw('Column')
+					)as cols
+				)  
+				from Temps KB1 
+				--for xml raw('TableInfo'),Root('Root')
+			)tab
+		) roo	
+	) output	
+	);
+End
+
+$function$;
+
+ALTER FUNCTION public.usp_getdynamictablemetadata(json)
+    OWNER TO postgres;
+
+

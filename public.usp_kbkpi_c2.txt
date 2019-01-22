@@ -1,0 +1,2190 @@
+-- FUNCTION: public.usp_kbkpi_c2json
+
+-- DROP FUNCTION public.usp_kbkpi_c2json;
+
+CREATE OR REPLACE FUNCTION public.usp_kbkpi_c2(
+	input json)
+RETURNS json
+    LANGUAGE 'plpgsql'
+    COST 100.0
+    VOLATILE 
+AS $function$
+
+DECLARE
+	VTRAN			VARCHAR(30);
+	VCreated_By		int;
+	VCustomerName		varchar(255);
+	VID			int;
+	VSourcetypeid		int;
+	VSourceName		varchar(255);
+	VKPINAME		varchar(255);
+	VKPI_DESCRIPTION	varchar(255);
+	VMEASURENAMES		varchar(255);
+	VMETRIC			varchar(255);
+	VEntityMETRIC		varchar(255);
+	VLocationmetric		varchar(255);
+	VKPIROLES		varchar(255);
+	VTEMPLATE_ID		int;
+	VKPITypeID		int;
+	VStoreHistory		bit;
+	VKPI_ID			int;
+	VISMULTIDATASOURCE	bit;
+	VCORRELATION_ID		int;
+	VLatestActionID 	int;
+	VOriginalID		int;
+	VLatestkpiid		int;
+	VMultidatasource	bit;
+	VKpis			json;
+	VMeasures		json;
+	VSource			json;
+	VRoles			json;
+	VRULEACTIONDETAIL	json;
+	VkpidescCountUpdate	int;
+	Ventitydefid		int;
+	VEntitytablename	varchar(255);
+	Voperators 		varchar(100);
+	Vexpvalue		varchar(255);
+	VEntityattribute	varchar(255)	;
+	vresult			json;
+	VRequestfrom		smallint;
+	VWhereClause		varchar(2000);
+	VActiondate		timestamp default(current_timestamp at time zone 'utc')	;	
+	Vkpiruleid		int;
+	Vsuboperator		varchar(30);	
+Begin
+--Alter table KBTEMPLATEGROUPINGMST Add column modifieddate timestamp, add column modifiedby int;
+drop table if exists temps;
+drop table if exists Sourceslist;
+drop table if exists users;
+drop table if exists TEMPKPI;
+drop table if exists TEMPMETRICSTABLE;
+drop table if exists AlertAction;
+drop table if exists TEMPENTITYMetricTABLE;
+drop table if exists TEMPLocationMetricTABLE;
+drop table if exists tempdata;	
+drop table if exists templabels;	
+drop table if exists parseddata;
+drop table if exists expressiondata;
+drop table if exists kpirules;
+
+create temp table temps(id serial,ivalue json);
+create temp table users (id serial,userid int);
+create temp table TEMPKPI
+( RecordID serial,SOURCEID int ,SOURCE_NAME VARCHAR(255), KPI_NAME VARCHAR(255),KPI_DESCRIPTION VARCHAR(255),RuleAction varchar(255),KPIROLES varchar(500),MEASURE varchar(500)
+	       ,KPI_ID INT,TEMPLATE_ID INT,KpiTypeID int,Expression json,Expression_Service text,HistoryExpression text,GroupId INT,GroupName varchar(255),geo_fence json, geo_logicaloperator varchar(10)  );
+create temp table  TEMPMETRICSTABLE(ID serial,METRICID INT,MetricName varchar(1000));
+create temp table AlertAction (ActionID int, ActionName varchar(200),NewlyAdded bit);
+create temp table TEMPENTITYMetricTABLE(Recordid SERIAL,ID int,MType varchar(50) default('Entity'));
+create temp table TEMPLocationMetricTABLE(Recordid serial,ID int,MType varchar(50) default('Location'));
+create temp table Sourceslist(id serial,SourceID int);
+create temp table templabels(id smallint,ivalue char(10));
+create temp table tempdata(id serial,kpiruleid int,expression text,operators varchar(10),suboperator varchar(20),ivalue varchar(50), value2 varchar(50));
+create temp table parseddata(recordid serial,kpiruleid int,id smallint, expressionid smallint, ilabel varchar(50), ivalue varchar(255),isidentifier bit,entitydefid int,entityattribute varchar(255));
+
+create temp table expressiondata (recordid serial,kpiruleid int,expression json,sourcename varchar(255), isarray smallint);
+
+create temp table kpirules(recordid serial,kpiruleid int );
+	       
+insert into temps(ivalue)
+select input;
+
+select ivalue->'kpi'->> 'transtype',
+ivalue->'kpi'->> 'SOURCETYPE_ID',
+ivalue->'kpi'->> 'kpi_name',
+ivalue->'kpi'->> 'kpi_description',
+ivalue->'KPI'->> 'MEASURE',
+ivalue->'KPI'->> 'METRICS',
+ivalue->'KPI'->> 'ENTITYMETRICS',
+ivalue->'KPI'->> 'LOCATIONMETRICS',
+ivalue->'KPI'->> 'KPIROLE',
+ivalue->'KPI'->> 'TEMPLATE_ID',
+ivalue->'KPI'->> 'KPITYPEID',
+ivalue->'KPI'->> 'STOREHISTORY',
+ivalue->'kpi'->> 'kpiid',
+ivalue->'KPI'->> 'LoginId' ,
+ivalue->'KPI'->> 'ISMULTIDATASOURCE',
+ivalue->'KPI'->> 'CORRELATION_ID',
+ivalue->'kpi'->> 'requestfrom'
+
+				into VTRAN
+				,VSourcetypeid
+				,VKPINAME
+				,VKPI_DESCRIPTION	
+				,VMEASURENAMES		
+				,VMETRIC			
+				,VEntityMETRIC		
+				,VLocationmetric		
+				,VKPIROLES		
+				,VTEMPLATE_ID		
+				,VKPITypeID		
+				,VStoreHistory		
+				,VKPI_ID			
+				,VCreated_By
+				,VISMULTIDATASOURCE	
+				,VCORRELATION_ID		
+				,VRequestfrom
+from temps limit 1;
+
+If VTran is NUll or VTran='' then
+	VTRAN:='create';
+end if;
+
+select measures->>'sourceid' into VSourcetypeid
+from
+(
+	select json_array_elements(mea) measures
+	from
+	(
+		Select Rules->'expression'->'ifcondition'->'conditions'->'measure' mea
+		From
+		(
+			select json_array_elements(Rules) as Rules
+			from
+			(
+				select ivalue->'kpi'->'rule_details'->'rule' as Rules
+				from
+				temps
+				limit 1
+			)a
+		)measu	
+	)meas
+)inps
+limit 1;
+
+Select sourcetype_name, createdby into VSourceName,VCreated_By
+from  kbsourcetypemst 
+where sourcetype_id=VSourcetypeid
+;
+
+VKPITypeID:=1;
+VTEMPLATE_ID:=2;
+
+insert into users(userid)
+select userid
+From
+KBUserCustomerMapping A
+Inner join
+(
+	Select customerid 
+	from KBUserCustomerMapping
+	where userid=VCreated_by
+) B  on A.customerid=B.customerid
+;
+
+if Lower(Vtran)='checkname' then
+Begin
+
+VKPI_ID:=(select distinct a.kpi_id from kbkpimst a join kbkpimst b on coalesce(a.originalid,a.kpi_id)=b.kpi_id where b.kpi_name=Vkpiname and a.isactive='1' limit 1 );
+
+return(
+	select array_to_json(array_agg(row_to_json(finaloutput))) 
+	from
+	(
+		select  case when coalesce(VKPI_ID,0)>0 then 1 else 0 end as "Result",array_to_json(array_agg(row_to_json(output))) as "ROOT"
+		from
+		(
+			select array_to_json(array_agg(row_to_json(a))) as "KPI"
+			from
+			(
+			Select case when coalesce(VKPI_ID,0)>0 then 1 else 0 end as "CHECKEXIST"
+			)a
+		) output
+	)finaloutput		
+);
+
+end;
+
+ElseIF lower(VTran)='create' then
+begin
+
+If exists (select 1 from KBKPIMST where kpi_name=VKPINAME and isactive=1) then
+begin
+
+		Return(
+			Select row_to_json(a)
+			from
+			(select 404 "code", 'kpi name already exists' "message")a
+		);
+
+end;
+end if;
+
+/* splitting the metrics selected*/	
+	INSERT INTO TEMPMETRICSTABLE (METRICID)
+	select cast(measures->>'measureid' as int)
+	from
+	(
+		select json_array_elements(mea) measures
+		from
+		(
+			Select Rules->'expression'->'ifcondition'->'conditions'->'measure' mea
+			From
+			(
+				select json_array_elements(Rules) as Rules
+				from
+				(
+					select ivalue->'kpi'->'rule_details'->'rule' as Rules
+					from
+					temps
+					limit 1
+				)a
+			)measu	
+		)meas
+	)inps;
+	
+	SELECT string_agg(cast(METRICID as varchar(50)),'#CWDB01#') into VMEASURENAMES	
+	from
+	TEMPMETRICSTABLE
+	;
+
+--IF (select left(cast(ivalue->'KPI'->'RuleDetails'->'Rule' as text),1) as Rules	from temps limit 1)='[' then
+begin							
+	insert into TEMPKPI(SOURCEID,Ruleaction,SOURCE_NAME,KPI_NAME,KPI_DESCRIPTION,TEMPLATE_ID,kpiroles,KpiTypeID,MEASURE,Expression,Expression_Service,HistoryExpression
+	,GroupId,GroupName,geo_fence, geo_logicaloperator )
+	select VSourcetypeid,Alertaction,VSourceName,VKPINAME,VKPI_DESCRIPTION,  VTEMPLATE_ID,VKPIROLES, VKPITypeID,VMEASURENAMES, Expression, ServiceExpression,HistoryExpression, GroupId,GroupName, geofence, geo_logicaloperator
+	from
+	(
+
+		select 
+		0 as Alertactionid
+		,rules->>'rulename' as Alertaction
+		,cast(1 as int) as GroupId
+		,'Acceptable' as GroupName
+		,Rules->'expression'  as Expression
+		,'' as HistoryExpression
+		,Rules->>'ServiceExpression' as ServiceExpression
+		,Rules->'expression'->'ifcondition'->'geofence' geofence
+		,Rules->'expression'->'ifcondition'->>'geo_logicaloperator' geo_logicaloperator
+		from
+		(
+			select json_array_elements(Rules) as Rules
+			
+			from
+			(
+				select ivalue->'kpi'->'rule_details'->'rule' as Rules
+				from
+				temps
+				limit 1
+			)a
+		) RuleDetails
+			
+	) inputs
+	;
+End;
+
+-- else
+-- begin
+-- return(100);
+-- 	insert into TEMPKPI(SOURCEID,Ruleaction,SOURCE_NAME,KPI_NAME,KPI_DESCRIPTION,TEMPLATE_ID,kpiroles,KpiTypeID,MEASURE,Expression,Expression_Service,HistoryExpression,GroupId,GroupName)
+-- 	select VSourcetypeid,Alertaction,VSourceName,VKPINAME,VKPI_DESCRIPTION,  VTEMPLATE_ID,VKPIROLES, VKPITypeID,VMEASURENAMES, Expression, ServiceExpression,HistoryExpression, GroupId,GroupName
+-- 	from
+-- 	(
+-- 
+-- 		select 
+-- 		0 as Alertactionid
+-- 		,ivalue->'kpi'->'rule_details'->'rule'->>'rule_name' as Alertaction
+-- 		,cast(1 as int) as GroupId
+-- 		,'Acceptable' as GroupName
+-- 		,cast(NULL as json) as Expression
+-- 		,NULL as HistoryExpression
+-- 		,ivalue->'kpi'->'rule_details'->'rule'->>'ServiceExpression' as ServiceExpression
+-- 		from
+-- 		temps
+-- 		limit 1
+-- 	) inputs
+-- 	;
+--end;
+--end if;
+
+	Update TEMPMETRICSTABLE 
+	set MetricName=Mst.MetricName
+	from 
+	kbmeasuremst Measure 
+	Join 
+	KbMetricMst Mst on Measure.measure_name=mst.metricname||'_Measure' and Measure.SOURCE_ID=mst.SOURCE_ID and Measure.TEMPLATE_ID=mst.TEMPLATE_ID
+	where  Measure.measure_id=TEMPMETRICSTABLE.METRICID 
+;
+
+	/* Inserting into kbkpistatus*/
+		
+	
+	--Declare VLatestActionID int;
+		
+	--VLatestActionID:=(Select MAX(STATUSID) From KBKpiStatus);
+
+--IF (select left(cast(ivalue->'KPI'->'AlertActions'->'Action' as text),1) as Rules from temps limit 1)='[' then
+begin							
+	Insert into AlertAction(ActionID,ActionName,newlyadded)
+	Select ROW_NUMBER() Over(Order by Actionname)+coalesce(VLatestActionID,0) RecordID,Actionname,cast(1 as bit) NewlyAdded
+	From
+	(
+		Select Rules->>'rulename' Actionname
+		From
+		(
+			select json_array_elements(Rules) as Rules
+			from
+			(
+				select ivalue->'kpi'->'rule_details'->'rule' as Rules
+				from
+				temps
+				limit 1
+			)a
+		)measu	
+		where not exists (Select 1 from KBKpiStatus KStatus where Rules->>'rulename'=KStatus.STATUS)
+	)A;
+End;
+-- else
+-- begin
+-- 	Insert into AlertAction(ActionID,ActionName,newlyadded)
+-- 	Select ROW_NUMBER() Over(Order by Actionname)+coalesce(VLatestActionID,0) RecordID,Actionname,cast(1 as bit) NewlyAdded
+-- 	from
+-- 	(
+-- 
+-- 		select 
+-- 		ivalue->'KPI'->'AlertActions'->'Action'->>'Name' as Actionname
+-- 		from
+-- 		temps
+-- 		limit 1
+-- 	) inputs
+-- 	;
+-- 
+-- end;
+-- end if;
+
+	
+		
+	Insert into KBKpiStatus(STATUS,CreatedBy,CreatedDate,ModifiedBy)
+	Select 
+	ActionName
+	,Vcreated_by
+	,VActiondate
+	,Vcreated_by
+	from  
+	AlertAction A 
+	where not exists (Select 1 from KBKpiStatus KStatus where A.Actionname=KStatus.STATUS)
+	;
+
+	-- Update KBTEMPLATEGROUPINGMST 
+-- 	set ACTION_CUSTOMIZE_NAME=temps.GroupName
+-- 	,ACTIONID=temps.GroupId
+-- 	,Modifieddate=VActiondate
+-- 	,ModifiedBy=VCreated_by
+-- 	from TEMPKPI temps 
+-- 	where temps.TEMPLATE_ID=KBTEMPLATEGROUPINGMST.TEMPLATEID and KBTEMPLATEGROUPINGMST.ACTIONID=temps.GroupId ;
+
+	INSERT INTO KBTEMPLATEGROUPINGMST(TEMPLATEID,ACTIONID,ACTION_CUSTOMIZE_NAME,CREATEDBY)
+	select distinct  TEMPLATE_ID,GroupId,GroupName,Vcreated_by 
+	from TEMPKPI  A
+	where GroupId IS NOT NULL and GroupName IS NOT NULL
+	and not exists (Select 1 from KBTEMPLATEGROUPINGMST TG where  A.TEMPLATE_ID=TG.TEMPLATEID and A.GroupId=TG.actionid);
+
+	
+
+	/* inserting into kpimst table */
+ 
+	INSERT INTO KBKPIMST
+		        ( 
+		          SOURCE_ID ,
+		          KPI_NAME ,
+		          KPI_DESCRIPTION ,
+		          MODIFIEDBY ,
+		          MODIFIEDDATE ,
+		          CREATEDBY ,
+		          CREATEDDATE,
+		          TEMPLATE_ID,
+		          CREATEDDATE_ID,
+		          LASTMODIFIEDDATE_ID
+		          ,KPITYPE
+		          ,Fromdate
+			  ,IsMultiDataSource
+			  ,CorrelationID
+		        )	
+
+		SELECT VSourcetypeid,VKPINAME,VKPI_DESCRIPTION,Vcreated_by,VActiondate,Vcreated_by,VActiondate,VTEMPLATE_ID,NULL GETDATEID,NULL GETDATEID,VKPITypeID
+		,VActiondate,VISMULTIDATASOURCE,VCORRELATION_ID
+		where not exists(select 1 from KBKPIMST where kpi_name=VKPINAME and isactive='1')
+	;
+
+	VKPI_ID:= ( SELECT currval(pg_get_serial_sequence('KBKPIMST','kpi_id')));
+
+	
+	-- If VISMULTIDATASOURCE is null or VISMULTIDATASOURCE='0' then
+-- 	Begin
+-- 		Insert into KBTEMPLATESPOKES(TEMPLATE_ID,SPOKEID,SPOKESELECTED,CREATEDDATE,CREATEDBY,MODIFIEDDATE,MODIFIEDBY)
+-- 		Select VTEMPLATE_ID TemplateID, VSourcetypeid SourceTypeid,1, VActiondate,Vcreated_by, VActiondate,Vcreated_by ;
+-- 		
+-- 	End;
+-- 	Else
+	Begin
+
+		Insert into KBTEMPLATESPOKES(TEMPLATE_ID,SPOKEID,SPOKESELECTED,CREATEDDATE,CREATEDBY,MODIFIEDDATE,MODIFIEDBY)
+		Select VTEMPLATE_ID TemplateID, Correlations.SourceID SourceTypeid,1, VActiondate,Vcreated_by, VActiondate,Vcreated_by
+		From 
+		CBCorrelationDetails Correlations
+		where CorrelationID=VCORRELATION_ID	;
+
+	End;
+	--end if;
+
+/* inserting into kbkpimeasure table */
+
+	INSERT INTO TEMPENTITYMetricTABLE(ID) 
+	select cast(measures->>'entity_metricid' as int)
+	from
+	(
+		select json_array_elements(mea) measures
+		from
+		(
+			Select Rules->'expression'->'ifcondition'->'conditions'->'measure' mea
+			From
+			(
+				select json_array_elements(Rules) as Rules
+				from
+				(
+					select ivalue->'kpi'->'rule_details'->'rule' as Rules
+					from
+					temps
+					limit 1
+				)a
+			)measu	
+		)meas
+	)inps
+;
+
+	-- select cast((case when id='' then '0' else id end) as int)
+-- 	from
+-- 	(
+-- 	SELECT regexp_split_to_table(VEntityMETRIC, '#CWDB01#')  as id
+-- 	)a;
+	
+	INSERT INTO TEMPlocationMetricTABLE(ID) 
+	select cast((case when id='' then '0' else id end)  as int)
+	from
+	(
+	SELECT regexp_split_to_table(VlocationMETRIC, '#CWDB01#') as id
+ 	)a;	
+
+	Update KBMeasureMst Set isActive=1
+	From
+	(
+		select metricname , source_id
+		from kbmetricmst metrics
+		where template_id=1 and source_id=VSourcetypeid		
+	) TempMeasures where TempMeasures.metricname=KBMeasureMst.Measure_name and KBMeasureMst.TEMPLATE_ID=VTEMPLATE_ID;
+
+	
+  	/* Inserting the Entity and location Attributes itno kbkpimeasure table */
+ 
+	insert into KBKPIMEASURE(KPI_ID ,  MEASURE_ID ,CREATEDBY ,	  ModifiedBy,  TEMPLATE_ID,  "type"  ,CREATEDDATE  ,ModifiedDate)
+	select VKPI_ID , A.ID,VCreated_by,VCreated_by,VTEMPLATE_ID,A.MType,Vactiondate,Vactiondate
+	From
+	TEMPENTITYMetricTABLE A
+	where id!=0
+	union 
+	select VKPI_ID , A.ID,VCreated_by,VCreated_by,1 TEMPLATE_ID,A.MType,Vactiondate,Vactiondate
+	From
+	TEMPENTITYMetricTABLE A
+	where id!=0
+	Union
+	select VKPI_ID , A.ID,VCreated_by,VCreated_by,VTEMPLATE_ID,A.MType,Vactiondate,Vactiondate
+	From
+	TEMPlocationMetricTABLE A
+	where id!=0
+	union 
+	select VKPI_ID , A.ID,VCreated_by,VCreated_by,1 TEMPLATE_ID,A.MType,Vactiondate,Vactiondate
+	From
+	TEMPLocationMetricTABLE A
+	where id!=0;
+
+		Begin 
+		  
+		  
+		 	 
+			INSERT INTO KBKPIMEASURE
+					( 
+					  KPI_ID ,
+					  MEASURE_ID ,
+					  CREATEDBY ,
+					  ModifiedBy,
+					  --CREATEDDATE,
+					  TEMPLATE_ID,
+					  "type"
+					  ,CREATEDDATE
+					  ,ModifiedDate
+					  
+					)
+			select Vkpi_id, measures.measure_id, VCreated_by, VCreated_by, VTemplate_id, 'Measure', VActiondate, VActiondate
+			From
+			kbmeasuremst measures
+			join TEMPMETRICSTABLE TempMeasures on TempMeasures.metricid=measures.measure_id;
+		end;
+		
+	INSERT INTO KBKPIRULE
+        ( 
+         KPI_ID,RULEACTION,RULEMEASURE,RULEOPERATOR,RULEVALUE1,RULEVALUE2,ROOLBOOLOPERATOR,CREATEDBY,ModifiedBy,TEMPLATE_ID,"type"
+         ,Expression,Expression_Service,ACTION_GROUPID,CREATEDDATE,ModifiedDate,HistoryExpression,geofence,geo_logicaloperator
+        )
+		
+		Select  KPIID,RULEACTION,RULEMEASURE,RULEOPERATOR,RULEVALUE1,RULEVALUE2,ROOLBOOLOPERATOR,CREATEDBY,ModifiedBy,TemplateID,"type"
+		,Expression,Expression_Service,GROUPDETAILID,VActiondate,VActiondate,HistoryExpression,geo_fence, geo_logicaloperator
+		From
+		( 
+		
+		Select AA.KPIID,AA.RULEACTION,AA.RULEMEASURE,AA.RULEOPERATOR,AA.RULEVALUE1,AA.RULEVALUE2,AA.ROOLBOOLOPERATOR,AA.CREATEDBY,AA.ModifiedBy
+		          ,AA.TemplateID,AA.GetDateID,AA."type",RecordID,Expression,Expression_Service,GROUPDETAILID,HistoryExpression,geo_fence, geo_logicaloperator
+		from 
+		( 
+		SELECT	 
+		          VKPI_ID KPIID
+		          ,RULEACTION 
+		          ,NULL RULEMEASURE
+		          --,MEasures.MEASURE_ID RULEMEASURE 
+		          ,NULL RULEOPERATOR 
+		          ,NULL RULEVALUE1 
+		          ,NULL RULEVALUE2 
+		          ,NULL ROOLBOOLOPERATOR 
+		          ,VCreated_by Createdby
+		          ,VCreated_by ModifiedBy --1
+		          ,VTEMPLATE_ID TemplateID
+		          ,NULL   GetDateID 
+		          ,NULL "type"
+			, RecordID
+			,Expression
+			,Expression_Service
+			,MST.GROUPDETAILID
+			,HistoryExpression
+			,geo_fence, geo_logicaloperator
+		FROM TEMPKPI  Temps
+		LEFT JOIN KBTEMPLATEGROUPINGMST MST ON MST.ACTIONID=Temps.GroupId  and temps.TEMPLATE_ID=mst.TEMPLATEID
+ 
+	 	) AA
+			
+		)	A
+		where not exists(select 1 from KBKPIRULE rules where A.KPIID=rules.kpi_id and a.ruleaction=rules.ruleaction)
+	Order By RecordID;
+
+	/* Inserting the Scheduling information*/
+
+	--If coalesce((select ivalue->'kpi'->'schedule'->>'startdate' from temps limit 1),'')!='' or coalesce((select ivalue->'kpi'->'schedule'->>'enddate' from temps limit 1),'')!=''  then
+	begin
+	 
+		Insert into kbkpischedules(kpi_id, fromdate,todate,uom,schedule_type)
+		select vkpi_id
+		,case when ivalue->'kpi'->'schedule'->>'startdate'!='' then cast(ivalue->'kpi'->'schedule'->>'startdate' as timestamp) else NULL end as startdate
+		,case when ivalue->'kpi'->'schedule'->>'enddate'!='' then cast(ivalue->'kpi'->'schedule'->>'enddate' as timestamp) else NULL end as enddate
+		
+		,case when coalesce(ivalue->'kpi'->'schedule'->>'uom','') =''
+				then 'days' else ivalue->'kpi'->'schedule'->>'uom'  end  as uom
+		,case when coalesce(ivalue->'kpi'->'schedule'->>'type','') =''
+				then 'static' else ivalue->'kpi'->'schedule'->>'type'  end  as "type"
+		from
+		temps
+		limit 1;
+	End;
+	--end if;
+
+return(	
+
+			select row_to_json(roots)
+			from
+			(
+			select row_to_json(aa)  
+			From
+			(
+			 select	
+				(
+				select row_to_json(finaloutput) as "ROOT"
+				from
+				(
+					select row_to_json(kpis) as "KPI"
+					from
+					(
+							select row_to_json(output) as "Rule"
+							from
+							(
+							select array_to_json(array_agg(row_to_json(a))) "Row"
+							from
+							(
+								SELECT	
+								SOURCEID 		"ID"
+								,temps.SOURCE_NAME	"SOURCE_NAME"
+								,KPI_NAME		"KPI_NAME" 
+								,KPI_DESCRIPTION	"KPI_DESCRIPTION"	 
+								,temps.SOURCE_NAME	"SOURCENAME" 
+								,VMEASURENAMES		"MEASURE" 
+								,VMETRIC		"METRICS" 
+								,RULEACTION		"RULEACTION" 
+								,NULL			"CREATEDBY"
+								,KPIROLES		"KPIROLES" 
+								,KPI_ID			"KPI_ID"
+								,VSOURCETYPEID		"SOURCETYPE_ID" 
+								,TEMPLATE_ID		"TEMPLATE_ID"	 
+								,VKPI_ID		"ORIGINALKPIID"
+								,VKPI_ID		"LATESTKPIID"
+								,VKPI_ID 		"KPIID"
+								,Expression		"Expression"
+								,Expression_Service  	"ExpressionService"
+								,VStoreHistory		"STOREHISTORY"
+								,KpiTypeID		"KpiType"	
+								,Mst.GROUPDETAILID	"groupdetailid"	
+								,Temps.GroupId		"groupid"	
+								,Temps.Groupname	"groupname"	
+								,VCreated_by		"loginid"	
+								,VCORRELATION_ID	"CORRELATIONID"	
+								,VISMULTIDATASOURCE	"ISMULTIDATASOURCE"
+								FROM TEMPKPI temps
+								LEFT JOIN KBTEMPLATEGROUPINGMST MST ON MST.ACTIONID=Temps.GroupId  and temps.TEMPLATE_ID=mst.TEMPLATEID
+							)a
+							)output
+						)kpis
+					)finaloutput
+				),
+				(	
+
+					select row_to_json(Alerts) as "ALERACTIONDETAIL"
+					From
+					(
+					select array_to_json(array_agg(row_to_json(actions))) as "ALERACTION"
+					from
+					(
+					Select STATUSID ID, STATUS STATUSNAME,coalesce(AA.NewlyAdded,'0') NewlyAdded 
+					from KBKpiStatus KStatus
+					Left Outer Join AlertAction AA On KStatus.STATUSID=AA.ActionID
+					)actions
+					) as Alerts
+					--where exists(Select 1 from Vusers B where KStatus.createdby= B.userid)
+					--FOR XML RAW('ALERACTION'), ROOT('ALERACTIONDETAIL')
+				)
+				,(
+					select row_to_json(Grp) as "grouping"
+					from
+					(
+						select array_to_json(array_agg(row_to_json(groups))) as "group"
+						from
+						(
+						select TEMPLATE_ID templateid,GroupId groupid,GroupName groupname,VCreated_by loginid from TEMPKPI  
+						)groups
+					)Grp
+				)
+				,
+				(
+					select Row_to_json(a) as "schedule"
+					from
+					(
+						select kpi_id, fromdate,todate,uom,schedule_type "type" 
+						from kbkpischedules schedule
+						where kpi_id=Vkpi_id and isactive='1'
+					) a	
+
+				)
+			)aa
+
+				)roots		
+
+);
+
+-- 	exception when others then 
+-- 		Return(
+-- 			Select row_to_json(a)
+-- 			from
+-- 			(select 404 "code", 'invalid' "message")a
+-- 		);
+
+End;
+Elseif lower(VTran)='getkpisource' then
+begin
+
+Select kpi_id,ismultidatasource  into VLatestKPIID, VMultidatasource
+from KBKpiMst 
+where coalesce(ORIGINALID, KPI_ID)=VKPI_ID and ISACTIVE='1' 
+;
+
+If VISMULTIDATASOURCE ='1' then 
+Begin
+
+Insert into Sourceslist
+Select SourceID from cbcorrelationdetails where Correlationid=VCORRELATION_ID ;
+
+End;
+Else
+begin
+
+VSourcetypeid:=(Select source_id from kbkpimst where coalesce(ORIGINALID, KPI_ID)=VKPI_ID and isactive='1');
+
+if VSourcetypeid is not null then
+begin
+
+Insert into Sourceslist(sourceid)
+Select VSourcetypeid;
+end;
+end if; 
+
+End;
+End if;
+
+VKpis:=(
+
+	select row_to_json(KPI) as "KPI"
+	from
+	(
+	SELECT DISTINCT coalesce(originalId,km.KPI_ID) as "ID", KM.KPI_NAME as "Name", coalesce(KPI_DESCRIPTION,'') as "KPIDescription" 
+	,coalesce(IsMultiDataSource,'0') "KPITYPE",coalesce(CorrelationID,0) "CORRELATIONID"
+	FROM KBKPIMST KM
+	WHERE KM.KPI_ID = VLatestKPIID and ISACTIVE='1'
+	)KPI
+	
+ );
+
+VMeasures:=(
+
+		select row_to_json(measdetails) as "MEASUREDETAILS"
+		from
+		(
+			select array_to_json(array_agg(row_to_json(measures))) as "MEASURE"
+			from
+			(
+				Select * 
+				from
+				(
+				SELECT distinct MM.MEASURE_ID as "MEASURE_ID"
+				, MM.MEASURE_NAME as "MEASURE_NAME",'' as "METRICALIAS",coalesce(MM.MEASURE_DESC,'') "MEASURE_DESC",coalesce(FORMULAMEASURE,'') "FORMULAMEASURE"
+				,(SELECT MD.DataTypeName FROM KBMasterdataTypes MD WHERE MM.MEASUREUNIT_ID = MD.DaTaTypeID limit 1) AS "MEASUREUNIT_NAME"
+				,(SELECT COUNT(RULEMEASURE) FROM KBKPIRULE WHERE RULEMEASURE=MM.MEASURE_NAME AND KPI_ID=VLatestKPIID) as "ASSIGNEDMEASURE"
+				,(SELECT COUNT(MR.Measure_Id) FROM KBKPIMEASURE MR  WHERE MR.Measure_Id=MM.MEASURE_Id AND MR.KPI_ID=VLatestKPIID) as "SELECTEDMEASURE"
+				,STM.Alias  AS "SOURCENAME" 
+				,STM.SOURCETYPE_ID  AS "SOURCE_ID" 
+				,'Measure' "TYPE"
+				FROM KBMEASUREMST MM 
+				LEFT JOIN KBSOURCETYPEMST STM  ON MM.SOURCE_ID = STM.SOURCETYPE_ID 
+				WHERE Exists (Select 1 from Sourceslist B where STM.SOURCETYPE_ID=B.SourceID)  and   mm.TEMPLATE_ID=VTEMPLATE_ID 
+				and (mm.IsActive='1' or MM.CreatedBy=1)
+				
+				Union 
+				
+				SELECT distinct Measures.MEASURE_ID as METRIC_ID--Measures.MEASURE_ID METRIC_ID
+				,MM.METRICNAME METRICNAME
+				--,Measures.MEASURE_NAME METRICNAME
+				,coalesce(METRICALIAS,'') as METRICALIAS
+				,coalesce(Measures.MEASURE_DESC,'') MEASURE_DESC
+				,coalesce(FORMULAMEASURE,'') FORMULAMEASURE
+				--,'' AS MEASUREUNIT_NAME
+				,(SELECT MD.DataTypeName FROM KBMasterdataTypes MD WHERE Measures.MEASUREUNIT_ID = MD.DaTaTypeID limit 1) AS MEASUREUNIT_NAME
+				,(SELECT COUNT(RULEMEASURE) FROM KBKPIRULE WHERE RULEMEASURE=Measures.MEASURE_NAME AND KPI_ID=VLatestKPIID)
+				,(SELECT COUNT(measure_id) FROM kbkpimeasure MD WHERE Measures.MEASURE_ID=MD.measure_id AND KPI_ID=VLatestKPIID)
+				,STM.Alias  AS SOURCENAME --SOURCETYPE_NAME 
+				,STM.SOURCETYPE_ID  AS SOURCE_ID --SOURCETYPE_NAME 
+				,'Metric' "TYPE"
+				FROM 
+				KBMEASUREMST Measures
+				Join KBMetricMST MM on measures.MEASURE_NAME=MM.METRICNAME||'_Measure' and Measures.TEMPLATE_ID=MM.TEMPLATE_ID 
+				and Measures.SOURCE_ID=MM.SOURCE_ID
+				INNER JOIN KBSOURCETYPEMST STM  ON Measures.SOURCE_ID = STM.SOURCETYPE_ID 
+				WHERE Exists (Select 1 from Sourceslist B where STM.SOURCETYPE_ID=B.SourceID)
+				AND MM.TEMPLATE_ID=1
+				) A
+			--FOR	XML RAW('MEASURE'),ROOT('MEASUREDETAILS')
+			) measures
+		)measdetails
+	)
+ 
+;
+
+VSource:=(
+		select row_to_json(sources) as "SOURCE"
+		from
+		(
+		SELECT STM.SOURCETYPE_ID as "SOURCETYPE_ID", STM.Alias AS "SOURCENAME"
+		FROM KBKPIMST KM
+		INNER JOIN KBSOURCETYPEMST STM ON KM.SOURCE_ID = STM.SOURCETYPE_ID 
+		WHERE KM.KPI_ID = VLatestKPIID and KM.ISACTIVE='1' 
+		) sources
+		--FOR XML RAW('SOURCE')
+	);
+
+ VRoles=(
+		select row_to_json(a) as "ROLEDETAILS"
+		from
+		(
+			select array_to_json(array_agg(row_to_json(roles))) as "ROLES"
+			from
+			(
+			SELECT R.ROLE_ID "ROLE_ID", R.ROLE_NAME "ROLE_NAME"
+			FROM KBRoleKpi K
+			INNER JOIN KBROLEMST R  ON R.ROLE_ID=K.ROLE_ID 
+			WHERE K.KPI_ID=VLatestKPIID AND R.TEMPLATE_ID=VTEMPLATE_ID  and K.ISACTIVE='1'
+			)roles
+		)a
+	);
+
+	
+VRULEACTIONDETAIL=(    
+
+			select row_to_json(aa)
+			from
+			(
+			select  array_agg(row_to_json(output)) as "Rule"
+			from 
+			(
+			SELECT     RULEACTION as "AlertAction",AlertActions.STATUSID as "RULEACTIONID",coalesce(T.ACTIONID,0) as "GROUPID"
+			,coalesce(ACTION_CUSTOMIZE_NAME,'') as "GROUPNAME",
+			(
+			select  expression  
+			from Kbkpirule R 
+			where R.KPI_ID=VLatestKPIID 
+			and  R.RULEACTION=rules.RULEACTION and R.isactive='1'
+			limit 1
+			--for xml Path('')
+			)as "Expression",
+			
+						(
+						select  Expression_Service 
+						from Kbkpirule R 
+						where R.KPI_ID=VLatestKPIID and R.isactive='1' and  R.RULEACTION=rules.RULEACTION 
+						--for xml Path('')
+						) as "ServicveExpression"
+						,
+							coalesce( 
+								SUBSTRING
+									(
+								
+										(
+											select string_agg(events,'#CWDB01#')
+											From
+											(
+											 SELECT (cast(EVENT_ID as varchar)) as events
+											 FROM  
+											 (
+											 SELECT  KP.KPI_ID, KP.RULEACTION, PMST.EVENT_ID
+											 FROM KBKPIEVENT KP 
+											 INNER JOIN KbEventsMst PMST ON PMST.EVENT_ID=KP.PROBLEM_ID
+											  ) t2
+											 WHERE Rules.KPI_ID=t2.KPI_ID AND Rules.RULEACTION=t2.RULEACTION 
+											 ORDER BY KPI_ID,RULEACTION
+											 )s
+											 
+										),1,1000
+									),''
+							) AS "PROBLEM_ID"
+	 ,
+	 
+		(   
+
+			select array_to_json(array_agg(row_to_json(irow)))as 	"Row"
+			from
+			(
+				select  * ,
+				
+			
+				(
+					select row_to_json(fuzzy) as "FuzzyLogic"
+					from
+					(
+						select array_to_json(array_agg(row_to_json(rules))) as "Rule"
+						from
+						(
+							select   B.RuleID as RuleID,B.FieldID as FieldID,B.RowIndex as RowIndex,B.Priority as Priority,
+							
+								(
+									select row_to_json(iouput) as "Values"
+									from
+									(
+										select array_to_json(array_agg(row_to_json(ivalue))) as "Input"
+										from
+										(
+										select INPUTVALUE as "Value"
+										from  KBKPIDETAILS A 
+										where A.RULEID=B.RULEID 
+										 and A.KPIID=B.KPIID
+										 )ivalue
+									 )iouput
+								)
+							from KBKPIDETAILS B
+							JOIN KBKPIMST MST ON MST.KPI_ID=B.KPIID
+							where MST.KPI_ID=VLatestKPIID 
+							and A.Operator='Custom Match'
+							GROUP BY B.KPIID,RULEID  ,FIELDID  ,ROWINDEX  ,PRIORITY
+						)rules	
+					)fuzzy	
+				--	for xml raw('Rule'),ROOT('FuzzyLogic')
+				)
+				
+				from 
+				
+				
+				(
+				
+				select  distinct krule.KPIRULE_ID AS KPIRULE_ID
+				,KPI.KPI_ID AS KPI_ID
+				,KPI.SOURCE_ID AS SOURCE_ID
+				,kpi.KPI_NAME AS KPI_NAME
+				,KPI.KPI_DESCRIPTION AS KPI_DESCRIPTION
+				,KPI.KPITYPE AS KPITYPE
+				,Msr.MEASURE_ID AS MEASURE,
+			    KRULE.RULEOPERATOR AS Operator,
+				KRULE.RULEVALUE1 AS Value1,
+				KRULE.RULEVALUE2 AS Value2,
+				KRULE.ROOLBOOLOPERATOR AS  BoolOperator
+				,(SELECT COUNT(Measure_Id) FROM KBKPIMEASURE WHERE Measure_Id=Msr.MEASURE_Id AND KPI_ID=VKPI_ID) as "SELECTEDMEASURE"
+				,Expression EXPRESSION
+				,Expression_Service EXPRESSIONSERVICE
+				,'Measure' "TYPE" 
+	 
+				FROM KBKPIRULE KRULE 
+				LEFT  join KbKPiMst KPI on KPI.KPI_ID=KRULE.KPI_ID 
+				LEFT JOIN KBMeasureMst Msr on Msr.MEASURE_ID=cast(KRULE.RULEMEASURE  as int)
+				--LEFT JOIN KbKPiMeasure Msr on Msr.KPI_ID=KPI.KPI_ID 
+			    where KPI.TEMPLATE_ID=KRULE.TEMPLATE_ID 
+			    and Rules.RULEACTION=KRULE.RULEACTION  ---newely added
+				and KRULE.KPI_ID = VLatestKPIID 
+				--and  KRULE.TEMPLATE_ID=VTEMPLATE_ID 
+				and KRULE.TYPE='Measure'  and Msr.isactive!='0' and KRULE.isactive='1'
+				group by KPI.KPI_ID,KPI.SOURCE_ID,kpi.KPI_NAME,KPI.KPI_DESCRIPTION,KPI.KPITYPE--,KRULE.RuleACTION
+				,KRULE.RULEOPERATOR,KRULE.RULEVALUE1,KRULE.RULEVALUE2,KRULE.ROOLBOOLOPERATOR,Msr.Measure_id ,KRule.KPIRULE_ID,	KRULE.TYPE 
+				 ,Expression ,Expression_Service  
+				
+				UNION   
+				
+				select distinct krule.KPIRULE_ID AS KPIRULE_ID
+				, KPI.KPI_ID as KPI_ID
+				,KPI.SOURCE_ID as SOURCE_ID
+				,kpi.KPI_NAME as KPI_NAME
+				,KPI.KPI_DESCRIPTION as KPI_DESCRIPTION
+				,KPI.KPITYPE as KPITYPE
+				,MSt.MEASURE_ID as  MEASURE, 
+			    
+				KRULE.RULEOPERATOR AS Operator,
+				KRULE.RULEVALUE1 AS Value1,
+				KRULE.RULEVALUE2 AS Value2,
+				KRULE.ROOLBOOLOPERATOR AS  BoolOperator
+				,(SELECT COUNT(Metrics.measure_id) FROM KBKPIMeasure Metrics WHERE Metrics.MEASURE_ID=MST.MEASURE_ID AND KPI_ID=VKPI_ID) as "SELECTEDMEASURE"
+				,Expression EXPRESSION
+				,Expression_Service EXPRESSIONSERVICE
+				,'Metric' "TYPE"
+				FROM KBKPIRULE KRULE 
+				LEFT  join KbKPiMst KPI on KPI.KPI_ID=KRULE.KPI_ID 
+				LEFT join KBMeasureMst MST on MST.MEASURE_ID=cast(KRULE.RULEMEASURE as int) and MST.SOURCE_ID=KPI.SOURCE_ID and MST.TEMPLATE_ID=1
+				where KPI.TEMPLATE_ID=KRULE.TEMPLATE_ID 
+				and Rules.RULEACTION=KRULE.RULEACTION  ---newely added
+				and KRULE.KPI_ID = VLatestKPIID   and KRULE.TYPE='Metric' 
+				--and  KRULE.TEMPLATE_ID=VTEMPLATE_ID
+				and Mst.IsActive='0' and KRULE.isactive='1'
+				group by KPI.KPI_ID,KPI.SOURCE_ID,kpi.KPI_NAME,KPI.KPI_DESCRIPTION,KPI.KPITYPE--,KRULE.RuleACTION
+				,KRULE.RULEOPERATOR,KRULE.RULEVALUE1,KRULE.RULEVALUE2,KRULE.ROOLBOOLOPERATOR,MSt.MEASURE_ID   ,KRule.KPIRULE_ID
+				,Expression,Expression_Service  
+				
+				Union
+
+				select distinct krule.KPIRULE_ID AS KPIRULE_ID
+				, KPI.KPI_ID as KPI_ID
+				,KPI.SOURCE_ID as SOURCE_ID
+				,kpi.KPI_NAME as KPI_NAME
+				,KPI.KPI_DESCRIPTION as KPI_DESCRIPTION
+				,KPI.KPITYPE as KPITYPE
+				,conf.ScreenID as  MEASURE, 
+				KRULE.RULEOPERATOR AS Operator,
+				KRULE.RULEVALUE1 AS Value1,
+				KRULE.RULEVALUE2 AS Value2,
+				KRULE.ROOLBOOLOPERATOR AS  BoolOperator
+				,(SELECT COUNT(Metrics.measure_id) FROM KBKPIMeasure Metrics WHERE Metrics.MEASURE_ID=conf.ScreenID AND KPI_ID=VKPI_ID and metrics.type='Entity') as "SELECTEDMEASURE"
+				,Expression EXPRESSION
+				,Expression_Service EXPRESSIONSERVICE
+				,'Entity' "TYPE"
+				FROM KBKPIRULE KRULE 
+				LEFT  join KbKPiMst KPI on KPI.KPI_ID=KRULE.KPI_ID 
+				Left join  kbentityscreenconfigurationMst conf on cast(krule.rulemeasure as int)=conf.ScreenID
+				Join KBEntityMst EntityMst on  conf.EntityDefID=EntityMst.ENTITYDEF_ID
+				where KPI.TEMPLATE_ID=KRULE.TEMPLATE_ID 
+				and Rules.RULEACTION=KRULE.RULEACTION  ---newely added
+				and KRULE.KPI_ID = VLatestKPIID   
+				--and  KRULE.TEMPLATE_ID=VTEMPLATE_ID
+				and EntityMst.IsActive='1' and KRULE.isactive='1'
+				group by KPI.KPI_ID,KPI.SOURCE_ID,kpi.KPI_NAME,KPI.KPI_DESCRIPTION,KPI.KPITYPE--,KRULE.RuleACTION
+				,KRULE.RULEOPERATOR,KRULE.RULEVALUE1,KRULE.RULEVALUE2,KRULE.ROOLBOOLOPERATOR,conf.ScreenID   ,KRule.KPIRULE_ID
+				,Expression,Expression_Service  
+
+				union
+
+				select distinct krule.KPIRULE_ID AS KPIRULE_ID
+				, KPI.KPI_ID as KPI_ID
+				,KPI.SOURCE_ID as SOURCE_ID
+				,kpi.KPI_NAME as KPI_NAME
+				,KPI.KPI_DESCRIPTION as KPI_DESCRIPTION
+				,KPI.KPITYPE as KPITYPE
+				,conf.RecordID as  MEASURE, 
+				KRULE.RULEOPERATOR AS Operator,
+				KRULE.RULEVALUE1 AS Value1,
+				KRULE.RULEVALUE2 AS Value2,
+				KRULE.ROOLBOOLOPERATOR AS  BoolOperator
+				,(SELECT COUNT(Metrics.measure_id) FROM KBKPIMeasure Metrics WHERE Metrics.MEASURE_ID=conf.RecordID AND KPI_ID=VKPI_ID and metrics.type='Location') "SELECTEDMEASURE"
+				,Expression EXPRESSION
+				,Expression_Service EXPRESSIONSERVICE
+				,'Location' "TYPE"
+				FROM KBKPIRULE KRULE 
+				LEFT  join KbKPiMst KPI on KPI.KPI_ID=KRULE.KPI_ID 
+				Left join  DIM_DIMENSIONATTRIBUTES Conf on cast(KRULE.rulemeasure as int)=Conf.RecordID
+				Join KB_DIM_DIMENSIONMST dims on Conf.DimensionID=dims.ID and dims.ID=2
+				where KPI.TEMPLATE_ID=KRULE.TEMPLATE_ID 
+				and Rules.RULEACTION=KRULE.RULEACTION  ---newely added
+				and KRULE.KPI_ID = VLatestKPIID   
+				--and  KRULE.TEMPLATE_ID=VTEMPLATE_ID
+				 and KRULE.isactive='1'
+				group by KPI.KPI_ID,KPI.SOURCE_ID,kpi.KPI_NAME,KPI.KPI_DESCRIPTION,KPI.KPITYPE--,KRULE.RuleACTION
+				,KRULE.RULEOPERATOR,KRULE.RULEVALUE1,KRULE.RULEVALUE2,KRULE.ROOLBOOLOPERATOR,conf.RecordID   ,KRule.KPIRULE_ID
+				,Expression,Expression_Service  
+				)A
+				
+				order by A.KPIRULE_ID   
+				--for xml raw('Row')
+			) iRow 
+		)
+		
+	 FROM  KBKPIRULE Rules  
+	left Join KBKpiStatus AlertActions on Rules.RULEACTION=Alertactions.STATUS
+	left JOIN KBTEMPLATEGROUPINGMST T on T.GROUPDETAILID=Rules.ACTION_GROUPID
+	where Rules.KPI_ID = VLatestKPIID 
+	Group By RULEACTION, KPI_ID ,AlertActions.STATUSID  ,Alertactions.STATUS ,T.ACTIONID,T.ACTION_CUSTOMIZE_NAME
+	order by Rules.RULEACTION desc
+	) output
+	)aa
+			
+		);
+
+return(
+
+	select row_to_json(a)  as "SOURCEDETAILS"
+	from
+	(
+	select row_to_json(ivalue)  as "SOURCEDETAILS"
+	from
+	(
+	select VSource as "SOURCE",VKpis as "KPI" , VRoles as "ROLEDETAILS", VRULEACTIONDETAIL as "RuleDetails"
+	)ivalue
+	)a
+
+);
+
+end;
+Elseif Lower(VTran)='getindicatorsmasterdata' Then
+begin
+
+ 
+	return(
+	Select row_to_json(final)
+	from
+	(
+	select row_to_json(outputs) as "OUTPUT"
+	from
+	(
+	select "SOURCES", "CORRELATIONS", "Entities","ACTIONDETAIL" , "OPERATORS", "SEVERITYDETAILS", "ALERTNOTIFICATIONTYPES", "KPITYPES","DIMENSIONS"
+	from
+
+		(
+			select row_to_json(sources) as "SOURCES"
+			from
+			(
+				select array_to_json(array_agg(row_to_json(source))) as "SOURCE"
+				from
+				(
+				SELECT SOURCETYPE_ID as SOURCEID,SPOKETYPE,SOURCETYPE_NAME SOURCENAME
+				,( select row_to_json(Metrics) as "Metrics"
+					from
+					(	
+					select array_to_json(array_agg(row_to_json(Metric))) as "Metric"
+					from
+						( 
+							
+							select A.* 
+							from
+							(
+							-- SELECT Metrics.metric_ID "ID"
+-- 									,Case when METRICALIAS='' or METRICALIAS IS NULL Then METRICNAME Else MetricAlias End "Name"
+-- 									,METRICNAME as "METRICNAME" 
+-- 									,METRICDATATYPE "DATATYPE",Metrics.IsPrimaryKey as "ISPRIMARY"
+-- 									,'Metric' as "TYPE"
+-- 							FROM 
+-- 									KBMetricMst Metrics 
+-- 									Join KBMeasureMst MM On Metrics.METRICNAME||'_Measure'=MM.MEASURE_NAME  and Metrics.SOURCE_ID=MM.SOURCE_ID and MM.TEMPLATE_ID=Metrics.TEMPLATE_ID
+-- 							WHERE 
+-- 									stm.SOURCETYPE_ID=Metrics.SOURCE_ID and Metrics.TEMPLATE_ID=1 
+-- 							union all
+							select MEASURE_ID "ID"
+							,Case when METRICALIAS='' or METRICALIAS IS NULL Then METRICNAME Else MetricAlias End "Name"
+							,METRICNAME as "METRICNAME"
+							,Datatypes.Datatypename as "DATATYPE"
+							,'' as "ISPRIMARY"
+							,'Metric' as "TYPE"
+							from kbMeasureMst Measure
+							Join KBMetricMst MM On  MM.METRICNAME||'_Measure'=Measure.MEASURE_NAME  and Measure.SOURCE_ID=MM.SOURCE_ID and Measure.TEMPLATE_ID=MM.TEMPLATE_ID
+							join kbmasterDatatypes Datatypes on Datatypes.DaTaTypeID=Measure.MEASUREUNIT_ID
+							where Measure.SOURCE_ID=stm.SOURCETYPE_ID and MM.TEMPLATE_ID=1 
+							)A
+									
+							--FOR XML Raw('Metric'),Root('Metrics')
+						) AS Metric
+					) as Metrics
+				)
+				FROM KBSourceTypeMst  STM
+				WHERE IsActive='1' and sourcetype_id!=1
+				and exists (Select 1 from users B where STM.CreatedBy=b.userid) 
+				) source
+			)sources
+		) src,
+		(
+			select row_to_json(correlations) as "CORRELATIONS"
+			from
+			(
+				select array_to_json(array_agg(row_to_json(Correlation)))  as "CORRELATION"
+				from
+				(
+					Select Cmst.CORRELATIONID, CORRELATIONNAME 
+						,( 
+							select String_agg(Sourceid,';')
+							from
+							(
+							Select cast(CDetails.SourceID as varchar(30)) as Sourceid
+							From
+							CBCorrelationDetails CDetails 
+							Join KBSourceTypeMst Sources on CDetails.SourceID=Sources.SOURCETYPE_ID
+							where CMst.CorrelationID=CDetails.CorrelationID  
+							Group by CDetails.SourceID
+							)a
+						) SOURCEID
+						from CBCorrelationMst CMst
+					where cmst.IsActive='1' and exists (Select 1 from users B where CMst.CreatedBy=b.userid)
+					Order by CORRELATIONNAME
+				)Correlation
+			)correlations
+		)cor
+		,
+		(
+			select row_to_json(output) as "Entities"
+			from
+			(
+			select array_to_json(array_agg(row_to_json(entities))) as "Entity"
+			from
+			(
+				select B.ENTITY_NAME "Name",B.ENTITYDEF_ID ID,  
+					(
+						select string_Agg(sources,';')
+						from
+						(
+							Select cast(DD.SOURCETYPEID as varchar(30)) sources
+							from KBSpokeConfigurations DD
+							where DD.EntitydefID=B.entitydef_id
+							Group by DD.SOURCETYPEID
+						)src
+					)SOURCEID
+					,	
+
+					(
+						select row_to_json(entatt) as "EntityAttributeDetails"
+						from
+						(
+							select array_to_json(array_agg(row_to_json(attribs))) as "EntityAttribute" 
+							from
+							(
+
+								select distinct A.* 
+								from
+								(
+									select distinct 
+									Conf.ScreenID "ID"
+									,conf.ControlTitle "Name"
+									,Case   
+									when conf.ControlDataType ='DateTime' Then 'Timestamp'
+									else 'varchar(255)' End "DATATYPE"
+									from kbentityscreenconfigurationMst conf
+									Join KBEntityMst EntityMst on  conf.EntityDefID=EntityMst.ENTITYDEF_ID
+									Left JOIN kbMasterDataTypes MD on MD.DataTypeAlias=conf.ControlDataType
+									where  EntityMst.ENTITYDEF_ID=B.ENTITYDEF_ID and conf.ObjectType='EntityDefinition'
+
+									union all
+									select distinct 
+									Conf.ScreenID "ID"
+									,conf.ControlTitle "Name"
+									,Case   
+									when conf.ControlDataType ='DateTime' Then 'Timestamp'
+									else 'varchar(255)' End DATATYPE
+									from kbentityscreenconfigurationMst conf
+									Join KBEntityMst EntityMst on  conf.EntityDefID=EntityMst.ENTITYDEF_ID
+									Left JOIN kbMasterDataTypes MD on MD.DataTypeAlias=conf.ControlDataType
+									where  EntityMst.ENTITYDEF_ID=B.ENTITYDEF_ID and conf.ObjectType='Branch'
+								)A
+
+							--for xml RAW('EntityAttribute'),ROOT('EntityAttributeDetails')
+							) as attribs								
+						)entatt
+					)ents
+			
+			from 
+			kbentitymst B  
+			where IsAcTive='1' and exists (Select 1 from users BB where B.CreatedBy=BB.userid) and entitydef_id!=1
+			Order by Entity_name
+			)entities
+			)output
+			
+
+		)Ent
+
+		,(
+
+			select row_to_json(B) as "ACTIONDETAIL"
+			from
+			(
+				Select array_to_json(array_agg(row_to_json(A))) as "ACTION"
+				from
+				(
+				Select   ACTIONID as "ID",   ACTIONNAME as "ACTIONNAME"
+				from KBKPIACTIONSMST MST 
+			 
+				) A
+			)B	
+		)actions
+		,(
+
+			select row_to_json(B) as "OPERATORS"
+			from
+			(
+				Select array_to_json(array_agg(row_to_json(A))) as "OPERATOR"
+				from
+				(
+				select RuleID "RuleID",RuleTitle "Title",NumberOfControls "NumberOfControls",ControlType "ControlType"
+				,ToolTip  "ToolTip",Coalesce(Separator,'') "Separator",RuleFor "DType"
+				, Case when RuleTitle ='Range' Then 1  When RuleTitle ='Replace' Then 1 Else 0 End  "HasSecondValue"
+				,ParameterType "ParameterType",ParameterCount "ParameterCount"
+				from CBFuzzyLogicRulesMst
+			 	) A
+			)B	
+		)operators
+		,(
+
+			select row_to_json(B) as "SEVERITYDETAILS"
+			from
+			(
+				Select array_to_json(array_agg(row_to_json(A))) as "SEVERITY"
+				from
+				(
+				Select SeverityID "SEVERITYID",SevirityName "SEVERITYNAME"
+				from KBSeverityMST
+			 	) A
+			)B	
+		)Severity
+		,(
+
+			select row_to_json(B) as "ALERTNOTIFICATIONTYPES"
+			from
+			(
+				Select array_to_json(array_agg(row_to_json(A))) as "ALERTNOTIFICATION"
+				from
+				(
+				Select TypeID "TYPEID",AlertNotficationName "ALERTNOTFICATIONNAME"
+				from KBAlertNotificationsTypeMst
+			 	) A
+			)B	
+		)ALERTNOTIF
+		,(
+
+			select row_to_json(B) as "KPITYPES"
+			from
+			(
+				Select array_to_json(array_agg(row_to_json(A))) as "KPITYPE"
+				from
+				(
+				Select KPITYPEID as "KPITYPEID",coalesce(TYPEALIAS,KPITYPENAME) as "KPITYPENAME" from kbKpitypemst 
+			 	) A
+			)B	
+		)KPITYP
+		,(
+
+			select row_to_json(B) as "DIMENSIONS"
+			from
+			(
+				Select array_to_json(array_agg(row_to_json(A))) as "DIMENSION"
+				from
+				(
+				select ID as "ID", DIMENSIONNAME "DIMENSIONNAME"
+				,
+				(
+					Select array_to_json(array_agg(row_to_json(dimatt))) as "ATTRIBUTES"
+					from
+					(
+						select AttributeName ,RecordID MetricID,DataType
+						from DIM_DIMENSIONATTRIBUTES B
+						where A.ID=B.DimensionID
+						--For xml RAW('ATTRIBUTES')
+					) dimatt
+				)
+				from KB_DIM_DIMENSIONMST A
+			 	) A
+			)B	
+		)dims
+	
+		) outputs
+		
+		) final
+		)
+		;
+
+end;
+Elseif Lower(VTran)='update' then
+begin
+
+	VOriginalID:=VKPI_ID;
+			 
+	Select max(KPI_ID) into VLatestKPIID 
+	from KBKpiMst 
+	where ISACTIVE='1' and Coalesce(OriginalID,kpi_id)=VOriginalID;
+
+IF (select left(cast(ivalue->'KPI'->'RuleDetails'->'Rule' as text),1) as Rules	from temps limit 1)='[' then
+begin							
+	insert into TEMPKPI(SOURCEID,Ruleaction,SOURCE_NAME,KPI_NAME,KPI_DESCRIPTION,TEMPLATE_ID,kpiroles,KpiTypeID,MEASURE,Expression,Expression_Service,HistoryExpression,GroupId,GroupName)
+	select VSourcetypeid,Alertaction,VSourceName,VKPINAME,VKPI_DESCRIPTION,  VTEMPLATE_ID,VKPIROLES, VKPITypeID,VMEASURENAMES, Expression, ServiceExpression,HistoryExpression, GroupId,GroupName
+	from
+	(
+
+		select Rules->>'AlertActionID' as Alertactionid
+		,Rules->>'AlertAction' as Alertaction
+		,cast(Rules->>'GroupId' as int) as GroupId
+		,Rules->>'GroupName' as GroupName
+		,Rules->'Expression' as Expression
+		,Rules->>'HistoryExpression' as HistoryExpression
+		,Rules->>'ServiceExpression' as ServiceExpression
+		from
+		(
+			select json_array_elements(Rules) as Rules
+			from
+			(
+				select ivalue->'KPI'->'RuleDetails'->'Rule' as Rules
+				from
+				temps
+				limit 1
+			)a
+		) RuleDetails
+			
+	) inputs
+	;
+End;
+else
+begin
+	insert into TEMPKPI(SOURCEID,Ruleaction,SOURCE_NAME,KPI_NAME,KPI_DESCRIPTION,TEMPLATE_ID,kpiroles,KpiTypeID,MEASURE,Expression,Expression_Service,HistoryExpression,GroupId,GroupName)
+	select VSourcetypeid,Alertaction,VSourceName,VKPINAME,VKPI_DESCRIPTION,  VTEMPLATE_ID,VKPIROLES, VKPITypeID,VMEASURENAMES, Expression, ServiceExpression,HistoryExpression, GroupId,GroupName
+	from
+	(
+
+		select 
+		ivalue->'KPI'->'RuleDetails'->'Rule'->>'AlertActionID' as Alertactionid
+		,ivalue->'KPI'->'RuleDetails'->'Rule'->>'AlertAction' as Alertaction
+		,cast(ivalue->'KPI'->'RuleDetails'->'Rule'->>'GroupId' as int) as GroupId
+		,ivalue->'KPI'->'RuleDetails'->'Rule'->>'GroupName' as GroupName
+		,ivalue->'KPI'->'RuleDetails'->'Rule'->'Expression' as Expression
+		,ivalue->'KPI'->'RuleDetails'->'Rule'->>'HistoryExpression' as HistoryExpression
+		,ivalue->'KPI'->'RuleDetails'->'Rule'->>'ServiceExpression' as ServiceExpression
+		from
+		temps
+		limit 1
+	) inputs
+	;
+
+end;
+end if;
+
+/* splitting the metrics selected*/	
+	INSERT INTO TEMPMETRICSTABLE (METRICID)
+	SELECT cast(regexp_split_to_table(VMEASURENAMES, '#CWDB01#') as int) ;
+
+	Update TEMPMETRICSTABLE 
+	set MetricName=Mst.MetricName
+	from 
+	kbmeasuremst Measure 
+	Join 
+	KbMetricMst Mst on Measure.measure_name=mst.metricname||'_Measure' and Measure.SOURCE_ID=mst.SOURCE_ID and Measure.TEMPLATE_ID=mst.TEMPLATE_ID
+	where  Measure.measure_id=TEMPMETRICSTABLE.METRICID 
+;
+
+	/* Inserting into kbkpistatus*/
+		
+	
+	--Declare VLatestActionID int;
+		
+	--VLatestActionID:=(Select MAX(STATUSID) From KBKpiStatus);
+
+IF (select left(cast(ivalue->'KPI'->'AlertActions'->'Action' as text),1) as Rules from temps limit 1)='[' then
+begin							
+	Insert into AlertAction(ActionID,ActionName,newlyadded)
+	Select ROW_NUMBER() Over(Order by Actionname)+coalesce(VLatestActionID,0) RecordID,Actionname,cast(1 as bit) NewlyAdded
+	From
+	(
+		
+		Select  ActionNames->>'Name' as Actionname
+		From
+		(
+			select json_array_elements(ANames) as ActionNames
+			from
+			(
+				select ivalue->'KPI'->'AlertActions'->'Action' as ANames
+				from
+				temps
+				limit 1
+			)aa
+		) A 
+		where not exists (Select 1 from KBKpiStatus KStatus where ActionNames->>'Name'=KStatus.STATUS)
+	)A;
+End;
+else
+begin
+	Insert into AlertAction(ActionID,ActionName,newlyadded)
+	Select ROW_NUMBER() Over(Order by Actionname)+coalesce(VLatestActionID,0) RecordID,Actionname,cast(1 as bit) NewlyAdded
+	from
+	(
+
+		select 
+		ivalue->'KPI'->'AlertActions'->'Action'->>'Name' as Actionname
+		from
+		temps
+		limit 1
+	) inputs
+	;
+
+end;
+end if;
+
+	
+		
+	Insert into KBKpiStatus(STATUS,CreatedBy,CreatedDate,ModifiedBy)
+	Select 
+	ActionName
+	,Vcreated_by
+	,VActiondate
+	,Vcreated_by
+	from  
+	AlertAction A 
+	where not exists (Select 1 from KBKpiStatus KStatus where A.Actionname=KStatus.STATUS)
+	;
+
+	IF (Lower(VTRAN) = 'update') and VStoreHistory='0' then
+	BEGIN
+
+ 
+		Update KBTEMPLATEGROUPINGMST set 
+				ACTION_CUSTOMIZE_NAME=temps.GroupName,ACTIONID=temps.GroupId 
+		from 
+		TEMPKPI temps 
+		where temps.TEMPLATE_ID=KBTEMPLATEGROUPINGMST.TEMPLATEID and KBTEMPLATEGROUPINGMST.ACTIONID=temps.GroupId;
+		
+		INSERT INTO KBTEMPLATEGROUPINGMST(TEMPLATEID,ACTIONID,ACTION_CUSTOMIZE_NAME,CREATEDBY)
+		select TEMPLATE_ID,GroupId,GroupName,VCreated_by 
+		from TEMPKPI  A
+		where GroupId IS NOT NULL and GroupName IS NOT NULL 
+		and not exists (Select 1 from KBTEMPLATEGROUPINGMST TG where  A.TEMPLATE_ID=TG.TEMPLATEID and A.GroupId=TG.actionid);
+		 
+		Update kbkpirule
+			Set action_groupid=GROUPDETAILID
+		from 
+		KBTEMPLATEGROUPINGMST mst
+		join TEMPKPI temps on temps.TEMPLATE_ID=Mst.TEMPLATEID and Mst.ACTIONID=temps.GroupId
+		Join kbkpimst kpis on temps.kpi_id=coalesce(kpis.originalid,kpis.kpi_id)
+		where kpis.kpi_id=kbkpirule.kpi_id  and Temps.ruleaction=kbkpirule.ruleaction
+			and temps.TEMPLATE_ID=mst.TEMPLATEID and mst.ACTIONID=temps.GroupId
+		;
+		
+		
+		VkpidescCountUpdate:=(select count(*) from TEMPKPI where KPI_DESCRIPTION is not null and KPI_DESCRIPTION<>' ' );
+		 
+		if VkpidescCountUpdate=0 then
+		begin
+			UPDATE KBKPIMST SET 
+						KPI_DESCRIPTION = (SELECT max(KPI_DESCRIPTION) FROM TEMPKPI),
+						MODIFIEDBY = (SELECT LASTMODIFIEDBY FROM TEMPKPI limit 1),
+						MODIFIEDDATE = VActiondate,
+						TEMPLATE_ID = (SELECT TEMPLATE_ID FROM TEMPKPI limit 1)
+			WHERE KPI_ID = VKPI_ID AND TEMPLATE_ID = VTEMPLATE_ID;
+		end;
+		else 
+		begin
+			UPDATE KBKPIMST SET 
+						KPI_DESCRIPTION = (SELECT KPI_DESCRIPTION FROM TEMPKPI where KPI_DESCRIPTION is not null and KPI_DESCRIPTION<>' ' limit 1),
+						MODIFIEDBY = (SELECT LASTMODIFIEDBY FROM TEMPKPI limit 1),
+						MODIFIEDDATE = VActiondate,
+						TEMPLATE_ID = (SELECT TEMPLATE_ID FROM TEMPKPI limit 1)
+			WHERE KPI_ID = VKPI_ID AND TEMPLATE_ID = VTEMPLATE_ID;
+		end;
+		End if;
+
+	END;
+	ElseIf (Lower(VTRAN) = 'update') and VStoreHistory='1' then
+	BEGIN
+	 	Update KBKpiMst set ISACTIVE='0', ToDate=VActiondate ,LASTMODIFIEDBY=VCreated_by
+		where KPI_ID=VOriginalID and ISACTIVE='1';
+		 
+		Update KBKpiMst set ISACTIVE='0', ToDate=VActiondate ,LASTMODIFIEDBY=Vcreated_by,OriginalId=VOriginalID
+		where KPI_ID=VLatestKPIID and ISACTIVE='1';
+		 
+		Update KBKPIDETAILS Set Isactive='0' ,ModifiedBy=VCreated_by,modifieddate=VACtiondate
+		where KPIID=VLatestKPIID;
+		 
+		Update KBKpiRule Set Isactive='0',modifieddate=VActiondate,modifiedby=VCreated_by where KPI_ID=VLatestKPIID;
+		 
+		if(select count(1) from KBTEMPLATEGROUPINGMST Mst join TEMPKPI T on T.GroupId=Mst.ACTIONID  
+		and T.TEMPLATE_ID=Mst.TEMPLATEID)>0 then
+		begin
+			UPdate KBTEMPLATEGROUPINGMST set ACTION_CUSTOMIZE_NAME=temps.GroupName,ACTIONID=temps.GroupId
+			from 
+			TEMPKPI temps 
+			where temps.TEMPLATE_ID=KBTEMPLATEGROUPINGMST.TEMPLATEID and KBTEMPLATEGROUPINGMST.ACTIONID=temps.GroupId;
+		
+		end;
+		Begin
+			INSERT INTO KBTEMPLATEGROUPINGMST(TEMPLATEID,ACTIONID,ACTION_CUSTOMIZE_NAME,CREATEDBY)
+			select TEMPLATE_ID,GroupId,GroupName,VCreated_by
+			from TEMPKPI  A
+			where GroupId IS NOT NULL and GroupName IS NOT NULL
+			and not exists (Select 1 from KBTEMPLATEGROUPINGMST TG where  A.TEMPLATE_ID=TG.TEMPLATEID and A.GroupId=TG.actionid);
+		 END;
+		 End if;
+	 
+		INSERT INTO KBKPIMST
+		        ( 
+		          SOURCE_ID ,
+		          KPI_NAME ,
+		          KPI_DESCRIPTION ,
+		          MODIFIEDBY ,
+		          MODIFIEDDATE ,
+		          CREATEDBY ,
+		          CREATEDDATE,
+		          TEMPLATE_ID,
+		          CREATEDDATE_ID,
+		          LASTMODIFIEDDATE_ID
+		          ,KPITYPE
+		          ,Fromdate
+		          ,Originalid
+			  ,IsMultiDataSource
+			  ,CorrelationID
+		        )	
+		SELECT VSourcetypeid,VKPINAME,VKPI_DESCRIPTION,Vcreated_by,VActiondate,Vcreated_by,VActiondate,VTEMPLATE_ID,NULL GETDATEID,NULL GETDATEID,VKPITypeID
+		,VActiondate,VOriginalID,VISMULTIDATASOURCE,VCORRELATION_ID
+		;
+
+		VKPI_ID:= ( SELECT currval(pg_get_serial_sequence('KBKPIMST','kpi_id')));
+	END;
+	End if;  
+	
+	IF (Lower(VTRAN)='update') Then 
+	BEGIN
+
+		IF (Lower(VTRAN)='update') and VStoreHistory='1' Then
+		Begin  
+	  
+		Update KBKPIMEASURE set ISACTIVE='0'  
+			WHERE KPI_ID in ( select kpi_id from kbkpimst where coalesce(originalid,kpi_id)=coalesce(VOriginalID,VLatestKPIID) );
+		End;
+		End if;
+		
+		INSERT INTO TEMPMETRICSTABLE (METRICID)
+		SELECT cast(regexp_split_to_table(VMEASURENAMES, '#CWDB01#') as int) ;
+
+		Update TEMPMETRICSTABLE 
+		set MetricName=Mst.MetricName
+		from 
+		kbmeasuremst Measure 
+		Join 
+		KbMetricMst Mst on Measure.measure_name=mst.metricname||'_Measure' and Measure.SOURCE_ID=mst.SOURCE_ID and Measure.TEMPLATE_ID=mst.TEMPLATE_ID
+		where  Measure.measure_id=TEMPMETRICSTABLE.METRICID 
+		;
+
+		INSERT INTO TEMPENTITYMetricTABLE(ID) 
+		select cast((case when id='' then '0' else id end) as int)
+		from
+		(
+		SELECT regexp_split_to_table(VEntityMETRIC, '#CWDB01#')  as id
+		)a;
+		
+		INSERT INTO TEMPlocationMetricTABLE(ID) 
+		select cast((case when id='' then '0' else id end)  as int)
+		from
+		(
+		SELECT regexp_split_to_table(VlocationMETRIC, '#CWDB01#') as id
+		)a;	
+	 
+		Update KBMeasureMst Set isActive=1
+		From
+		TEMPMETRICSTABLE TempMeasures 
+		where TempMeasures.metricid=KBMeasureMst.Measure_ID  and KBMeasureMst.TEMPLATE_ID=VTEMPLATE_ID;
+
+		
+		If(Lower(VTRAN)='update' and VStoreHistory='1') then
+		Begin
+			
+		/* Inserting the Entity and location Attributes itno kbkpimeasure table */
+		insert into KBKPIMEASURE(KPI_ID ,  MEASURE_ID ,CREATEDBY ,	  ModifiedBy,  TEMPLATE_ID,  "type"  ,CREATEDDATE  ,ModifiedDate)
+		select VKPI_ID , A.ID,VCreated_by,VCreated_by,VTEMPLATE_ID,A.MType,Vactiondate,Vactiondate
+		From
+		TEMPENTITYMetricTABLE A
+		where id!=0
+		union 
+		select VKPI_ID , A.ID,VCreated_by,VCreated_by,1 TEMPLATE_ID,A.MType,Vactiondate,Vactiondate
+		From
+		TEMPENTITYMetricTABLE A
+		where id!=0
+		Union
+		select VKPI_ID , A.ID,VCreated_by,VCreated_by,VTEMPLATE_ID,A.MType,Vactiondate,Vactiondate
+		From
+		TEMPlocationMetricTABLE A
+		where id!=0
+		union 
+		select VKPI_ID , A.ID,VCreated_by,VCreated_by,1 TEMPLATE_ID,A.MType,Vactiondate,Vactiondate
+		From
+		TEMPLocationMetricTABLE A
+		where id!=0;
+		 
+		End;
+
+		INSERT INTO KBKPIMEASURE
+					( 
+					  KPI_ID ,
+					  MEASURE_ID ,
+					  CREATEDBY ,
+					  ModifiedBy,
+					  --CREATEDDATE,
+					  TEMPLATE_ID,
+					  "type"
+					  ,CREATEDDATE
+					  ,ModifiedDate
+					  
+					)
+			select Vkpi_id, measures.measure_id, VCreated_by, VCreated_by, VTemplate_id, 'Measure', VActiondate, VActiondate
+			From
+			kbmeasuremst measures
+			join TEMPMETRICSTABLE TempMeasures on TempMeasures.metricid=measures.Measure_id and measures.TEMPLATE_ID=VTEMPLATE_ID;
+		End if;
+------ INSERTING MEASURES IN KBKPIMEASURE END
+
+----------------------- INSERTING METRICS FOR KPI:START------------------------------
+	
+	If Lower(VTRAN)='update' and VStoreHistory='1' Then
+	Begin 
+		UPDATE KBKPIRULE SET ISACTIVE='0' ,ModifiedBy=VCreated_by,modifieddate=VActiondate
+		WHERE KPI_ID in ( select kpi_id from kbkpimst where coalesce(originalid,kpi_id)=coalesce(VOriginalID,VLatestKPIID) );
+	End;
+	End if;
+
+	If (Lower(VTRAN)='update' and VStoreHistory='1') Then
+	Begin
+		INSERT INTO KBKPIRULE
+		( 
+		 KPI_ID,RULEACTION,RULEMEASURE,RULEOPERATOR,RULEVALUE1,RULEVALUE2,ROOLBOOLOPERATOR,CREATEDBY,ModifiedBy,TEMPLATE_ID,"type"
+		 ,Expression,Expression_Service,ACTION_GROUPID,CREATEDDATE,ModifiedDate,HistoryExpression
+		)
+		Select  KPIID,RULEACTION,RULEMEASURE,RULEOPERATOR,RULEVALUE1,RULEVALUE2,ROOLBOOLOPERATOR,CREATEDBY,ModifiedBy,TemplateID,"type"
+		,Expression,Expression_Service,GROUPDETAILID,VActiondate,VActiondate,HistoryExpression
+		From
+		( 
+		
+		Select AA.KPIID,AA.RULEACTION,AA.RULEMEASURE,AA.RULEOPERATOR,AA.RULEVALUE1,AA.RULEVALUE2,AA.ROOLBOOLOPERATOR,AA.CREATEDBY,AA.ModifiedBy
+		          ,AA.TemplateID,AA.GetDateID,AA."type",RecordID,Expression,Expression_Service,GROUPDETAILID,HistoryExpression
+		from 
+		( 
+		SELECT	 
+		          VKPI_ID KPIID
+		          ,RULEACTION 
+		          ,NULL RULEMEASURE
+		          --,MEasures.MEASURE_ID RULEMEASURE 
+		          ,NULL RULEOPERATOR 
+		          ,NULL RULEVALUE1 
+		          ,NULL RULEVALUE2 
+		          ,NULL ROOLBOOLOPERATOR 
+		          ,VCreated_by Createdby
+		          ,VCreated_by ModifiedBy --1
+		          ,VTEMPLATE_ID TemplateID
+		          ,NULL   GetDateID 
+		          ,NULL "type"
+			, RecordID
+			,Expression
+			,Expression_Service
+			,MST.GROUPDETAILID
+			,HistoryExpression
+		FROM TEMPKPI  Temps
+		LEFT JOIN KBTEMPLATEGROUPINGMST MST ON MST.ACTIONID=Temps.GroupId  and temps.TEMPLATE_ID=mst.TEMPLATEID
+ 
+	 	) AA
+			
+		)	A
+		where not exists(select 1 from KBKPIRULE rules where A.KPIID=rules.kpi_id and a.ruleaction=rules.ruleaction)
+		Order By RecordID;
+ 	End;
+	End if;	
+		
+
+END;
+End if;
+
+return(	
+
+			select row_to_json(roots)
+			from
+			(
+			select row_to_json(aa)  
+			From
+			(
+			 select	
+				(
+				select row_to_json(finaloutput) as "ROOT"
+				from
+				(
+					select row_to_json(kpis) as "KPI"
+					from
+					(
+							select row_to_json(output) as "Rule"
+							from
+							(
+							select array_to_json(array_agg(row_to_json(a))) "Row"
+							from
+							(
+								SELECT	
+								SOURCEID 		"ID"
+								,temps.SOURCE_NAME	"SOURCE_NAME"
+								,KPI_NAME		"KPI_NAME" 
+								,KPI_DESCRIPTION	"KPI_DESCRIPTION"	 
+								,temps.SOURCE_NAME	"SOURCENAME" 
+								,VMEASURENAMES		"MEASURE" 
+								,VMETRIC		"METRICS" 
+								,RULEACTION		"RULEACTION" 
+								,NULL			"CREATEDBY"
+								,KPIROLES		"KPIROLES" 
+								,KPI_ID			"KPI_ID"
+								,VSOURCETYPEID		"SOURCETYPE_ID" 
+								,TEMPLATE_ID		"TEMPLATE_ID"	 
+								,VKPI_ID		"ORIGINALKPIID"
+								,VKPI_ID		"LATESTKPIID"
+								,VKPI_ID 		"KPIID"
+								,Expression		"Expression"
+								,Expression_Service  	"ExpressionService"
+								,VStoreHistory		"STOREHISTORY"
+								,KpiTypeID		"KpiType"	
+								,Mst.GROUPDETAILID	"groupdetailid"	
+								,Temps.GroupId		"groupid"	
+								,Temps.Groupname	"groupname"	
+								,VCreated_by		"loginid"	
+								,VCORRELATION_ID	"CORRELATIONID"	
+								,VISMULTIDATASOURCE	"ISMULTIDATASOURCE"
+								FROM TEMPKPI temps
+								LEFT JOIN KBTEMPLATEGROUPINGMST MST ON MST.ACTIONID=Temps.GroupId  and temps.TEMPLATE_ID=mst.TEMPLATEID
+							)a
+							)output
+						)kpis
+					)finaloutput
+				),
+				(	
+
+					select row_to_json(Alerts) as "ALERACTIONDETAIL"
+					From
+					(
+					select array_to_json(array_agg(row_to_json(actions))) as "ALERACTION"
+					from
+					(
+					Select STATUSID ID, STATUS STATUSNAME,coalesce(AA.NewlyAdded,'0') NewlyAdded 
+					from KBKpiStatus KStatus
+					Left Outer Join AlertAction AA On KStatus.STATUSID=AA.ActionID
+					)actions
+					) as Alerts
+					--where exists(Select 1 from Vusers B where KStatus.createdby= B.userid)
+					--FOR XML RAW('ALERACTION'), ROOT('ALERACTIONDETAIL')
+				)
+				,(
+					select row_to_json(Grp) as "grouping"
+					from
+					(
+						select array_to_json(array_agg(row_to_json(groups))) as "group"
+						from
+						(
+						select TEMPLATE_ID templateid,GroupId groupid,GroupName groupname,VCreated_by loginid from TEMPKPI  
+						)groups
+					)Grp
+				)
+				)aa
+
+				)roots		
+
+);
+
+end;
+Elseif Lower(Vtran)='getentitesbykpiid' then
+begin
+
+	select createdby into Vcreated_by from kbkpimst where coalesce(originalid,kpi_id)=Vkpi_id and isactive=1;
+	
+	insert into templabels(id,ivalue)
+	select 1, 'source'
+	union
+	select 2, 'metric'
+	union
+	select 3, 'entity'
+	union
+	select 4, 'attribute'
+	;
+
+	If coalesce(VRequestfrom,2)=2 then 
+		VRequestfrom:=1;
+	end if;
+
+	If VRequestfrom=1 then
+	begin
+		insert into tempdata(kpiruleid,expression,operators,suboperator, ivalue,value2) 
+			select kpirule_id, meas->>'expression' expression,iOperator,meas->>'operators' suboperator,meas->>'value1',meas->>'value2'
+			from
+			(
+				select json_array_elements(measures) meas, case when lower(iOperator)='any' then 'OR' when lower(iOperator)='all' then 'AND' else iOperator end ioperator,kpirule_id
+				from
+				(
+					select cast(expression as json)->'ifcondition'->'conditions'-> 'measure' measures
+					, cast(expression as json)->'ifcondition'->>'logical_operator' iOperator, b.kpirule_id  
+					from
+					kbkpimst A
+					Join kbkpirule b on A.kpi_id=B.kpi_id
+					where coalesce(A.originalid ,A.kpi_id)=VKPI_ID and b.isactive=1
+					
+				)inp
+			)measure	
+			;
+
+		
+	end;
+	else
+	begin
+	--&lt;>
+
+		Insert into expressiondata(kpiruleid, expression,sourcename,isarray)
+		select b.kpirule_id  , cast(expression as json) expression,(select sourcetype_name from kbsourcetypemst srces where srces.sourcetype_id=a.source_id)
+		, case when left(cast(cast(expression as json)-> 'IFCondtion'->'Condtions'-> 'Measure' as text),1)='[' then 1 else 0 end isarray
+		from
+		kbkpimst A
+		Join kbkpirule b on A.kpi_id=B.kpi_id
+		where coalesce(A.originalid ,A.kpi_id)=VKPI_ID and b.isactive=1;
+
+	 	
+		insert into tempdata(kpiruleid, expression,operators,suboperator, ivalue,value2) 
+		select kpiruleid,sourcename||'.'||cast(meas->>'Measure' as varchar(500)) expression,iOperator,meas->>'Operator' suboperator,meas->>'Value1',meas->>'Value2'
+		from
+		(
+			select kpiruleid,sourcename, case when lower(iOperator)='any' then 'OR' when lower(iOperator)='all' then 'AND' end ioperator, json_array_elements(measures) meas
+			from
+			(
+
+				select kpiruleid,sourcename, expression -> 'IFCondtion'->'Condtions'-> 'Measure' measures, expression -> 'IFCondtion'->>'Operator' iOperator
+				from expressiondata 
+				where isarray=1
+				
+			)inp
+		)measure	
+		;
+		 
+
+		insert into tempdata(kpiruleid,expression,operators,suboperator, ivalue,value2) 
+		select kpiruleid, expression, case when lower(iOperator)='any' then 'OR' when lower(iOperator)='all' then 'AND' end ioperator
+		,suboperator
+		, Value1, Value2
+		from
+		(
+			select  kpiruleid, sourcename||'.'||cast(expression->'IFCondtion'->'Condtions'-> 'Measure' ->>'Measure' as varchar(500)) expression
+			,expression->'IFCondtion'->>'Operator' iOperator
+			,expression->'IFCondtion'->'Condtions'-> 'Measure'->>'Value1' Value1
+			,expression->'IFCondtion'->'Condtions'-> 'Measure'->>'Value2'  Value2
+			,expression->'IFCondtion'->'Condtions'-> 'Measure'->>'Operator' suboperator
+			from
+			expressiondata 
+			where isarray=0
+		) AA	
+		
+		;
+ 
+		 
+	end;
+	end if;
+
+	Insert into kpirules(kpiruleid)
+	select distinct kpiruleid
+	from
+	tempdata;
+	
+	insert into parseddata(kpiruleid,expressionid,ivalue)
+	Select  kpiruleid,id expressionid, regexp_split_to_table(replace(replace(replace(replace(replace(expression,'$source.',''),'$',''),'.','#flo#'),'{',''),'}',''),'#flo#') ivalue
+	from
+	tempdata;
+
+	Update parseddata
+	set id= A.serial
+	from
+	(
+		select row_number() over(partition by expressionid ) serial, recordid
+		from 
+		parseddata
+	)A
+	where parseddata.recordid=A.recordid
+	;
+
+	Update parseddata set ilabel= A.ivalue
+	from
+	templabels A
+	where parseddata.id=A.id;
+
+--return(select array_to_json(array_Agg(row_to_json(a)))  from(select * from kpirules)a);
+
+	If Exists(select 1 from parseddata where lower(ilabel)='metric') then
+	begin
+
+		delete from kbentitykpis where kpi_id=Vkpi_id;
+		
+		Update	parseddata set isidentifier=isentityidentifier,entitydefid=metrics.entitydefid,entityattribute=metrics.entityattribute
+		from 
+		(
+			select srces.sourcetype_id, expressionid
+			from parseddata source1
+			join kbsourcetypemst srces on lower(source1.ivalue)=lower(srces.sourcetype_name)
+			where 
+			lower(source1.ilabel)='source' and coalesce(masterspokeid,0)=0
+		) src 
+		Join kbspokeconfigurations metrics on src.sourcetype_id=metrics.sourcetypeid
+		where  lower(metrics.metricname)=Lower(parseddata.ivalue) and  parseddata.expressionid=src.expressionid and
+		lower(parseddata.ilabel)='metric' ;
+
+--Return(select array_to_json(array_agg(row_to_json(a))) from (select * from parseddata)a);
+ 
+		If Exists(select 1 from  parseddata where lower(ilabel)='metric' and isidentifier='1')  then
+		Begin
+			select entitydefid into Ventitydefid
+			from  parseddata A
+			Join tempdata B on A.expressionid=B.id and A.kpiruleid=B.kpiruleid
+			where lower(ilabel)='metric' and isidentifier='1' 
+			limit 1;
+			 
+			VEntitytablename:=(select entitytablename from kbentitymst where entitydef_id=Ventitydefid);
+
+			while exists(select 1 from kpirules) loop
+			
+				select kpiruleid into Vkpiruleid from kpirules limit 1;
+
+				select entitydefid,B.operators,B.suboperator into Ventitydefid,VOperators,Vsuboperator
+				from  parseddata A
+				Join tempdata B on A.expressionid=B.id and A.kpiruleid=B.kpiruleid
+				where lower(ilabel)='metric' and isidentifier='1' and B.kpiruleid=Vkpiruleid
+				limit 1;
+	
+				Vsuboperator:=replace(replace(Vsuboperator,'&lt;>','!='),'<>','!=');
+					
+				If (select count(1) from parseddata where lower(ilabel)='metric' and isidentifier='1' and kpiruleid=Vkpiruleid)>1 then
+				Begin
+
+					VWhereClause:=coalesce(VWhereClause,'')||
+						(
+							select String_agg(cols,VOperators)
+							from
+							(
+								Select
+								case 	when Vsuboperator='==' then
+										' lower(cast("'|| A.Entityattribute ||'" as varchar(1000))) = '''|| B.ivalue ||''' '
+									when lower(Vsuboperator)='contains' then
+										--' Lower("'|| A.Entityattribute ||'") Like Lower('''|| B.ivalue ||''') ' cols
+										' lower(cast("'|| A.Entityattribute ||'" as varchar(1000))) like (''%'|| B.ivalue ||'%'') '
+									When Vsuboperator='!=' then
+										' lower(cast("'|| A.Entityattribute ||'" as varchar(1000))) != '''|| B.ivalue ||''' '	
+								end		
+								from  parseddata A
+								Join (select id,kpiruleid, lower(ivalue) ivalue from  tempdata ) B on A.expressionid=B.id and A.kpiruleid=B.kpiruleid
+								where lower(ilabel)='metric' and isidentifier='1' and B.kpiruleid=Vkpiruleid
+							)inp
+						);
+
+				End;
+				Else
+				Begin
+				
+					VWhereClause:=(
+						Select
+						case 	when Vsuboperator='==' then
+								' lower(cast("'|| A.Entityattribute ||'" as varchar(1000))) = '''|| B.ivalue ||''' '
+							when lower(Vsuboperator)='contains' then
+								--' Lower("'|| A.Entityattribute ||'") Like Lower('''|| B.ivalue ||''') ' cols
+								' lower(cast("'|| A.Entityattribute ||'" as varchar(1000))) like (''%'|| B.ivalue ||'%'') '
+							When Vsuboperator='!=' then
+								' lower(cast("'|| A.Entityattribute ||'" as varchar(1000))) != '''|| B.ivalue ||''' '	
+						end		
+						from  parseddata A
+						Join (select id,kpiruleid, lower(ivalue) ivalue from  tempdata ) B on A.expressionid=B.id and A.kpiruleid=B.kpiruleid
+						where lower(ilabel)='metric' and isidentifier='1' and B.kpiruleid=Vkpiruleid
+					);
+
+				End;
+				End if;
+				--return(select row_to_json(a) from (select VWhereClause)a);
+				--return(VEntitytablename);
+				--
+
+				Execute( ' Insert into kbentitykpis(entity_id,kpi_id,createdby, createddate,modifiedby,modifieddate, isactive,isidentifiermatched) '
+					||' select entityid,kpiid,'|| Vcreated_by || ','''|| VActiondate || ''','|| Vcreated_by || ', ''' || VActiondate || ''' ,1,''1'' '
+					||
+					' from ' 
+					||
+					
+					' ( Select distinct "ID" entityid,' || VKPI_ID ||' kpiid  from '|| VEntitytablename || ' where ' || VWhereClause ||' ) A '
+					||
+					' where not exists (select 1 from kbentitykpis aa where a.entityid=aa.entity_id and kpi_id='|| VKPI_ID || ') '
+					)
+					;
+				delete from kpirules where kpiruleid=Vkpiruleid;
+			end loop;
+			
+			If Exists( select 1 from kbentitykpis where kpi_id=Vkpi_id and coalesce(isidentifiermatched,'0')='1') then
+			begin
+				Return(
+					select row_to_json(outs) 
+					from
+					(  
+						Select row_to_json(ents) "entitydetails" 
+						from 
+						( 
+							select array_to_json(array_Agg(row_to_json(a))) "entity" 
+							from 
+							(
+								Select cast(entity_id as varchar(20)) "ID",
+								(
+									select array_to_json(array_Agg(row_to_json(inp))) "relations"
+									from
+									(
+										select string_agg(ids,',') id
+										from
+										(
+											Select case when A.entity_id=B.primaryentityid then 
+													cast(B.secondaryentityid as varchar(20))
+												when A.entity_id=B.secondaryentityid then cast(B.primaryentityid as varchar(20)) end ids
+											from 
+											kbentityrelationdetails b 
+											where (A.entity_id=B.primaryentityid or A.entity_id=B.secondaryentityid) and b.isactive='1'
+										) temps
+									) inp	
+								)
+								from 
+								kbentitykpis A
+								where kpi_id=Vkpi_id
+								group by A.entity_id
+							)a
+						)ents
+					) outs 
+				);	
+			end;
+			else
+			begin
+
+			
+				-- Insert into kbentitykpis(entity_id,kpi_id,createdby, createddate,modifiedby,modifieddate, isactive,isidentifiermatched)
+-- 				select entity_id, VKPI_ID, Vcreated_by, VActiondate, Vcreated_by, VActiondate,1,'0'
+-- 				from kbentities a 
+-- 				where entitydef_id=Ventitydefid
+-- 				and not exists (select 1 from kbentitykpis aa where a.entity_id=aa.entity_id and kpi_id=VKPI_ID)
+-- 				;
+	 
+				Return(
+					Select row_to_json(outs)
+					from
+					(
+						select row_to_json(ents) "entitydetails"
+						From
+						(
+							Select array_to_json(array_Agg(row_to_json(a))) "entity" 
+							from
+							(
+							select 'none' status 
+							)a
+						) ents	
+					) outs	
+				);
+
+			end;
+			end if;	
+
+		-- 	Execute(' select row_to_json(outs) from(  Select row_to_json(ents) "entitydetails" from ( select array_to_json(array_Agg(row_to_json(a))) "entity" from (  Select "ID" from '|| VEntitytablename || ' where "'
+-- 				|| VEntityattribute ||'" in ( select regexp_split_to_table('''|| Vexpvalue ||''' ,'','')) ) a) ents) outs ') into VResult ;
+-- 
+-- 			Return(vresult);
+		end;
+		Else
+		begin
+
+			/* commented after discussing with the team on 02-05-2016*/
+			
+			-- Insert into kbentitykpis(entity_id,kpi_id,createdby, createddate,modifiedby,modifieddate, isactive)
+-- 			select entity_id, VKPI_ID, Vcreated_by, VActiondate, Vcreated_by, VActiondate,1
+-- 			from kbentities a 
+-- 			where entitydef_id=Ventitydefid
+-- 			and not exists (select 1 from kbentitykpis aa where a.entity_id=aa.entity_id and kpi_id=VKPI_ID)
+-- 			;
+ 
+			Return(
+				Select row_to_json(outs)
+				from
+				(
+					select row_to_json(ents) "entitydetails"
+					From
+					(
+						Select array_to_json(array_Agg(row_to_json(a))) "entity" 
+						from
+						(
+						select 'all' status, 'identitifier not used' message
+						)a
+					) ents	
+				) outs	
+			);	
+		End;
+		End if;
+
+	end;
+	else
+	begin
+			/* commented after discussing with the team on 02-05-2016*/
+
+			-- Insert into kbentitykpis(entity_id,kpi_id,createdby, createddate,modifiedby,modifieddate, isactive)
+-- 			select entity_id, VKPI_ID, Vcreated_by, VActiondate, Vcreated_by, VActiondate,1 
+-- 			from kbentities a 
+-- 			where entitydef_id=Ventitydefid
+-- 			and not exists (select 1 from kbentitykpis aa where a.entity_id=aa.entity_id and kpi_id=VKPI_ID)
+-- 			;
+
+ 
+		Return(
+			Select row_to_json(outs)
+			from
+			(
+				select row_to_json(ents) "entitydetails"
+				From
+				(
+					Select array_to_json(array_Agg(row_to_json(a))) "entity" 
+					from
+					(
+					select 'all' status
+					)a
+				) ents	
+			) outs	
+		);
+
+	end;
+	end if;
+
+end;
+
+end if;
+
+exception when others then 
+		Return(
+
+				Select row_to_json(a) 
+				from
+				(select 500 "code", 'error' "message")a
+
+		);
+
+End
+
+$function$;
+
+ALTER FUNCTION public.usp_kbkpi_c2(json)
+    OWNER TO postgres;
+
+

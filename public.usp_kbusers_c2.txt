@@ -1,0 +1,92 @@
+-- FUNCTION: public.usp_kbusers_c2json
+
+-- DROP FUNCTION public.usp_kbusers_c2json;
+
+CREATE OR REPLACE FUNCTION public.usp_kbusers_c2(
+	input json)
+RETURNS json
+    LANGUAGE 'plpgsql'
+    COST 100.0
+    VOLATILE 
+AS $function$
+
+DECLARE 
+	VUser_ID 	bigint;
+	VC2User_ID 	bigint;
+	VUserName 	VARCHAR(1000);
+	VCreated_By	int;
+	Vstatus 	smallint;
+	VCreated_at	timestamp;
+	Vupdated_at	timestamp;
+	VRoleid		int;
+	VRolename	varchar(255);
+	VRoledesc	varchar(255);
+	VRolestatus	smallint;
+	VRoleCreated_at	timestamp;
+	VRoleupdated_at	timestamp;
+	VActiondate	timestamp default(current_timestamp at time zone 'utc')	;
+	
+Begin
+
+drop table if exists temps;
+drop table if exists TEMPTABLE;
+
+create temp table temps(id serial,ivalue json);
+create temp table TEMPTABLE (id serial,RoleId bigint);
+
+insert into temps(ivalue)
+select input;
+
+select ivalue->'user'->> 'username' 
+,ivalue->'user'->> 'id'
+,ivalue->'user'->> 'status'
+,ivalue->'user'->> 'created_at'
+,ivalue->'user'->> 'updated_at'
+into VUserName, VC2User_ID,Vstatus,VCreated_at,Vupdated_at
+from temps 
+limit 1;
+
+select ivalue->'user'->'role'->> 'name' 
+,ivalue->'user'->'role'->> 'id'
+,ivalue->'user'->'role'->> 'description'
+,ivalue->'user'->'role'->> 'status'
+,ivalue->'user'->'role'->> 'created_at'
+,ivalue->'user'->'role'->> 'updated_at'
+into VRolename, VRoleid,VRoledesc,VRolestatus,VRoleCreated_at,VRoleupdated_at
+from temps 
+limit 1;
+
+	if not exists(select 1 from kbrolesmst_c2 where role_id=VRoleid) then
+	Begin
+		insert into kbrolesmst_c2(role_id, role_name, role_description, createddate,modifiedate,isactive)
+		Values(VRoleid,VRolename, VRoledesc,VRoleCreated_at,VRoleupdated_at,VRolestatus);
+	End;
+	end if;
+
+	If Not Exists(select 1 from kbusermst_c2 where Lower(user_name)=Lower(VUserName) and id=VC2User_ID and isactive=1 limit 1) then
+	begin
+
+		INSERT INTO public.kbusermst_c2(id, user_name,status,roleid,isactive,createddate,modifieddate)
+		VALUES (VC2User_ID,VUserName,Vstatus,VRoleid,1,VCreated_at,Vupdated_at);
+	end;
+	end if; 
+
+Return(1)	;
+
+exception when others then 
+		Return(
+
+				Select row_to_json(a) 
+				from
+				(select 500 "code", 'error' "message")a
+
+		);
+
+End
+
+$function$;
+
+ALTER FUNCTION public.usp_kbusers_c2(json)
+    OWNER TO postgres;
+
+

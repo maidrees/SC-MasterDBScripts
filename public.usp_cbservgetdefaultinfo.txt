@@ -1,0 +1,1515 @@
+-- FUNCTION: public.usp_cbservgetdefaultinfojson
+
+-- DROP FUNCTION public.usp_cbservgetdefaultinfojson;
+
+CREATE OR REPLACE FUNCTION public.usp_cbservgetdefaultinfo(
+	input json DEFAULT NULL::json)
+RETURNS json
+    LANGUAGE 'plpgsql'
+    COST 100.0
+    VOLATILE 
+AS $function$
+
+DECLARE 
+	VResult		Json;
+	VLatency	Json;
+	VMaxValue 	INT;
+	VFinalResult	Json;
+	VSpoketypes	Json;
+	VRules		Json;
+	VCriteria 	Json;
+	VEvents 	Json;
+	VDataDeletionrules Json;
+	VCallDependencyRules Json;
+	VSelectedDataSources Text='';
+	Vkpis 		Json;
+	VCollections 	Json;
+	VRole 		Json;
+	VEnvironmentalSources Json;
+	VDataTable 	Json;
+	Vkpi 		Json;
+	Vevent 		Json;
+
+begin
+
+drop table if exists SelectedSources;
+drop table if exists Criteria;
+drop table if exists Tempdata;
+
+create temp table SelectedSources(RecordID Serial,CorrelationId int ,SelectedDataSources varchar(2000),MaxValues int,Latency varchar(20),SpokeBehaviour text);
+create temp table Criteria(ID int,CorrelationID int,DataSoureTypeID int,DataSoureTypeName varchar(255),CRITERIANAME varchar(100), SourceField varchar(100),ConfigurationID int
+,FieldID int,SelectedDataSource varchar(255), DataSourceID int,iValue varchar(255) );
+
+create temp table  Tempdata(CorrelationID Bigint,ProblemID Bigint,PROBLEMDESCRIPTION varchar(500),PROBLEMTYPE int,SPNAME varchar(500),PARAMETERNAME varchar(200)
+	,TIMESPAN Smallint,TIMESPANTYPE Varchar(100),EXPRESSION text,EventID Bigint,Ispivote INT);
+ 
+/* Inserting all the Active Correlation ids into the temp table */
+
+Insert into SelectedSources(CorrelationId)
+Select CorrelationID 
+from CBCorrelationMst 
+where IsActive='1';
+
+/* Updating the Data expectancy max value for the correlation in the temporary table */
+
+Update SelectedSources
+Set maxvalues=DataExpectancy.MaxValues
+,Latency= 'Seconds'
+FROM 
+(	
+	Select CorrelationID
+	,(MAX(
+		CASE LatencyVolume 
+		WHEN 'Days' THEN (LatencyValue * 24* 60 * 60) 
+		WHEN 'MINUTES' THEN (LatencyValue * 60) 
+		WHEN 'Hours' THEN (LatencyValue * 60 * 60) 
+		ELSE LatencyValue END)
+	)  MaxValues
+	from CBDataExpectencyMst 
+	Group By CorrelationID
+)DataExpectancy 
+Join CBCorrelationMst CCM on DataExpectancy.CorrelationID=CCM.CorrelationID
+where CCm.IsActive='1' and SelectedSources.CorrelationId=DataExpectancy.Correlationid
+;
+
+/* Calculating the Order for the Criteria */
+
+insert into Criteria(ID,CorrelationID,DataSoureTypeID,DataSoureTypeName,CRITERIANAME,SourceField,ConfigurationID,FieldID,SelectedDataSource,DataSourceID,iValue)
+Select Dense_Rank() OVER (  ORDER BY CriteriaName,iValue) AS ID,*
+ 
+ from
+ (
+ 	   Select Distinct  Config.CorrelationID 
+ 	 ,config.DataSoureTypeID
+ 	  ,src.SOURCETYPE_NAME DataSoureTypeName
+ 	    ,   Case ConfigDetails.MatchTypeID  when 3 then 'ExactMatch' 
+ 		when 2 then 'StaticMatch'  Else Criteria.RuleTitle End CRITERIANAME
+ 	  , Config.SourceField,config.ConfigurationID 
+	   ,Config.FieldID
+ 	  , ConfigDetails.SelectedDataSource
+ 	  ,ConfigDetails.DataSourceID
+	  , case when Coalesce(Value1,'') !='' and Coalesce(Value2,'')!=''  then Value1||';'||Value2 Else'' End iValue
+	 from 
+	 CBConfigurationMst config
+	 join CBCorrelationConfigDetails ConfigDetails on Config.ConfigurationID=ConfigDetails.ConfigurationID
+	 Left Outer join CBFuzzyLogicRulesMst Criteria on cast(ConfigDetails.param1 as int)=Criteria.RuleID
+	 Join CBCorrelationMst CCM on Config.CorrelationID=CCM.CorrelationID
+	 join kbsourcetypeMst Src on src.SOURCETYPE_ID=config.DataSoureTypeID
+	 where ccm.IsActive='1' and   ConfigDetails.SelectedDSAttributeName!='NULL' and Config.SourceField !='NULL'
+ ) A;
+
+ 
+
+Update SelectedSources set SelectedDataSources=AA.SelectedDataSources
+From
+(
+	SELECT A.correlationid,
+	(
+		select substring(sources,8,char_length(sources))
+		from
+		(
+			Select String_Agg(sources,'') sources
+			from
+			(
+				Select  sources
+				from
+				(
+					Select '#CWT01#' ||cast(sources.SOURCETYPE_ID as varchar(50))|| ';'|| upper(sources.alias)  sources
+					--+ '#CWT01#' 
+					From CBCorrelationDetails CCD 
+					Inner join KBSourceTypeMst Sources on CCD.SourceID=Sources.SOURCETYPE_ID and Sources.isactive='1'
+					where CCD.CorrelationID=A.correlationid
+				)aab
+			) as aa
+		) spk
+	) SelectedDataSources
+	FROM 
+	SelectedSources A
+) AA
+Where AA.CorrelationId=SelectedSources.CorrelationId
+;
+
+			 
+Update SelectedSources set SpokeBehaviour=AA.SpokeBehaviour
+From
+(
+	SELECT A.correlationid,
+	(
+		select substring(spoke,8,char_length(spoke))
+		from
+		(
+			Select String_Agg(spoke,'') spoke
+			from
+			(
+				Select  spoke
+				from
+				(
+					Select '#CWT01#' ||cast(sources.SOURCETYPE_ID as varchar(50))|| '=' || cast(CCD.typeid AS varchar(500)) spoke
+					--+ '#CWT01#' 
+					From CBCorrelationDetails CCD 
+					Inner join KBSourceTypeMst Sources on CCD.SourceID=Sources.SOURCETYPE_ID and Sources.isactive='1'
+					where CCD.CorrelationID=A.correlationid
+				)aab
+			) as aa
+		) spk
+	) SpokeBehaviour
+	FROM 
+	SelectedSources A
+) AA
+where AA.CorrelationId=SelectedSources.CorrelationId;
+
+	VRules:=(
+			Select Array_to_json(Array_agg(Row_to_json(COR))) "CORRELATION"
+			From
+			(
+			Select Corrmst.CorrelationID "CORRELATIONID"
+			,CorrMst.CorrelationName "CORRELATIONNAME"
+			,SelectdataSources.SpokeBehaviour as "SPOKEBEHAVIOR"
+			,CorrelationDate "CORRELATIONDATE"
+			,SelectdataSources.SelectedDataSources "SELECTEDDATASOURCES"
+			,MaxCutOffWeightage "MAXCUTOFFWEIGHTAGE"
+			,MinCutOffWeightage "MINCUTOFFWEIGHTAGE"
+			,SelectdataSources.MaxValues "VALUE"
+			,SelectdataSources.Latency "LATENCY"
+			,Case when  CorrMst.TypeId=3	then 'OnDemand' else 'Realtime' end as "CORRELATIONTYPE"
+			,'CORRELATIONID,CORRELATIONNAME,SPOKEBEHAVIOR,CORRELATIONDATE,SELECTEDDATASOURCES,MAXCUTOFFWEIGHTAGE,MINCUTOFFWEIGHTAGE,VALUE,LATENCY,CORRELATIONTYPE' "Attribute_list"
+			
+			,
+			(
+				Select Array_to_json(Array_agg(Row_to_json(RUL))) "RULE"
+				From
+				(
+					SELECT  
+					CWR.RuleID "RULEID"
+					,CWR.PARAMTYPE "ATTRIBUTEPARAMETER"
+					,PARAMVALUE1 "ATTRIBUTEPARAMVALUE1"
+					,PARAMVALUE1 "ATTRIBUTEPARAMVALUE2" 
+					,MaxCutOffWeightage "MAXCUTOFFWEIGHTAGE"
+					,MinCutOffWeightage "MINCUTOFFWEIGHTAGE"
+					,VSelectedDataSources "SELECTEDDATASOURCES"
+					,'RULEID,ATTRIBUTEPARAMETER,ATTRIBUTEPARAMVALUE1,ATTRIBUTEPARAMVALUE2,MAXCUTOFFWEIGHTAGE,MINCUTOFFWEIGHTAGE,SELECTEDDATASOURCES' "Attribute_list"
+					
+					,
+					(
+						Select Array_to_json(Array_agg(Row_to_json(spk))) "SPOKE"
+						From
+						( 
+							SELECT CD.SOURCEID "SOURCEID"
+							,Upper(Sources.Alias) "SourceName"
+							,CD.ISSELECTED "ISDEFAULT"
+							,CDEM.DataSourceWeight "SPOKEWEIGHTAGE"
+							,Coalesce(CDRM.ParamType,'') AS "SPOKEPARAMETER"
+							,Coalesce(CDRM.ParamValue1,'') AS "SPOKEPARAMVALUE1"
+							,Coalesce(CDRM.ParamValue1,'') AS "SPOKEPARAMVALUE2"
+							,sources.SOURCETYPE_ID "SPOKETYPE"
+							,Sources.PrimaryKeyColumns "PRIMARYKEY"
+							,Sources.CorrelationKeyColumns "CORRELATIONKEY"
+							,Sources.PrimaryKeyFilters "PRIMARYKEYFILTERS"
+							,CASE LatencyVolume 
+								WHEN 'Days' THEN (LatencyValue * 24* 60 * 60) 
+								WHEN 'MINUTES' THEN (LatencyValue * 60) 
+								WHEN 'Hours' THEN (LatencyValue * 60 * 60) ELSE LatencyValue 
+								END "LATENCY"
+							,'SOURCEID,SourceName,ISDEFAULT,SPOKEWEIGHTAGE,SPOKEPARAMETER,SPOKEPARAMVALUE1,SPOKEPARAMVALUE2,SPOKETYPE,PRIMARYKEY' 
+							||',CORRELATIONKEY,PRIMARYKEYFILTERS,LATENCY' "Attribute_list"
+			
+							,
+							(
+								Select Array_to_json(Array_agg(Row_to_json(mets))) as "METRIC"
+								From
+								( 
+									SELECT  DISTINCT CFM.FieldID "FIELDID"
+									,MSTTableColumns "NAME"
+									, Case 
+										When upper(SI.MSTTableColumnDataType)  like '%DATETIME' OR upper(SI.MSTTableColumnDataType) like '%DATE%TIME'  Then 'DATETIME'
+										When upper(SI.MSTTableColumnDataType) Like '%STRING%' Then 'STRING'	
+										When upper(SI.MSTTableColumnDataType) = 'BIGINT'	   Then 'DOUBLE'	
+										When upper(SI.MSTTableColumnDataType) = 'INT' or upper(SI.MSTTableColumnDataType) = 'INTEGER'  Then 'INT'	
+										Else SI.MSTTableColumnDataType
+									End	"DATATYPE"
+									,CCM.DSTableColumnName AS "MASTERTABLE"
+									,CCM.MstTableColumnName AS "MASTERTABLECOLUMN"
+									,'-Ve Offset' "PARAM1"
+									,'+Ve Offset' "PARAM2"
+									, CCD.Expression as "EXPRESSION"
+									,Coalesce(ccd.Value1,'') "VALUE1"		
+									,Coalesce(ccd.Value2,'') "VALUE2"	
+									, replace(CTM.MATCHTYPENAME,' ','') "MATCHTYPENAME"
+									,
+									(
+										Select String_agg(sources,'')
+										from
+										(
+											select distinct Cast(ID as varchar(2000))|| ';' ||UPPER(Replace(DataSoureTypeName,' ',''))  || '#CWDB01#'  sources
+											from Criteria A1
+											where A1. CorrelationID=Criteria.CorrelationID
+											and A1.FieldID=Criteria.FieldID 
+											and CD.SourceID=A1.DataSoureTypeID
+											--for xml path('')
+										) as src
+									) as "CRITERIANAME"
+									,CWM.weightage AS "WEIGHTAGE"
+									,UOM "UOM" 
+									,replace(UPPER((select fn_ConcatenateStrings(cast(CCM.CorrelationID as bigint),cast(CCm.FieldID as bigint),cast(NULL as varchar),cast(CCD.MatchTypeID  as smallint)))),' ','') "METRICMAPPING"   
+									,'FIELDID,NAME,DATATYPE,MASTERTABLE,MASTERTABLECOLUMN,PARAM1,PARAM2,EXPRESSION,VALUE1,VALUE2,MATCHTYPENAME,CRITERIANAME,WEIGHTAGE,UOM' 
+									||',METRICMAPPING' "Attribute_list"
+									/*Initially It was 1 Replaced with CCD.MatchTypeID*/
+									--,CWM.WEIGHTAGE
+									FROM 
+CBCONFIGURATIONMST CCM INNER JOIN CBCORRELATIONCONFIGDETAILS CCD ON CCM.DataSoureTypeID=CCD.DataSourceID 
+and CCM.SourceField=CCD.SelectedDSAttributeName and CCM.CorrelationID=CCD.Correlationid
+Inner join Criteria Criteria on  CCm.CorrelationID=Criteria.CorrelationID and ccd.ConfigurationID=Criteria.ConfigurationID 
+and CCD.SelectedDataSource=Criteria.SelectedDataSource
+Left outer Join CBMCRITERIAMST CRM on CCD.CRITERIAID=CRM.CRITERIAID 
+LEFT OUTER JOIN CBATTRIBUTEWEIGHTAGEMST CWM ON  CM.CORRELATIONID = CWM.CORRELATIONID AND CCM.CORRELATIONID = CWM.CORRELATIONID 
+AND CCM.FieldID = CWM.FieldID And cwr.WeightageConfigurationID=cwm.WeightageConfigurationID
+LEFT OUTER JOIN CBCORRELATIONFIELDSMST  CFM ON CWM.FIELDID = CFM.FIELDID and CCM.fieldID = CFM.FieldID
+LEFT OUTER JOIN CBMATCHTYPEMST  CTM ON CCD.MATCHTYPEID = CTM.MATCHTYPEID
+LEFT OUTER  JOIN CBSourceInfo  SI ON CCM.SourceField = Coalesce(SI.SourceField,MSTTableColumns) AND CD.SOURCEID = SI.SourceID
+left Outer Join kbmetricmst Metrics on CCD.DataSourceID=Metrics.Source_id 
+LEFT OUTER JOIN  CBFuzzyLogicRulesmst Fuzzy on cast(CCD.Param1 as int)=Fuzzy.RuleID
+WHERE 	CD.CORRELATIONID = CCM.CORRELATIONID AND CD.SOURCEID = CCM.DATASOURETYPEID --and Metrics.Template_ID=1
+									--FOR XML RAW('METRIC')
+								) AS Mets
+							)
+							FROM 
+							CBCORRELATIONDETAILS CD 
+							LEFT OUTER JOIN CBDataExpectencyMst CDEM ON CDEM.CorrelationID = CD.CorrelationID AND CDEM.DataSourceID = CD.SourceID
+							LEFT OUTER JOIN CBDataExpectencyRule CDRM ON CDRM.CorrelationID = CD.CorrelationID --AND CDRM.D = CD.SourceID
+							left outer join KBSourceTypeMst Sources on CD.SourceID=Sources.SOURCETYPE_ID
+							WHERE CM.CORRELATIONID = CD.CORRELATIONID and Sources.Isactive='1'
+							GROUP BY CD.CorrelationID,CD.SOURCEID,CD.ISSELECTED ,CDEM.DataSourceWeight ,CDRM.ParamType ,CDRM.ParamValue1,CDRM.ParamValue2,Sources.Alias
+							, Sources.PrimaryKeyColumns ,Sources.CorrelationKeyColumns ,Sources.PrimaryKeyFilters ,LatencyValue,LatencyVolume,sources.SOURCETYPE_ID
+							ORDER BY CD.ISSELECTED  DESC
+							--FOR XML RAW ('SPOKE')
+						)  AS spk
+					)
+					FROM  CBCORRELATIONMST CM
+					LEFT OUTER JOIN CBATTRIBUTEWEIGHTRULE CWR ON CM.CORRELATIONID = CWR.CORRELATIONID
+					where CM.IsActive=1 
+					--and CM.CorrelationID=@CorrelationID 
+					and CM.CorrelationID=CorrMst.CorrelationID
+					--FOR XML RAW ('RULE')
+				) as RUL
+			)
+			From
+			CBCorrelationMst CorrMst
+			Join CBCorrelationDetails CorrDetails on CorrMst.CorrelationID=CorrDetails.CorrelationID
+			Left outer Join ( Select Distinct CorrelationID,MaxCutOffWeightage,MinCutOffWeightage from CBWeightageConfigurations ) Weights on CorrMst.CorrelationID=Weights.CorrelationID
+			Left Outer Join SelectedSources SelectdataSources on CorrMst.CorrelationID=SelectdataSources.CorrelationId
+			where CorrMst.IsActive='1' 
+			Group By Corrmst.CorrelationID, CorrMst.CorrelationName,CorrelationDate,MaxCutOffWeightage,MinCutOffWeightage,SelectdataSources.SelectedDataSources,SelectdataSources.Latency,SelectdataSources.MaxValues
+			,Corrmst.TypeID,SelectdataSources.SpokeBehaviour
+			--For XML RAW('CORRELATION')	
+			)cor
+		);
+ 
+
+	/* forming the Spoke Types xml */
+
+	VSpoketypes:=(
+
+			Select Row_to_json(spks) as  "SPOKETYPES"
+			from
+			(
+				Select Array_to_json(Array_Agg(Row_to_json(spk))) "SPOKETYPE"
+				From
+				(
+					Select distinct 
+					Sources.SOURCETYPE_ID "ID"
+					,Sources.SPOKETYPE as "SPOKETYPE"
+					,Coalesce(SpokeTypeMst.HasNLegs,0) "HASNLEGS"
+					,Coalesce(SpokeTypeMst1.HASNMACHINES,0) "HASNMACHINES"
+					,Coalesce(SpokeTypeMst2.HASNTUPLES,0) "HASNTUPLES"
+					,Coalesce(SpokeTypeMst4.HASCONTAINER,0) "HASCONTAINER"
+					,Coalesce(DuplicateKeys,'') as "DUPLICATEKEYS"
+					,Coalesce(CallEndIdentitifer,'') "CALLENDIDENTIFIER"
+					,CASE when 
+						(select COUNT(1) from KBSpokewiseMetricsInformation info where info.SourceTypeId=Sources.SOURCETYPE_ID 
+									and info.MetricDataType in ('Latitude','Longitude'))>0 then 1
+							WHEN (select COUNT(1) from KBSpokewiseMetricsInformation info where info.SourceTypeId=Sources.SOURCETYPE_ID 
+									and info.MetricDataType in ('State Code','State Name','City','Post Code'))> 0 then 0 
+					END as "SEARCHID"
+					,Coalesce(
+							(
+								Select String_agg(metrics,'')
+								from
+								(
+									Select 'LOCATIONDIMENSIONID,' metrics
+									Union
+									select A.METRICNAME || ','  metrics
+									from KBSpokewiseMetricsInformation B
+									JOIn KBMetricMst A on A.METRIC_ID=B.MetricID 
+									where A.SOURCE_ID=Sources.SOURCETYPE_ID
+									and B.MetricDataType in ('Latitude','Longitude','Country','State Code','State Name','City','Post Code','Zipcode','Date','Year','Month','Week','Hour')
+								)a
+							)
+						,'') as "SEARCHSTRING"
+					,Coalesce(DATA_RETRIEVAL_TIME,'0') AS "DATARETRIEVALTIME"
+					,Coalesce(DATA_RETRIEVAL_UOM,'') AS "DATARETRIEVALUOM"
+					,'ID,SPOKETYPE,HASNLEGS,HASNMACHINES,HASNTUPLES,HASCONTAINER,DUPLICATEKEYS,CALLENDIDENTIFIER,SEARCHID,SEARCHSTRING,DATARETRIEVALTIME'
+					||',DATARETRIEVALUOM' "Attribute_list"
+					from 
+					KBSourceTypeMst Sources 
+					LEFT JOIN KBSourceurlMst url on URL.SOURCEID=Sources.SOURCETYPE_ID 
+					 /*Join KBSourceurlMst to get Data retrieval time & UOM*/
+					Left Outer Join (
+							Select Spk.SourceTypeID,SpokeTypes.SpokeTypeID HasNLegs  
+							from KBSpokeTypeSourceMappings Spk 
+							Join KBspokeTypesMst SpokeTypes on Spk.SpokeTypeID=SpokeTypes.SpokeTypeID
+							where SpokeTypes.SpokeTypeName='NLEGS'
+							) SpokeTypeMst on Sources.SOURCETYPE_ID=SpokeTypeMst.SourceTypeID
+					Left Outer Join (
+							Select Spk.SourceTypeID,1 HASNMACHINES  from KBSpokeTypeSourceMappings Spk 
+							Join KBspokeTypesMst SpokeTypes on Spk.SpokeTypeID=SpokeTypes.SpokeTypeID
+							where SpokeTypes.SpokeTypeName='NMACHINES'
+							) SpokeTypeMst1 on Sources.SOURCETYPE_ID=SpokeTypeMst1.SourceTypeID
+					Left Outer Join (
+							Select Spk.SourceTypeID,1 HASNTUPLES  from KBSpokeTypeSourceMappings Spk 
+							Join KBspokeTypesMst SpokeTypes on Spk.SpokeTypeID=SpokeTypes.SpokeTypeID
+							where SpokeTypes.SpokeTypeName='ISCONTAINER'
+							) SpokeTypeMst2 on Sources.SOURCETYPE_ID=SpokeTypeMst2.SourceTypeID
+					Left Outer Join (
+							Select Spk.SourceTypeID,1 HASNTUPLES  from KBSpokeTypeSourceMappings Spk 
+							Join KBspokeTypesMst SpokeTypes on Spk.SpokeTypeID=SpokeTypes.SpokeTypeID
+							where SpokeTypes.SpokeTypeName='ISOTHER'
+							) SpokeTypeMst3 on Sources.SOURCETYPE_ID=SpokeTypeMst3.SourceTypeID
+					Left Outer Join (
+							Select distinct Spk.SourceTypeID, 
+							Case when (select  count( distinct c1.typeid) from cbcorrelationdetails c1 join cbcorrelationMst Mst 
+							on Mst.CorrelationID=C1.CorrelationID 
+							where /*Mst.Isactive=1 and*/ c1.SourceID=Spk.SourceTypeID group by c1.SourceID)>1 then 2
+							else
+							typeid end   /*1*/ HASCONTAINER  from KBSpokeTypeSourceMappings Spk 
+							Join KBspokeTypesMst SpokeTypes on Spk.SpokeTypeID=SpokeTypes.SpokeTypeID
+							Join cbcorrelationdetails cdetails on Spk.SourceTypeID=cdetails.SourceID
+							where SpokeTypes.SpokeTypeName='ISCONTAINER'
+							) SpokeTypeMst4 on Sources.SOURCETYPE_ID=SpokeTypeMst4.SourceTypeID
+					where  Sources.isactive='1'		
+					--For XML RAW('SPOKETYPE') ,ROOT('SPOKETYPES')
+			)spk
+		)spks
+	);
+
+  /*ENVIRONMENTALDATASOURCE ADDED ON 6th june 2013*/
+ 
+ 
+ 
+	VEnvironmentalSources:=
+ 				(
+				Select Row_to_json(esrc) as "ENVIRONMENTALDATASOURCE"
+				from
+				(
+					Select Array_to_json(Array_Agg(Row_to_json(src))) "DATASOURCE"
+					From
+					(
+					SELECT  MST.SOURCETYPE_ID AS "ID"
+					,SPOKETYPE "SPOKETYPE"
+					,REPLACE(Coalesce(UPPER(MST.Alias),UPPER(MST.Alias)),' ','') AS  "NAME"
+					,
+					(
+						Select Row_to_json(mets) as "METRICS"
+						from
+						(
+						Select Array_to_json(Array_Agg(Row_to_json(met))) as "METRIC"
+						from
+						(
+							SELECT Metric.METRIC_ID AS "ID",Metric.MetricName AS "NAME" 
+							,'ID,NAME' "Attribute_list"
+							FROM KBMetricMst Metric WHERE Metric.SOURCE_ID=MST.SOURCETYPE_ID
+							--FOR XML RAW('METRIC'),ROOT('METRICS')
+						)as met
+						) mets
+					)
+					,'ID,SPOKETYPE,NAME' "Attribute_list"							
+					FROM  KBSourceTypeMst MST 
+					WHERE SpokeType='1' and isactive='1'
+					--FOR XML RAW('DATASOURCE'),ROOT('ENVIRONMENTALDATASOURCE')
+					)src
+				)esrc	
+				);
+	VCriteria:=(
+			select Row_to_json(crt) "CRITERIA"
+			From
+			(
+			Select Array_to_json(Array_Agg(Row_to_json(typ))) as "TYPE"
+			from
+			(
+			select Distinct ID "ID", CRITERIANAME "CRITERIANAME",iValue "Value",UPPER(Sources.Alias) as  "SOURCENAME" 
+			,'ID,CRITERIANAME,Value,SOURCENAME' "Attribute_list"
+			from Criteria A
+			Join KBSourceTypeMst Sources on A.DataSoureTypeID=Sources.SOURCETYPE_ID  and Sources.isactive='1'
+			--for XML RAW('TYPE'),ROOT('CRITERIA')
+			)typ
+			)crt
+		);
+
+	 
+	/* Forming the Data Deleting rule xml */ 
+	 
+	VDataDeletionrules:=
+			(
+				Select Row_to_json(mat) "MATCHINGDATADELETIONRULES"
+				From
+				(
+					Select Array_to_json(Array_Agg(Row_to_json(spk))) "SPOKE"
+					from
+					(
+						Select   Sources.SOURCETYPE_ID "SOURCEID", SELECTEDDATASOURCE "SourceName",ServiceExpression as "Expression"
+						,'SOURCEID,SourceName,Expression' "Attribute_list"
+						From
+						CBDuplicateCallConfigurationRules Mst 
+						Join KBSourceTypeMst Sources on MSt.SELECTEDDATASOURCE=Sources.SOURCETYPE_NAME
+						Join CBCorrelationMst CCM on Mst.CorrelationID=CCm.CorrelationID
+						where CCm.IsActive='1' and Sources.isactive='1'
+						group by  Sources.SOURCETYPE_ID, SELECTEDDATASOURCE,Mst.CorrelationID,ServiceExpression
+						--For XML RAW('SPOKE'),ROOT('MATCHINGDATADELETIONRULES')
+					)spk	
+				)mat	
+			);
+
+	/* Forming the Call Dependency rule xml */ 
+ 	VCallDependencyRules:=
+			(
+				Select Row_to_json(mat) "CALLSDEPENDENCYRULES"
+				From
+				(
+					Select Array_to_json(Array_Agg(Row_to_json(spk))) "SPOKE"
+					from
+					(
+						Select   Sources.SOURCETYPE_ID "SOURCEID", SELECTEDDATASOURCE "SourceName"
+						,(select fn_ConcatenateStrings(cast(mst.CorrelationID as bigint),cast(NULL as bigint),cast(SELECTEDDATASOURCE as varchar),cast(2  as smallint))) "Expression"
+						,'SOURCEID,SourceName,Expression' "Attribute_list"
+						From
+						CBCalldependencyRule Mst 
+						Join KBSourceTypeMst Sources on MSt.SELECTEDDATASOURCE=Sources.SOURCETYPE_NAME
+						Join CBCorrelationMst CCM on Mst.CorrelationID=CCm.CorrelationID
+						where CCm.IsActive='1' and Sources.isactive='1'
+						Group by Sources.SOURCETYPE_ID, SELECTEDDATASOURCE,mst.CorrelationID,ServiceExpression
+						--For XML RAW('SPOKE'),ROOT('CALLSDEPENDENCYRULES')
+					)spk	
+				)mat	
+			);
+
+	/* Forming the Data Latency rule xml */ 
+
+	VLatency:=
+			( 
+
+				Select Row_to_json(mat) "LATENCY"
+				From
+				(
+					Select Array_to_json(Array_Agg(Row_to_json(spk))) "SPOKE"
+					from
+					(
+						Select DataSourceID "ID", Upper("NAME") "NAME",'Seconds' "TYPE",max("Value") "VALUE"
+						,'ID,NAME,TYPE,VALUE' "Attribute_list"
+						FROM 
+						SelectedSources A
+						Join (Select CorrelationID,DataSourceID,Upper(Sources.Alias) "NAME",
+							(CASE LatencyVolume 
+							WHEN 'Days' THEN (LatencyValue * 24* 60 * 60) 
+							WHEN 'MINUTES' THEN (LatencyValue * 60) 
+							WHEN 'Hours' THEN (LatencyValue * 60 * 60) ELSE LatencyValue END) "Value"
+							from CBDataExpectencyMst DataExpectancy
+							Join KBSourceTypeMst Sources on DataExpectancy.DataSourceID=sources.SOURCETYPE_ID
+							)DataExpectancy on A.CorrelationId=DataExpectancy.Correlationid
+						Join CBCorrelationMst CCM on DataExpectancy.CorrelationID=CCM.CorrelationID
+						where CCm.IsActive='1'
+						Group by DataExpectancy.DataSourceID,DataExpectancy."NAME"
+						--FOR XML RAW('SPOKE'),ROOT('LATENCY')
+					)spk	
+				)mat	
+			);
+
+	
+		/* Retrieving the Event Related meta data */
+		
+
+		insert into Tempdata
+		select distinct  CorrMst.CORRELATIONID,Coalesce(OriginalId,EventID) PROBLEMID, probmst.EVENT_SD PROBLEMDESCRIPTION, probmst.PROBLEM_TYPE PROBLEMTYPE
+		,'"DMCOLLECTION_'||EVENT_SD||'"' SPNAME ,'' PARAMETERNAME,
+		OccurrenceTimeInterval TIMESPAN,OccurrenceUOM TIMESPANTYPE,Coalesce(ProbMst.Expression_Service,'') as EXPRESSION,Eventsmst.EventID EventID
+		,ProbMst.Ispivote
+		from KBEventsMetaData Eventsmst
+		Join KbEventsMst ProbMst on Eventsmst.Eventid=Coalesce(ProbMst.originalID,Probmst.EVENT_ID)
+		/*INNER*/ Left Join CBCorrelationmst CorrMst on Eventsmst.CorrelationID= CorrMst.CorrelationID
+		where ProbMst.isactive=1;
+
+	Vevents:=
+		(
+		
+		Select Row_to_json(outs)
+		from
+		(
+		select Array_to_json(Array_Agg(Row_to_json(cor))) as "EVENT"
+		from
+		(
+		select Coalesce(CORRELATIONID,0 ) as "CORRELATIONID"
+		, PROBLEMID "PROBLEMID"
+		, PROBLEMDESCRIPTION "PROBLEMDESCRIPTION"
+		, PROBLEMTYPE "PROBLEMTYPE"
+		, SPNAME "SPNAME"
+		, PARAMETERNAME "PARAMETERNAME"
+		, TIMESPAN "TIMESPAN"
+		, TIMESPANTYPE "TIMESPANTYPE"
+		, EXPRESSION "EXPRESSION"
+		, Coalesce(ISPIVOTE,0) as "ISPIVOT"
+		,'CORRELATIONID,PROBLEMID, PROBLEMDESCRIPTION,PROBLEMTYPE,SPNAME,PARAMETERNAME,TIMESPAN, TIMESPANTYPE,EXPRESSION,ISPIVOT' "Attribute_list"
+		,
+		(
+			Select Array_to_json(Array_agg(Row_to_json(rul))) as "rule"
+			From
+			( 
+				Select distinct Coalesce(kpimst.originalid,kpimst.KPI_ID)  "kpiid"
+				,KPI_NAME "kpiname", Sources.SPOKETYPE as "SPOKETYPE", Kpimst.SOURCE_ID  "sourceid", Upper(Alias) "sourcename"
+				,Templates.TEMPLATE_ID "TEMPLATE_ID",Templates.TEMPLATE_NAME "TEMPLATE_NAME", OPERATOR "OPERATOR"
+				,Cast(probdets.KPIStatus as varchar(50))||';'|| kstatus.STATUS ||'#CWDB01#' "kpiaction"
+				,probdets.KPIStatus "kpiactionid"
+				,KPITYPENAME "kpitype"
+				,KPITYPE "kpitypeid",'' "ruleoperator",'' "rulebool"
+				,'kpiid,kpiname ,SPOKETYPE,sourceid,sourcename,TEMPLATE_ID,TEMPLATE_NAME,OPERATOR,kpiaction,kpiactionid,kpitype,kpitypeid,ruleoperator,rulebool' "Attribute_list"
+				from
+				(
+					Select distinct case when strpos(item,'#SWDB01#')>0 then substring(item,0,strpos(item,'#SWDB01#')) Else item End KPIID
+					, Dimensions, Entities,Measures
+					from 
+					(
+						select eventid,isactive,(regexp_split_to_table(Kpis,'#CWDB01#') ) item, Dimensions, Entities,Measures 
+						from KBEventsMetaData 
+						where IsActive='1'
+					) EventDetails 
+					where Eventsmst.EventID=EventDetails.EventID 
+					--Group by item, Dimensions, Entities,Measures
+				) KPIS
+				Join DBKPIEventDetails ProbDets on cast(kpis.KPIID as int)=ProbDets.KPIID
+				Join KBKpiMst kpiMst on probdets.KPIID=Coalesce(kpiMst.OriginalID,kpiMst.KPI_ID)
+				Join KBKpiStatus KStatus on ProbDets.KPIStatus=KStatus.STATUSID
+				Join kbSourceTypeMst Sources on ProbDets.SourceID=Sources.SourceType_Id and  Sources.isactive='1'
+				LEFT Join KbkpiTypeMst KTypes on kpimst.KPITYPE=KTypes.KPITYPEID
+				Join KBTemplateMst Templates on KPImst.TEMPLATE_ID= Templates.TEMPLATE_ID
+				where Kpimst.isactive='1' and Probdets.isactive='1'
+				--For XML RAW('rule')
+			)as rul
+		)
+		,
+		(
+			Select Row_to_json(alrtdet) "ALERTDETAILS"
+			From
+			(
+				Select Array_to_json(Array_agg(Row_to_json(alrt))) "ALERT"
+				from
+				(
+					select 
+					Alerts.ALERT_ID "ALERTID",ALERT_NAME "ALERTNAME"
+					,'ALERTID,ALERTNAME' "Attribute_list"
+					,
+					(
+						Select Row_to_json(rldet) "ROLEDETAILS"
+						From
+						(
+							Select Array_to_json(Array_agg(Row_to_json(rol))) "ROLE"
+							from
+							(
+								Select ARoles.ROLE_ID "ROLEID",ROLE_NAME "ROLENAME" 
+								,'ROLEID,ROLENAME' "Attribute_list"
+								from KBAlertRole ARoles 
+								Join KBRolemst RoleMst on ARoles.ROLE_ID=RoleMst.ROLE_ID 
+								Where Alerts.ALERT_ID=ARoles.ALERT_ID 
+								--For XML RAW('ROLE'),ROOT('ROLEDETAILS') 
+							)  as rol
+						)rldet	
+					)
+					from KBALERTMST Alerts 
+					where Eventsmst.EventID = Alerts.eventid and  alerttype=1
+					--For XML RAW('ALERT'),ROOT('ALERTDETAILS')
+				)alrt
+			)alrtdet
+		)
+	
+	
+	, 
+	(
+		Select Row_to_json(spkdet) "SPOKEDETAILS"
+		from
+		(
+			select Array_to_json(Array_agg(Row_to_json(spk)))"SPOKE"
+			from
+			(	
+				Select    A.SourceID "SPOKEID",A.SPOKETYPE "SPOKETYPE", Upper(A."NAME") "NAME"  
+				,'SPOKEID,SPOKETYPE,NAME' "Attribute_list"
+				,
+				(
+					Select Array_to_json(Array_agg(Row_to_json(met))) "METRIC"
+					from
+					(
+						select A.SPOKEID "SPOKEID",A.METRICID "METRICID",A.METRICNAME "METRICNAME",A.ENTITYDEFID "ENTITYDEFID"
+						,'SPOKEID,METRICID,METRICNAME,ENTITYDEFID' "Attribute_list"
+						from
+						(
+							Select  distinct B.sourceID SPOKEID,Coalesce(MetricID,0) METRICID
+							,replace(MET.MetricName,' ','') as METRICNAME--MetricName  METRICNAME
+							,Coalesce(EntityDefId,0) ENTITYDEFID
+							from KbEventDetails B 
+							JOIN KbsourcetypeMst Src on SRC.SOURCETYPE_ID=B.SOURCEID and Src.isactive='1'
+							JOIN KBMETRICMST MET on MET.METRIC_ID=B.METRICID
+							Where B.IS_SOURCE_DIMENSION_ENTITY=1 and
+							Eventsmst.ProblemID=B.EVENT_ID 
+							and A.sourceid=B.Sourceid    and B.TYPE='Metric'
+							union all
+							Select  distinct B.sourceID SPOKEID,Coalesce(MetricID,0) METRICID
+							,replace(MET.MEASURE_NAME,' ','')  as METRICNAME--MetricName  METRICNAME
+							,Coalesce(EntityDefId,0) ENTITYDEFID
+							from KbEventDetails B 
+							JOIN KbsourcetypeMst Src on SRC.SOURCETYPE_ID=B.SOURCEID and Src.isactive='1'
+							JOIN kbmeasureMst MET on MET.MEASURE_ID=B.METRICID
+							Where B.IS_SOURCE_DIMENSION_ENTITY=1 and
+							Eventsmst.ProblemID=B.EVENT_ID 
+							and A.sourceid=B.Sourceid  and B.TYPE='Measure'
+						)A
+						--for XML RAW('METRIC')
+					)as met
+				)
+				from 
+				(
+					Select A.SOURCEID,Sources.SPOKETYPE,Upper(Sources.Alias) "NAME" 
+					From
+					KbEventDetails A
+					Join KBSourceTypeMst Sources on A.SourceID=Sources.SOURCETYPE_ID and Sources.isactive='1'
+					where   A.IS_SOURCE_DIMENSION_ENTITY=1 and A.EVENT_ID=Eventsmst.ProblemID and Sources.Isactive='1'
+					Group by A.EVENT_ID,A.SourceID, Sources.Alias ,Sources.SPOKETYPE,A.SourceID
+					Union All
+					Select A.sourcetypeid SPOKEID,Sources.SPOKETYPE, Upper(Sources.Alias) "NAME"  
+					from 
+					kbproblemsmetadata A
+					Join KBSourceTypeMst Sources on A.sourcetypeid=Sources.SOURCETYPE_ID
+					where    A.spoketype='1' and A.objecttype='Source' and A.EVENTID=Eventsmst.ProblemID  and Sources.Isactive='1' 
+					limit 1
+				)A
+				--FOR XML RAW('SPOKE') ,ROOT('SPOKEDETAILS')
+			)as spk
+		)spkdet
+	)
+							 
+	/*Dimensions*/
+	,
+	(
+		Select Row_to_json(dims) "DIMENSIONS"
+		From
+		(
+			Select Array_to_json(Array_agg(Row_to_json(dim))) "DIMENSION"
+			from
+			(	
+				Select   Coalesce(Mst.ID,0) "ID", Coalesce(Mst.DIMENSIONNAME,'') "NAME" ,'ID,NAME' "Attribute_list"
+				, 
+				
+				(
+					Select Array_to_json(Array_agg(Row_to_json(met))) "METRIC"
+					from
+					(
+						Select link.sourceID "SPOKEID", B.MetricID "METRICID",B.MetricName||'ID'  "METRICNAME"
+						,'SPOKEID,METRICID,METRICNAME' "Attribute_list"
+						from KbEventDetails B 
+						JOIN Kb_dim_sourcelink link on B.METRICNAME= link.METRICNAME
+						Where   B.IS_SOURCE_DIMENSION_ENTITY=2
+						and  A.EVENT_ID=B.EVENT_ID and A.Sourceid=B.Sourceid  
+						--for XML RAW('METRIC')
+					)as met
+				)
+				from 
+				KbEventDetails A
+				JOIN KB_DIM_DIMENSIONMST Mst on Mst.Id=A.SourceID
+				where   A.IS_SOURCE_DIMENSION_ENTITY=2  and Eventsmst.ProblemID=A.EVENT_ID
+				Group by A.EVENT_ID,Mst.ID  , Mst.DIMENSIONNAME   ,A.sourceid 
+				--FOR XML RAW('DIMENSION') ,ROOT('DIMENSIONS')
+			)as dim
+		) dims	
+	)
+
+	/*ENTITIES*/
+	,
+	(
+		Select Row_to_json(entmst) "ENTITIES"
+		From
+		(
+			Select Array_to_json(Array_agg(Row_to_json(ents))) "Entity"
+			from
+			(	
+				Select Coalesce(Mst.ENTITYDEF_ID,0) "ID", Coalesce(Mst.ENTITY_NAME,'') "NAME", Coalesce(Mst.ENTITYDEF_ID,0) "ENTITYDEFID" 
+				,'ID,NAME,ENTITYDEFID' "Attribute_list"
+				, 
+				(
+					Select Array_to_json(Array_agg(Row_to_json(ent))) "EntityAttribute"
+					from
+					(
+						Select B.ServiceLabel  "NAME"
+						,Case when screen.ObjectType='EntityDefinition' then 0 else 1 end as "Type"
+						,'NAME,Type' "Attribute_list"
+						from KbEventDetails B 
+						join KBEntityScreenConfigurationMst screen on screen.EntityDefID=B.SOURCEID and screen.ServiceLabel=B.ServiceLabel
+						Where B.IS_SOURCE_DIMENSION_ENTITY=3
+						and A.EVENT_ID=B.EVENT_ID 
+						and A.sourceid=B.Sourceid  
+						--for XML RAW('EntityAttribute')
+					)as ent
+				)
+				from 
+				KbEventDetails A
+				JOIN KBEntityMst Mst on Mst.ENTITYDEF_ID=A.SourceID
+				where   A.IS_SOURCE_DIMENSION_ENTITY=3 and A.EVENT_ID=Eventsmst.ProblemID
+				Group by A.EVENT_ID,Mst.ENTITYDEF_ID  ,Mst.ENTITY_NAME  ,A.sourceid 
+				--FOR XML RAW('Entity') ,ROOT('ENTITIES')
+			)as ents
+		)entmst
+	)
+	, 
+ 	Case when Eventsmst.Ispivote=1 then
+				(
+					select Array_to_json(Array_agg(Row_to_json(tab))) "TABLESTRUCTURE"
+					from
+					(
+						Select '"DMCOLLECTION_'||EVENT_SD||'"' "TableName",'Eventcollection' "Type" 
+						,cast('ROW' as xml) "ROOT"
+						--,'TableName,Type,ROOT' "Attribute_list"
+						,
+						(
+							Select Array_to_json(Array_agg(Row_to_json(met))) as "METRIC"
+							from
+							(
+								select MD.SourceTypeID as "SPOKEID"
+								,MD.ObjectType as "OBJECTTYPE"
+								,MD.MetricID "METRICID"
+								, case when SpokeType='1' and MD.MetricName != 'seq' 
+									Then Metrics.MetricName Else replace(MD.MetricName,' ','') End "METRICNAME"
+								,TABLECOL "TABLECOL" 
+								,case when upper(MD.METRICDATATYPE) like '%INT%' then 'BIGINT' else MD.METRICDATATYPE end as "METRICDATATYPE"
+								,SPOKETYPE "SPOKETYPE"
+								,Coalesce(ENTITYDEFID ,0) "ENTITYDEFID"
+								,'SPOKEID,OBJECTTYPE,METRICID,METRICNAME,TABLECOL,METRICDATATYPE,SPOKETYPE,ENTITYDEFID' "Attribute_list"
+								from 
+								kbproblemsmetadata MD 
+								Left Outer Join kbMetricMst Metrics on MD.metricId=Metrics.Metric_id
+								where MD.eventid=Coalesce(Rprt1.OriginalId,Rprt1.EVENT_ID)  
+								order by RecordID
+								--For XML RAW('METRIC')
+							)as met
+						)
+						from KbEventsMst Rprt1 
+						Where Rprt1.EVENT_ID=Eventsmst.EventID 
+						--for xml path(''),ROOT('TABLESTRUCTURE') 
+					)as tab
+				)
+ 
+	when Eventsmst.Ispivote=0 then
+ 
+				(
+					
+					Select Row_To_json(tabs) as "TABLES"
+					From
+					(
+					select A."TABLESTRUCTURE", B."TABLESTRUCTURE"
+					from 
+					(
+						select Array_to_json(Array_agg(Row_to_json(tab))) "TABLESTRUCTURE"
+						from
+						(
+							Select '"DMCOLLECTION_'||EVENT_SD||'"' "TableName",'Eventcollection' "Type" 
+							,cast('ROW' as xml) "ROOT"
+							--,'TableName,Type,ROOT' "Attribute_list"
+							,
+							(
+								Select Array_to_json(Array_agg(Row_to_json(met))) as "METRIC"
+								from
+								(
+									select MD.SourceTypeID as "SPOKEID"
+									,MD.ObjectType as "OBJECTTYPE"
+									,MD.MetricID "METRICID"
+									, case when SpokeType='1' and MD.MetricName != 'seq' 
+										Then Metrics.MetricName Else replace(MD.MetricName,' ','') End "METRICNAME"
+									,TABLECOL "TABLECOL" 
+									,case when upper(MD.METRICDATATYPE) like '%INT%' then 'BIGINT' else MD.METRICDATATYPE end as "METRICDATATYPE"
+									,SPOKETYPE "SPOKETYPE"
+									,Coalesce(ENTITYDEFID ,0) "ENTITYDEFID"
+									,'SPOKEID,OBJECTTYPE,METRICID,METRICNAME,TABLECOL,METRICDATATYPE,SPOKETYPE,ENTITYDEFID' "Attribute_list"
+									from 
+									kbproblemsmetadata MD 
+									Left Outer Join kbMetricMst Metrics on MD.metricId=Metrics.Metric_id
+									where MD.eventid=Coalesce(Rprt1.OriginalId,Rprt1.EVENT_ID)  
+									order by RecordID
+									--For XML RAW('METRIC')
+								)as met
+							)
+							from KbEventsMst Rprt1 
+							Where Rprt1.EVENT_ID=Eventsmst.EventID 
+							--for xml path(''),ROOT('TABLESTRUCTURE') 
+						)as tab
+					)A
+					,
+					(
+						select Array_to_json(Array_agg(Row_to_json(tab))) "TABLESTRUCTURE"
+						from
+						(
+							select '"DMCOLLECTION_'||EVENT_SD||'_Conditions"' as "TableName"
+							,'Eventcollection' "Type",cast('KPIS/KPI' as xml) "ROOT"
+							--,'TableName,Type,ROOT' "Attribute_list"
+							,
+							(
+								Select Array_to_json(Array_agg(Row_to_json(met))) as "METRIC"
+								from
+								(
+									select A.TABLECOL,A.METRICNAME,A.METRICDATATYPE,A.OBJECTTYPE
+									,'OBJECTTYPE,METRICNAME,TABLECOL,METRICDATATYPE' "Attribute_list" 
+									from
+									(
+										select 'Seq' as TABLECOL,'seq' as METRICNAME,'varchar(500)' as METRICDATATYPE,'DefaultColumns' OBJECTTYPE ,1 as Torder
+										union
+										select 'Condition Name' as TABLECOL,'kpiname' as METRICNAME,'varchar(500)' as METRICDATATYPE,'DefaultColumns' OBJECTTYPE,2 as Torder
+										union
+										select 'Condition Range' as TABLECOL,'kpistatus' as METRICNAME,'varchar(500)' as METRICDATATYPE,'DefaultColumns' OBJECTTYPE,3 as Torder
+										union
+										select 'Condition KPI' as TABLECOL,'groupingname' as METRICNAME,'varchar(500)' as METRICDATATYPE,'DefaultColumns' OBJECTTYPE,4 as Torder
+									)A order by A.Torder 
+									--For XML RAW('METRIC')
+								) as met
+							)
+							from KbEventsMst E1 
+							where E1.EVENT_ID=Eventsmst.EventID
+							--for xml path('TABLESTRUCTURE')
+						)as tab
+					)B 
+					-- from KbEventsMst EVNTS 
+-- 					Where EVNTS.EVENT_ID=Eventsmst.EventID 
+				--for xml path('')
+					) tabs
+				)
+	else
+		(
+			select Array_to_json(Array_agg(Row_to_json(tab))) "TABLESTRUCTURE"
+			from
+			(
+				Select '"DMCOLLECTION_'||EVENT_SD||'"' "TableName", 'Eventcollection' "Type" 
+				,cast('ROW' as xml) ROOT
+				--,'TableName,Type,ROOT' "Attribute_list"
+				,
+				(
+					Select Array_to_json(Array_agg(Row_to_json(met))) as "METRIC"
+					from
+					(
+						select 
+						MD.SourceTypeID as "SPOKEID"
+						,MD.ObjectType as "OBJECTTYPE"
+						,MD.MetricID "METRICID"
+						,Replace(MD.MetricName,' ','') "METRICNAME"
+						,TABLECOL "TABLECOL" 
+						,case when Upper(METRICDATATYPE) like '%INT%' then 'BIGINT' else METRICDATATYPE end as "METRICDATATYPE"
+						,SPOKETYPE	"SPOKETYPE"
+						,Coalesce(ENTITYDEFID ,0) as "ENTITYDEFID" 
+						,'SPOKEID,OBJECTTYPE,METRICID,METRICNAME,TABLECOL,METRICDATATYPE,SPOKETYPE,ENTITYDEFID' "Attribute_list"
+						from kbproblemsmetadata MD 
+						where MD.eventid=Coalesce(Rprt1.OriginalId,Rprt1.EVENT_ID)  
+						order by RecordID
+						--For XML RAW('METRIC')
+					)as met
+				)
+				from KbEventsMst Rprt1 
+				Where Rprt1.EVENT_ID=Eventsmst.EventID 
+				--for xml path(''),ROOT('TABLESTRUCTURE') 
+			)as tab
+		)
+ 
+	END
+	,
+	(
+		select Array_to_json(Array_agg(Row_to_json(tab))) "TABLESTRUCTURE"
+		from
+		(
+			Select '"Scrty_DM_Event_'||EVENT_SD||'"' "TableName" ,'Security' "Type"
+			--,'TableName,Type' "Attribute_list"
+			,
+			(
+				Select Array_to_json(Array_agg(Row_to_json(met))) as "METRIC"
+				from
+				(
+					select  ColumnName "TABLECOL",Datatype  "METRICDATATYPE"
+					,'TABLECOL,METRICDATATYPE' "Attribute_list"
+					from KB_DynamicTable_MetaData 
+					Where Type ='events' and SubType ='Security' 
+					order by ID 
+					--For XML RAW('METRIC')
+				)as met
+			)
+			from KbEventsMst Rprt1 
+			Where Rprt1.EVENT_ID=Eventsmst.EventID 
+			--for xml path(''),ROOT('TABLESTRUCTURE') 
+		)as tab
+	)
+	from 
+	Tempdata Eventsmst
+	--For XML RAW('EVENT')
+	) cor
+	)outs
+ );		
+
+	Vkpis:=( 
+
+			Select Row_to_json(kpi) as "KPISTATUSES"
+			From
+			(
+				Select Array_to_json(Array_agg(Row_to_json(stat))) "KPISTATUS"
+				from
+				(	
+					Select kpiid "kpiid", A.kpiactionid "kpiactionid", A.kpiaction "kpiaction"
+					,'kpiid,kpiactionid,kpiaction' "Attribute_list"
+					From
+					(
+						Select Distinct Coalesce(kpis.originalid,kpis.KPI_ID) kpiid, kstatus.STATUSID kpiactionid, kpirules.RULEACTION kpiaction
+						from 
+						KBEventTemplates ETemplates 
+						join KBKpiMst kpis on ETemplates.TEMPLATE_ID=kpis.TEMPLATE_ID
+						join KBKpiRule kpiRules on kpis.KPI_ID=kpiRules.KPI_ID and kpis.TEMPLATE_ID=kpirules.TEMPLATE_ID
+						Join KBKpiStatus KStatus on Kpirules.RULEACTION=KStatus.STATUS
+						where kpis.isactive='1' and kpirules.isactive='1'
+						Union
+						Select Distinct kpis.KPI_ID kpiid, kstatus.STATUSID kpiactionid, KStatus.STATUS kpiaction
+						from 
+						KBEventTemplates ETemplates 
+						join KBKpiMst kpis on ETemplates.TEMPLATE_ID=kpis.TEMPLATE_ID
+						Join KBKpiStatus KStatus on KStatus.STATUSid =3
+						where kpis.isactive='1'
+					) A
+					--For XML RAW('KPISTATUS'),Root('KPISTATUSES')
+				)stat
+			)kpi	
+		);
+		
+	VEvents:=( 
+			Select Row_to_json(eve) "EVENTS"
+			from
+			(
+			Select VEvents as "EVENT",Vkpis  as "KPISTATUSES"
+			--for Xml path(''),Root('EVENTS')
+			) eve
+		);
+
+	
+	/* Retrieving the Analysis collection Related meta data */
+
+	VCollections:=
+		( 
+
+			select	Row_To_json(cols) as "COLLECTIONS"
+			From
+			(
+				Select Array_to_json(Array_agg(Row_to_json(col))) as "COLLECTION"
+				from
+				(
+					Select Coalesce(CORRELATIONID,0) as "CORRELATIONID"
+					,ReportConfigurationID "COLLECTIONID"
+					,ConfigDescription "COLLECTIONDESCRIPTION"
+					,StorageType "COLLECTIONTYPE", '"RPT_'||ReportConfigurationName||'"' "TableName"
+					,'' "TIMESPAN",'' "TIMESPANTYPE",'' "EXPRESSION"
+					,RptMst.ISPIVOTE as "ISPIVOT"
+					,DataRetentionPeriod "DATARETENTIONPERIOD"
+					,DRPUOM "UOM"   
+					,SNAPSHOTFROMDATE "SNAPSHOTFROMDATE"
+					,SNAPSHOTTODATE "SNAPSHOTTODATE"
+					,REGULARFROMDATE "REGULARFROMDATE"
+					,STORAGETYPE "STORAGETYPE"
+					,Case when RptMst.ReportType='1' then 'True' else 'False' end as "ishistory" 
+					,Reporton "Reporton"
+					,'CORRELATIONID,COLLECTIONID,COLLECTIONDESCRIPTION,COLLECTIONTYPE,TableName,TIMESPAN,TIMESPANTYPE,EXPRESSION,ISPIVOT,DATARETENTIONPERIOD'
+					||',UOM,SNAPSHOTFROMDATE,SNAPSHOTTODATE,REGULARFROMDATE,STORAGETYPE,ishistory,Reporton' "Attribute_list"
+					,
+					(
+						Select Array_to_json(Array_agg(Row_to_json(rul))) "rule"
+						from
+						(
+							Select  A.KPIID "kpiid"
+							,Kpimst.KPI_NAME "kpiname"
+							,kpimst.SOURCE_ID "sourceid"
+							,Sources.Alias "sourcename"
+							,'' "ruleoperator"
+							,
+							(
+								Select String_agg(rules,'')
+								from	
+								(
+									Select Cast(KStatus.STATUSID as varchar(100))||';' || Rules.RULEACTION ||'#CWDB01#' rules
+									from KBKpiRule Rules 
+									Join KBKpiStatus KStatus ON Rules.RULEACTION=KStatus.STATUS
+									where Kpimst.KPI_ID=Rules.KPI_ID and Kpimst.TEMPLATE_ID=Rules.TEMPLATE_ID
+									--for xml path('')	
+								)as rul
+							)"kpiaction"
+							,
+							(
+								Select Cast(KStatus.STATUSID as varchar(100)) 
+								from KBKpiRule Rules 
+								Join KBKpiStatus KStatus ON Rules.RULEACTION=KStatus.STATUS
+								where Kpimst.KPI_ID=Rules.KPI_ID and Kpimst.TEMPLATE_ID=Rules.TEMPLATE_ID
+								Limit 1
+							--for xml path('')	
+							) "kpiactionid"
+							,kpitypes.KPITYPENAME "kpitype"
+							,Kpimst.KPITYPE "kpitypeid"
+							,Kpimst.TEMPLATE_ID	"TEMPLATE_ID"
+							,templates.TEMPLATE_NAME "TEMPLATE_NAME"
+							,'kpiid,kpiname,sourceid,sourcename,ruleoperator,kpiaction,kpiactionid,kpitype,kpitypeid,TEMPLATE_ID,TEMPLATE_NAME' "Attribute_list"
+							From
+							(
+								Select Rules.REPORTCONFIGURATIONID, regexp_split_to_table(Rules.kpiids,',') KPIID 
+								from KBANALYSISCOLLECTIONRULESEVENTKPIS Rules
+								--Outer Apply FNSPLITWITHIDENTITY(Rules.KPIIDS,',') Split
+								where Rules.REPORTCONFIGURATIONID=rptmst.ReportConfigurationID
+							) A
+							Join KBKpiMst Kpimst on cast(A.KPIID as int)=Kpimst.KPI_ID
+							Join KBSourceTypeMst Sources on kpimst.SOURCE_ID=Sources.SOURCETYPE_ID and Sources.isactive='1'
+							Join KBTemplateMst Templates on Kpimst.TEMPLATE_ID=templates.TEMPLATE_ID
+							Left Outer Join KbkpiTypeMst KpiTypes on kpimst.KPITYPE=KpiTypes.KPITYPEID
+							--For XML RAW('rule')
+						)as rul
+					)
+					,
+					(
+						Select Array_to_json(Array_agg(Row_to_json(spkd))) "SPOKEDETAILS"
+						from		
+						(
+							Select 
+							ACTIONONHISTORICALDATA "ACTIONONHISTORICALDATA"
+							,DATABACKUPPATH "DATABACKUPPATH"
+							,CorrelationId CORRELATIONID
+							,'ACTIONONHISTORICALDATA,DATABACKUPPATH,CORRELATIONID' "Attribute_list"
+							,
+							(
+								Select Array_to_json(Array_agg(Row_to_json(spk))) "SPOKE"
+								from
+								(	
+								Select A.SourceTypeID "SPOKEID", Sources.Alias "NAME",IsEnviDataSrc "SPOKETYPE"
+								,'SPOKEID,NAME,SPOKETYPE' "Attribute_list"
+								, 
+								(
+									Select Array_to_json(Array_agg(Row_to_json(met))) "METRIC"
+									from
+									(
+										Select SPOKEID "SPOKEID",METRICID "METRICID",replace(METRICNAME,' ','') "METRICNAME"
+										,Coalesce(ENTITYDEFID,0) "ENTITYDEFID"
+										,'SPOKEID,METRICID,METRICNAME,ENTITYDEFID' "Attribute_list"
+										From
+										(
+										
+										Select  distinct BB.sourceTypeID SPOKEID, MetricID METRICID,METRIC.METRICNAME as METRICNAME,ENTITYDEFID
+										--MetricName  METRICNAME
+										from KBReportsConfigurationDetails BB 
+										JOIN KBMETRICMST METRIC on Metric.METRIC_ID=BB.MetricID
+										Where A.ReportConfigurationID=BB.ReportConfigurationID 
+										and A.sourceTypeid=BB.SourceTypeid and BB.ISDIMENSION IS NULL and BB.TYPE='Metric'
+										
+										UNION ALL
+										
+										Select  distinct BB.sourceTypeID SPOKEID, MetricID METRICID,METRIC.MEASURE_NAME as METRICNAME,ENTITYDEFID
+										--MetricName  METRICNAME
+										from KBReportsConfigurationDetails BB 
+										JOIN KBMEASUREMST METRIC on Metric.MEASURE_ID=BB.MetricID
+										Where A.ReportConfigurationID=BB.ReportConfigurationID 
+										and A.sourceTypeid=BB.SourceTypeid and BB.ISDIMENSION IS NULL and BB.TYPE='Measure'
+										
+										) A
+										--for XML RAW('METRIC')
+									)as met
+								)  
+								from 
+								KBReportsConfigurationDetails A
+								Join KBSourceTypeMst Sources on A.SourceTypeID=Sources.SOURCETYPE_ID and Sources.isactive='1'
+								where A.ReportConfigurationID=RptMst.ReportConfigurationID and A.ISDIMENSION IS NULL and  Sources.Isactive='1'
+								Group by A.ReportConfigurationID,A.SourceTypeID, Sources.Alias,IsEnviDataSrc 
+								--FOR XML RAW('SPOKE') 
+							)as spk
+						)
+						from KBReportsConfigurationMSt Det
+						where Det.ReportConfigurationID= RptMst.ReportConfigurationID
+						--FOR XML RAW('SPOKEDETAILS')
+						)as spkd
+					)
+					/*Dimensions*/
+					,
+					(
+						Select Row_to_json(dims) as "DIMENSIONS"
+						From
+						(
+							Select Array_to_json(Array_agg(Row_to_json(dim))) "DIMENSION"
+							from
+							(	
+								Select Coalesce(Mst.ID,0) "ID", Coalesce(Mst.DIMENSIONNAME,'') "NAME" 
+								,'ID,NAME' "Attribute_list"
+								, 
+								(
+									Select Array_to_json(Array_agg(Row_to_json(met))) "METRIC"
+									from
+									(
+										Select Link.SOURCEID "SPOKEID"
+										,B.MetricID "METRICID"
+										,B.MetricName||'ID' "METRICNAME"
+										,'SPOKEID,METRICID, METRICNAME' "Attribute_list"
+										from KBReportsConfigurationDetails B 
+										JOIN KB_DIM_Sourcelink Link on Link.MetricName=B.MetricName
+										Where A.ReportConfigurationID=B.ReportConfigurationID 
+										and A.sourceTypeid=B.SourceTypeid and B.ISDIMENSION=1
+										--for XML RAW('METRIC')
+									)as met
+								)
+								from 
+								KBReportsConfigurationDetails A
+								JOIN KB_DIM_DIMENSIONMST Mst on Mst.Id=A.SourceTypeID
+								where A.ReportConfigurationID=RptMst.ReportConfigurationID and A.ISDIMENSION=1
+								Group by A.ReportConfigurationID,Mst.ID  , Mst.DIMENSIONNAME   ,A.sourceTypeid
+								--FOR XML RAW('DIMENSION') ,ROOT('DIMENSIONS')
+							)as dim
+						) dims	
+					)
+					 
+							  
+					/*ENTITIES*/
+					,
+					(
+						Select Row_to_json(entity) as "ENTITIES"
+						From
+						(
+							select Array_to_json(Array_agg(Row_to_json(ents))) "Entity"
+							from
+							(	
+								Select Coalesce(Mst.ENTITYDEF_ID,0) "ID", Coalesce(Mst.ENTITY_NAME,'') "NAME",Coalesce(Mst.ENTITYDEF_ID,0) "ENTITYDEFID"
+								,'ID,NAME,ENTITYDEFID' "Attribute_list"
+								, 
+								(
+									select Array_to_json(Array_agg(Row_to_json(ent))) "EntityAttribute"
+									from
+									(
+										Select B.ServiceLabel  "NAME"
+										,Case when screen.ObjectType='EntityDefinition' then 0 else 1 end as "Type"
+										,'NAME,Type' "Attribute_list"
+										from KBReportsConfigurationDetails B 
+										join KBEntityScreenConfigurationMst screen on screen.EntityDefID=B.SourceTypeID 
+												and screen.ServiceLabel=B.ServiceLabel
+										Where A.ReportConfigurationID=B.ReportConfigurationID 
+										and A.sourceTypeid=B.SourceTypeid  and B.ISDIMENSION=2
+										--for XML RAW('EntityAttribute')
+									)as ent
+								)
+								from 
+								KBReportsConfigurationDetails A
+								JOIN KBEntityMst Mst on Mst.ENTITYDEF_ID=A.SourceTypeID
+								where A.ReportConfigurationID=RptMst.ReportConfigurationID and A.ISDIMENSION=2
+								Group by A.ReportConfigurationID,Mst.ENTITYDEF_ID  ,Mst.ENTITY_NAME   ,A.sourceTypeid
+								--FOR XML RAW('Entity') ,ROOT('ENTITIES')
+							)as ents
+						) entity	
+					)
+					,
+					(
+						Select Row_to_json(eves) "EVENTS"
+						from
+						(
+							select Array_to_json(Array_agg(Row_to_json(eve))) as "Event"
+							from
+							(
+								Select Problems.EVENT_ID "ID",Problems.EVENT_SD  "NAME"
+								,'ID,NAME' "Attribute_list"
+								from
+								(
+									SELECT EVENTIDS EventID
+									FROM KBANALYSISCOLLECTIONRULESEVENTKPIS a
+									WHERE A.REPORTCONFIGURATIONID=RptMst.ReportConfigurationID 
+								) A
+								Join KbEventsMst Problems on A.EventID =cast(Problems.EVENT_ID as varchar)
+								--FOR XML RAW('Event'),Root('EVENTS')
+							) AS eve
+						) eves	
+					)
+					,case when RptMst.Ispivote=1 then
+						(
+							Select  Array_to_json(Array_agg(Row_to_json(tab))) as "TABLESTRUCTURE"
+							from
+							(
+								Select 'RPT_'||ReportConfigurationName "TableName"
+								,'AnalysisCollection' "Type" 
+								,cast('ROW' as xml) "ROOT" 
+								,
+								(
+									Select Array_to_json(Array_agg(Row_to_json(met))) "METRIC"
+									from
+									(
+										select  MD.SourceTypeID as "SPOKEID"
+										,MD.ObjectType as "OBJECTTYPE"
+										,MD.MetricID "METRICID"
+										, replace(MD.MetricName,' ','') "METRICNAME"
+										,TABLECOL	"TABLECOL" 
+										,Case when Upper(METRICDATATYPE) like '%INT%' then 'BIGINT' else METRICDATATYPE end as "METRICDATATYPE"
+										,SPOKETYPE	"SPOKETYPE"
+										,Coalesce(ENTITYDEFID ,0) as "ENTITYDEFID"
+										,'SPOKEID,OBJECTTYPE,METRICID,METRICNAME,TABLECOL,METRICDATATYPE,SPOKETYPE,ENTITYDEFID' "Attribute_list"
+										from kbreportsmetadata MD where MD.ReportConfigurationID=Rptmst.ReportConfigurationID order by RecordID 
+										--For XML RAW('METRIC')
+									)as met
+								)
+								from KBReportsConfigurationMSt Rprt1 
+								Where Rprt1.ReportConfigurationID=Rptmst.ReportConfigurationID 
+								Union All
+								Select 'Scrty_DM_Analysis_'||ReportConfigurationName "TableName"
+								,'Security' "Type"
+								,cast('NULL' as xml) "ROOT" 
+								,
+								(
+									Select Array_to_json(Array_agg(Row_to_json(met))) "METRIC"
+									from
+									(
+										select  0 "SPOKEID",'' "OBJECTTYPE", 0 "METRICID",'' "METRICNAME",
+										  ColumnName "TABLECOL",Datatype  "METRICDATATYPE", '' "SPOKETYPE", 0 "ENTITYDEFID"
+										,'TABLECOL,METRICDATATYPE' "Attribute_list"
+										from KB_DynamicTable_MetaData 
+										Where "type" ='AnalysisCollection' and SubType ='Security' 
+										order by ID 
+										--For XML RAW('METRIC')
+									)as met
+								)
+								from KBReportsConfigurationMSt Rprt1 
+								Where Rprt1.ReportConfigurationID=Rptmst.ReportConfigurationID 
+								--for xml path(''),ROOT('TABLESTRUCTURE') 
+							)as tab
+						)
+					when RptMst.Ispivote=0 then
+				
+						(
+							 
+									select Array_to_json(Array_agg(Row_to_json(tab))) "TABLESTRUCTURE" 
+									from
+									(
+										select 'RPT_'||R.ReportConfigurationName "TableName"
+										,'AnalysisCollection' "Type" 
+										,cast('ROW' as xml) "ROOT"
+										,
+										(
+											Select Array_to_json(Array_agg(Row_to_json(met))) "METRIC"
+											from
+											(
+												select  MD.SourceTypeID as "SPOKEID"
+												,MD.ObjectType as "OBJECTTYPE"
+												,MD.MetricID "METRICID"
+												, replace(MD.MetricName,' ','') "METRICNAME"
+												,TABLECOL	"TABLECOL" 
+												,Case when Upper(METRICDATATYPE) like '%INT%' then 'BIGINT' else METRICDATATYPE end as "METRICDATATYPE"
+												,SPOKETYPE "SPOKETYPE"
+												,Coalesce(ENTITYDEFID ,0) as "ENTITYDEFID"
+												,'SPOKEID,OBJECTTYPE,METRICID,METRICNAME,TABLECOL,METRICDATATYPE'
+												||',SPOKETYPE,ENTITYDEFID' "Attribute_list"
+												from kbreportsmetadata MD 
+												where MD.ReportConfigurationID=RptMst.ReportConfigurationID  
+												order by RecordID 
+												--For XML RAW('METRIC')
+											)as met
+										)
+										from KBReportsConfigurationMSt R 
+										where  R.ReportConfigurationID=RptMst.ReportConfigurationID 
+										--for xml path('TABLESTRUCTURE')
+
+										Union All
+										
+										select 'RPT_'||ReportConfigurationName||'_Conditions' as "TableName"
+										,'AnalysisCollection' "Type"
+										,cast('KPIS/KPI' as xml) "ROOT"
+										,
+										(
+											Select Array_to_json(Array_agg(Row_to_json(met))) "METRIC"
+											from
+											(
+												select A.TABLECOL "TABLECOL",A.METRICNAME "METRICNAME",A.METRICDATATYPE "METRICDATATYPE"
+												,A.OBJECTTYPE "OBJECTTYPE" 
+												,'OBJECTTYPE,METRICNAME,TABLECOL,METRICDATATYPE' "Attribute_list"
+												from
+												(
+													select 'Seq' as TABLECOL,'seq' as METRICNAME,'varchar(500)' as METRICDATATYPE,'DefaultColumns' OBJECTTYPE ,1 as Torder
+													union
+													select 'Condition Name' as TABLECOL,'kpiname' as METRICNAME,'varchar(500)' as METRICDATATYPE,'DefaultColumns' OBJECTTYPE,2 as Torder
+													union
+													select 'Condition Range' as TABLECOL,'kpistatus' as METRICNAME,'varchar(500)' as METRICDATATYPE,'DefaultColumns' OBJECTTYPE,3 as Torder
+													union
+													select 'Condition KPI' as TABLECOL,'groupingname' as METRICNAME,'varchar(500)' as METRICDATATYPE,'DefaultColumns' OBJECTTYPE,4 as Torder
+												)A order by A.Torder 
+												--For XML RAW('METRIC')
+											) as met
+										)
+										from KBReportsConfigurationMSt R1 where R1.ReportConfigurationID=RptMst.ReportConfigurationID 
+
+										Union All
+										
+										select 'RPT_'||ReportConfigurationName||'_events' as "TableName"
+										,'AnalysisCollection' as "Type",cast('EVENTS/EVENT' as xml) "ROOT"
+										,
+										(
+											Select Array_to_json(Array_agg(Row_to_json(met))) "METRIC"
+											from
+											(
+												select A.TABLECOL "TABLECOL",A.METRICNAME "METRICNAME",A.METRICDATATYPE "METRICDATATYPE"
+												,A.OBJECTTYPE "OBJECTTYPE" 
+												,'OBJECTTYPE,METRICNAME,TABLECOL,METRICDATATYPE' "Attribute_list"
+												from
+												(	
+													select 'Seq' as TABLECOL,'seq' as METRICNAME,'Nvarchar(500)' as METRICDATATYPE ,'DefaultColumns' OBJECTTYPE,1 as Torder
+													union
+													select 'eventid' TABLECOL,'eventid' as METRICNAME,'bigint' as METRICDATATYPE,'DefaultColumns' OBJECTTYPE,2 as Torder
+													union
+													select 'eventname' TABLECOL,'eventname' as METRICNAME,'Nvarchar(500)' as METRICDATATYPE,'DefaultColumns' OBJECTTYPE,3 as Torder
+												) A 
+												order by A.Torder 
+												--For XML RAW('METRIC')
+											)as met
+										)	
+										from KBReportsConfigurationMSt R2 
+										where R2.ReportConfigurationID=RptMst.ReportConfigurationID 
+										Union All
+										Select 'Scrty_DM_Analysis_'||ReportConfigurationName "TableName"
+										,'Security' "Type"
+										,cast('NULL' as xml) "ROOT" 
+										,
+										(
+											Select Array_to_json(Array_agg(Row_to_json(met))) "METRIC"
+											from
+											(
+												select  0 "SPOKEID",'' "OBJECTTYPE", 0 "METRICID",'' "METRICNAME",
+												ColumnName "TABLECOL",Datatype  "METRICDATATYPE", '' "SPOKETYPE", 0 "ENTITYDEFID"
+												,'TABLECOL,METRICDATATYPE' "Attribute_list"
+												from KB_DynamicTable_MetaData 
+												Where "type" ='AnalysisCollection' and SubType ='Security' 
+												order by ID 
+												--For XML RAW('METRIC')
+											)as met
+										)
+										from KBReportsConfigurationMSt Rprt1 
+										Where Rprt1.ReportConfigurationID=Rptmst.ReportConfigurationID 
+									)as tab
+								
+								 
+-- 								from KBReportsConfigurationMSt Rprt1 
+-- 								Where Rprt1.ReportConfigurationID=RptMst.ReportConfigurationID 
+								--for xml path('')
+							 
+						)
+					else  
+						(
+							select  Array_to_json(Array_agg(Row_to_json(tab))) "TABLESTRUCTURE" 
+							from
+							(
+								Select 'RPT_'||ReportConfigurationName "TableName"
+								,'AnalysisCollection' "Type" 
+								,cast('ROW' as xml) "ROOT"
+								,
+								(
+									Select Array_to_json(Array_agg(Row_to_json(met))) "METRIC"
+									from
+									(
+										select  MD.SourceTypeID as "SPOKEID"
+										,MD.ObjectType as "OBJECTTYPE"
+										,MD.MetricID "METRICID"
+										, replace(MD.MetricName,' ','') "METRICNAME"
+										,TABLECOL	"TABLECOL" 
+										,Case when METRICDATATYPE like '%INT%' then 'BIGINT' else METRICDATATYPE end as "METRICDATATYPE"
+										,SPOKETYPE	"SPOKETYPE"
+										,Coalesce(ENTITYDEFID ,0) as "ENTITYDEFID" 
+										,'SPOKEID,OBJECTTYPE,METRICID,METRICNAME,TABLECOL,METRICDATATYPE'
+												||',SPOKETYPE,ENTITYDEFID' "Attribute_list"
+										from kbreportsmetadata MD 
+										where MD.ReportConfigurationID=Rptmst.ReportConfigurationID 
+										order by RecordID 
+										--For XML RAW('METRIC')
+									)as met
+								)
+								from KBReportsConfigurationMSt Rprt1 
+								Where Rprt1.ReportConfigurationID=Rptmst.ReportConfigurationID 
+								--for xml path(''),ROOT('TABLESTRUCTURE') 
+								Union All
+								Select 'Scrty_DM_Analysis_'||ReportConfigurationName "TableName"
+								,'Security' "Type"
+								,cast('NULL' as xml) "ROOT" 
+								,
+								(
+									Select Array_to_json(Array_agg(Row_to_json(met))) "METRIC"
+									from
+									(
+										select  0 "SPOKEID",'' "OBJECTTYPE", 0 "METRICID",'' "METRICNAME",
+										  ColumnName "TABLECOL",Datatype  "METRICDATATYPE", '' "SPOKETYPE", 0 "ENTITYDEFID"
+										,'TABLECOL,METRICDATATYPE' "Attribute_list"
+										from KB_DynamicTable_MetaData 
+										Where "type" ='AnalysisCollection' and SubType ='Security' 
+										order by ID 
+										--For XML RAW('METRIC')
+									)as met
+								)
+								from KBReportsConfigurationMSt Rprt1 
+								Where Rprt1.ReportConfigurationID=Rptmst.ReportConfigurationID 
+							)as tab
+						)
+					END
+					-- ,
+-- 					(
+-- 						select Row_to_json(tab) "TABLESTRUCTURE" 
+-- 						from
+-- 						(
+-- 							Select 'Scrty_DM_Analysis_'||ReportConfigurationName "TableName"
+-- 							,'Security' "Type"
+-- 							,
+-- 							(
+-- 								Select Array_to_json(Array_agg(Row_to_json(met))) "METRIC"
+-- 								from
+-- 								(
+-- 									select  ColumnName "TABLECOL",Datatype  "METRICDATATYPE"
+-- 									,'TABLECOL,METRICDATATYPE' "Attribute_list"
+-- 									from KB_DynamicTable_MetaData 
+-- 									Where "type" ='AnalysisCollection' and SubType ='Security' 
+-- 									order by ID 
+-- 									--For XML RAW('METRIC')
+-- 								)as met
+-- 							)
+-- 							from KBReportsConfigurationMSt Rprt1 
+-- 							Where Rprt1.ReportConfigurationID=Rptmst.ReportConfigurationID 
+-- 							--for xml path(''),ROOT('TABLESTRUCTURE') 
+-- 						)as tab
+-- 					)
+					from KBReportsConfigurationMSt RptMst
+					where isactive='1'
+					--For XML RAW('COLLECTION'),Root('COLLECTIONS')
+				)col
+			)cols		
+		);
+
+	--VRules:=replace(VRules,'&amp;','&');
+
+	Return(
+			Select Row_to_json(outs)
+			from
+			(
+				Select Row_to_json(output) as "CORRELATIONDETAILS"
+				from
+				(
+				Select VSpoketypes as "SPOKETYPES"
+				,VEnvironmentalSources as "ENVIRONMENTALDATASOURCE"
+				,VCriteria	as "CRITERIA"
+				,VRules as  "CORRELATION"
+				,VDataDeletionrules as "MATCHINGDATADELETIONRULES"
+				,VCallDependencyRules as "CALLSDEPENDENCYRULES"
+				,VLatency as "LATENCY"
+				,Vevents as "EVENTS"
+				,VCollections as "COLLECTIONS"
+				--for XML PATH(''),ROOT('CORRELATIONDETAILS')
+				) output
+			) outs	
+		);
+ 
+ 
+End
+
+$function$;
+
+ALTER FUNCTION public.usp_cbservgetdefaultinfo(json)
+    OWNER TO postgres;
+
+
+

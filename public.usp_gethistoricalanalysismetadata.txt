@@ -1,0 +1,88 @@
+-- FUNCTION: public.usp_gethistoricalanalysismetadatajson
+
+-- DROP FUNCTION public.usp_gethistoricalanalysismetadatajson;
+
+CREATE OR REPLACE FUNCTION public.usp_gethistoricalanalysismetadata(
+	input json DEFAULT NULL::json)
+RETURNS json
+    LANGUAGE 'plpgsql'
+    COST 100.0
+    VOLATILE 
+AS $function$
+
+begin
+
+/*
+	Report types
+	1 for History
+	0 for Normal
+	
+	
+	
+	Report on
+	0 for correlation
+	1 for multiple DataSource
+	2 for single DataSource
+*/
+  
+Return(
+	Select Row_to_json(outs)
+	from
+	(
+		Select Row_to_json(roo) "root"
+		from
+		(
+			Select Array_to_json(array_agg(row_to_json(rep))) "report"
+			from
+			(	
+				select reportconfigurationid as id,
+				(
+					Select string_agg(id,',') datasourcelist
+					from
+					(
+						select distinct cast(sourcetypeid as varchar(50)) id  
+						from kbreportsconfigurationDetails Details 
+						where details.reportconfigurationid=Mst.reportconfigurationid
+						and details.Isdimension is null and details.type!='KPI' 
+						--for xml path('')
+					)aa
+				) ,
+				ReportConfigurationName as "name"
+				,DataFetchFrequency /*DataRetentionPeriod*/ timeinterval
+				,case when DataFetchFrequencyUOM ='0' then 'Minutes' /*DRPUOM*/
+						when DataFetchFrequencyUOM ='1' then 'Hours' 
+						when DataFetchFrequencyUOM ='2' then 'Days'end uom  /*DRPUOM*/
+				,coalesce(cast(HDS.timestamp as varchar(50)),'') as "timestamp"
+				,coalesce(HDS.epochtimestamp,'') epochtimestamp		
+				,Mst.REGULARFROMDATE as customdate	
+				,case when Mst.ReportOn=0 then 'correlation'
+				when Mst.ReportOn=1 then 'multiple'
+				when Mst.ReportOn=2 then 'single' end as reporton		
+				,
+				(
+					Select licensedetails.LicenseKeyId 
+					From KBUserCustomerMapping usercust
+					Join KBLicenseDetails licensedetails on licensedetails.customerid=usercust.CustomerID
+					 where mst.CreatedBy=usercust.UserID
+					 Limit 1
+				) vid
+				,'id,name,timeinterval,uom,timestamp,epochtimestamp,customdate,reporton,vid' "Attribute_list"
+				from kbreportsconfigurationMst Mst
+				Left join kbhistoricaldatastatus HDS on HDS.collectionid=Mst.reportconfigurationid
+				where Mst.ReportType='1' and coalesce(HDS.status,'0')='0' 
+				  --for xml raw('report'),root('root')
+			) rep	  
+		) roo
+	) outs	 
+)
+;
+
+End
+
+$function$;
+
+ALTER FUNCTION public.usp_gethistoricalanalysismetadata(json)
+    OWNER TO postgres;
+
+
+

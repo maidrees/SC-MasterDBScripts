@@ -1,0 +1,196 @@
+-- FUNCTION: public.usp_kbalerts_insertactions_c2json
+
+-- DROP FUNCTION public.usp_kbalerts_insertactions_c2json;
+
+CREATE OR REPLACE FUNCTION public.usp_kbalerts_insertactions_c2(
+	input json)
+RETURNS json
+    LANGUAGE 'plpgsql'
+    COST 100.0
+    VOLATILE 
+AS $function$
+
+Declare 
+VEmailTemplateID	int;
+VAlertId	int;
+VTemplateId	int;
+VALERT_KPI	int;
+VSourceId	bigint;
+Vresult	json;
+Vcreated_by 	int=1;
+VActiondate	timestamp default(current_timestamp at time zone 'utc')	;
+begin
+
+drop table if exists temps;
+drop table if exists TEMPALERTSEMAIL;
+drop table if exists authenticationtypes;
+
+create temp table temps(id serial,ivalue json);
+create temp table TEMPALERTSEMAIL( ALERT_ID BIGINT,actionname varchar(255),action_description varchar(255),ACTIONGROUPID int,NotificationType varchar(50),MAILTO text,MAILCC text,MAILBCC text,MAILSUBJECT text,EmailTemplate text,AddEmailRule bigint,headers varchar(1000),APIBODY text);
+
+create temp table authenticationtypes(Typeid int, typename varchar(100));
+
+insert into authenticationtypes(typeid, typename)
+select 0,'anonymous'
+union
+select 1,'authenticated'
+union
+select 2,'custom';
+ 
+insert into temps(ivalue)
+select input;
+
+select 
+2
+,ivalue->'action'->> 'alert_id'
+,ivalue->'action'->> 'alert_kpi'
+into VTemplateId, VAlertId,VALERT_KPI
+from temps limit 1;
+
+	--VEmailTemplateID:= ( select templateid from kbeventemailDetails_TempHold where eventid=VALERTID);
+		
+	Insert into TEMPALERTSEMAIL(NotificationType,ACTIONGROUPID,actionname,action_description,MAILTO,MAILCC,EmailTemplate,headers,APIBODY)
+	Select NOTIFICATIONTYPE,atype.typeid authenticationtype, actionname,action_description, url, method_type, parameters, headers, body
+	from
+	(
+		Select
+				'api' as NOTIFICATIONTYPE
+				,ivalue->'action'->>'authentication_type' authenticationtype
+				,ivalue->'action'->>'action_name'  as actionname
+				,ivalue->'action'->>'action_description'  as action_description
+				,ivalue->'action'->>'url'  as url
+				,ivalue->'action'->>'method_type'  as method_type
+				,ivalue->'action'->'parameters'  as parameters
+				,ivalue->'action'->'headers'  as headers
+				,ivalue->'action'->'body' body
+		from temps limit 1
+	)inp 
+	left join authenticationtypes atype on lower(inp.authenticationtype)=atype.typename
+	
+		;	
+--return(select array_to_json(array_Agg(row_to_json(a))) from (select * from TEMPALERTSEMAIL)a);
+
+		Update kbalertmst set isapiconfigured=case when lower(email.NotificationType)='api' then cast('1' as bit) else cast('0' as bit) end 
+		From 
+		(Select NotificationType,MAILTO From TEMPALERTSEMAIL where mailto !='' and MAilto is not null limit 1) email
+		where alert_id=VALERTID
+		 ;
+
+		Update kbalertmst set IsMailConfigured= case when lower(email.NotificationType)='email' then cast('1' as bit) else IsMailConfigured   end 
+		, isapiconfigured=case when lower(email.NotificationType)='api' then cast('1' as bit) else isapiconfigured end 
+		From 
+		(Select NotificationType,MAILTO From TEMPALERTSEMAIL where mailto !='' and MAilto is not null limit 1) email 
+ 
+;
+
+		Insert into kbeventemailmst(tamplatename,"type",createddate,modifieddate,createdby,modifiedby,NotificationAlertType,notificationtype )
+		Select actionname tamplatename, 'Alerts',VActiondate createddate,VActiondate modifieddate,1 createdby, 1 modifiedby,1 NotificationAlertType ,'api'
+		from TEMPALERTSEMAIL 
+		limit 1
+; 
+
+		VEmailTemplateID:=(SELECT currval(pg_get_serial_sequence('kbeventemailmst','templateid')));
+
+ 		Insert into kbeventemailDetails(templateid,eventid,EmailSubject,EmailTo,EmailCC,EmailBCC,Active,mailcount,EmailRule,emailtimeperiod,emailuom
+		,Metricplaceholder,createddate,modifieddate,createdby,modifiedby,AlertFrequency,AlertFrequencyUOM,ANotificationOperator
+		,EmailHtmlContent,EmailRichTextContent,starttime,endtime,rulecriteria,method_type,authentication_type,bodyformat,api_headers)
+		Select VEmailTemplateID templateid,eventid,MAILSUBJECT EmailSubject, MAILTO EmailTo, NULL EmailCC, MAILBCC EmailBCC,Active
+		,A.mailcount,A.EmailRule,emailtimeperiod,emailuom emailuom ,B.apibody  Metricplaceholder, VActiondate createddate
+		,VActiondate modifieddate, Vcreated_by createdby,Vcreated_by modifiedby,AlertFrequency,AlertFrequencyUOM,ANotificationOperator , B.emailtemplate
+		,B.apibody ,starttime,endtime,rulecriteria,MAILCC,ACTIONGROUPID,'JSON' bodyformat,cast(b.headers as json) headers
+		from kbeventemailDetails_TempHold A
+		Join TEMPALERTSEMAIL B on 1=1
+		--Join kbeventemailmst C on B.actionname=C.tamplatename
+		where eventid=VALERTID 
+		--and C."type"='Alerts'
+ ;
+ 
+
+ Select A.alert_kpi,source_id,B.Createdby  into VALERT_KPI, VSourceId,Vcreated_by
+ from kbalertmst A
+ Join kbkpimst B on A.alert_kpi=B.kpi_id 
+ where alert_id=VALERTID
+ ;
+
+		Vresult:=( 			
+				Select row_to_json(alerts) as "ALERTDETAILS"
+				from
+				(
+					Select VAlertId "ALERT_ID", VALERT_KPI "KPIID"
+						,  (	 
+							select case when coalesce(IsMultiDataSource,'0')='0' 
+										then cast(source_id as varchar(50)) Else corr.SourceID End
+							from kbkpimst kpis
+							left outer join 
+									(
+									select Correlationid, string_agg(cast(SourceID as varchar(50)),';') Sourceid
+									from
+									CBCorrelationDetails 
+									group by Correlationid
+									)corr 
+									on kpis.CorrelationID=corr.CorrelationID
+							where coalesce(originalid,kpi_id)=VALERT_KPI and kpis.isactive='1'
+						) "SOURCE_ID"
+					,(
+						select string_agg(cast(alertaction as varchar(50)),';') 
+						from kbalertaction Actions 
+						where Actions.alert_id=VALERTID and isactive=1
+					) "ACTIONS"
+					,Vcreated_by "LOGINID"
+					,
+					(
+
+						Select Array_to_json(array_agg(row_to_json(emails))) as "EMAILDETAILS"
+						from
+						(
+							Select templatedetailid "EmailID", A.eventid "AlertID",EmailSubject "EmailSubject",EmailTo "EmailTo"
+							,EmailCC "EmailCC",EmailBCC "EmailBCC"
+							,A.EmailHtmlContent "EmailTemplate", B.NotificationAlertType "AddEmailRule"
+							from kbeventemailDetails A
+							Join kbeventemailmst B on A.templateid=B.templateid
+							where A.eventid=VALERTID and "type"='Alerts' and B.templateid=VEmailTemplateID and lower(B.notificationtype)='email'
+						)emails
+					)
+					,
+					(
+
+						Select Array_to_json(array_agg(row_to_json(emails))) as "APIDETAILS"
+						from
+						(
+							Select templatedetailid "EmailID", A.eventid "AlertID",EmailSubject "appender"
+							,EmailTo "url"
+							,atype.typename "authentication_type",method_type "method_type",EmailBCC "password"
+							,A.EmailHtmlContent "parameters"
+							,B.NotificationAlertType "AddEmailRule"
+							,bodyformat "datatype"
+							,emailuom "uom"
+							,A.api_headers  "headers"
+							,A.EmailRichTextContent "body"
+							from kbeventemailDetails A
+							Join kbeventemailmst B on A.templateid=B.templateid
+							join authenticationtypes atype on authentication_type=atype.typeid
+							where A.eventid=VALERTID and "type"='Alerts' and B.templateid=VEmailTemplateID and lower(B.notificationtype)='api'
+						)emails
+					)
+					) alerts
+					)
+;
+Return(select row_to_json(a) from (select VResult as "ALERTDETAILS") a);
+
+	exception when others then 
+		Return(
+
+			Select row_to_json(a) 
+			from
+			(select 500 "code", 'error' "message")a
+		);
+
+End
+
+$function$;
+
+ALTER FUNCTION public.usp_kbalerts_insertactions_c2(json)
+    OWNER TO postgres;
+
+
+

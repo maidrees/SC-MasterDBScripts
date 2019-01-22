@@ -1,0 +1,226 @@
+-- FUNCTION: public.usp_kbassignkpistoentityjson
+
+-- DROP FUNCTION public.usp_kbassignkpistoentityjson;
+
+CREATE OR REPLACE FUNCTION public.usp_kbassignkpistoentity(
+	input json)
+RETURNS json
+    LANGUAGE 'plpgsql'
+    COST 100.0
+    VOLATILE 
+AS $function$
+
+DECLARE
+	VTRAN		VARCHAR(30);
+	VCreated_By	int;
+	VID		int;
+	VEntitydefid	int;
+	VSearchText	varchar(255);
+	VMetricname	varchar(255);
+	VMetricid	int;
+	VTablename	varchar(255);
+	VResult		json;
+	VActiondate	timestamp default(current_timestamp at time zone 'utc')	;	
+
+begin
+
+drop table if exists temps;
+drop table if exists inputtemps;
+drop table if exists users ;
+drop table if exists entitykpis ;
+
+ 
+create temp table inputtemps(id serial,ivalue json);
+create temp table temps(id serial, screenid int,Title varchar(200),iValue varchar(100),RNUM Int,ScreenDetailID int) ;
+create temp table users (id serial,userid int);
+create temp table entitykpis (id serial,entityid int,kpiid int);
+
+insert into inputtemps(ivalue)
+select input;
+
+select 
+ivalue->'input'->> 'transtype' 
+,ivalue->'input'->> 'loginid'
+,ivalue->'input'->> 'vid'
+,ivalue->'input'->> 'defid'
+,ivalue->'input'->> 'metricid'
+,ivalue->'input'->> 'searchtext'
+into
+VTRAN,VCreated_By,VID,VEntitydefid,VMetricid,VSearchText
+
+from 
+inputtemps 
+limit 1;
+
+insert into users(userid)
+select userid
+From
+KBUserCustomerMapping A
+Inner join
+(
+	Select customerid 
+	from KBUserCustomerMapping
+	where userid=VCreated_by
+) B  on A.customerid=B.customerid
+where A.customerid!=1
+;
+
+If lower(Vtran)='getmasterdata' then
+Begin
+
+	
+
+	Return
+		(
+			select row_to_json(ou)
+			from
+			(
+				select row_to_json(outs) "output"
+				from
+				(
+					select 
+
+					( 
+
+						Select Row_to_json(kps) "kpidetails"
+						from
+						(
+							Select Array_to_json(Array_agg(Row_to_json(kp))) "kpi"
+							from
+							(
+								Select Coalesce(Kpis.OriginalId,kpis.KPI_ID) as KPI_ID,KPI_NAME as KPI_NAME,KPI_DESCRIPTION as KPI_DESCRIPTION,KPITYPE as KPITYPE
+								from 
+								KBKpiMst Kpis 
+								where IsActive=1 and coalesce(IsMultiDataSource,'0')='0'
+								--For XML RAW('KPI'),ROOT('KPIDETAILS')
+							) kp
+						)kps
+						
+					),
+					
+					( 
+						Select Row_to_json(ents) "entitydefinitions"
+						from
+						(
+							Select Array_to_json(Array_agg(Row_to_json(ent))) "entitydefinition"
+							from
+							(
+								Select  ENTITYDEF_ID as ENTITYDEF_ID,ENTITY_NAME as ENTITY_NAME  
+								from KBEntityMst Entity
+								where exists (Select 1 from KBEntities B where Entity.ENTITYDEF_ID=B.ENTITYDEF_ID) and IsActive='1'
+								--and Exists (Select 1 from users B where Entity.createdby=B.userid)
+								Order by ENTITYDEF_ID desc
+								--FOR XML RAW('ENTITYDEFINITION'),ROOT('ENTITYDEFINITIONS')
+							) ent
+						)ents	
+					)
+
+					,
+					
+					(
+						Select Row_to_json(conds) "conditiondetails"
+						from
+						(
+							Select Array_to_json(Array_agg(Row_to_json(cond))) "condition"
+							from
+							(
+								select CRITERIAID as CRITERIAID,CRITERIANAME as CRITERIANAME 
+								from 
+								CBMCriteriaMst 
+								--for XML RAW('CONDITION'),ROOT('CONDITIONDETAILS')
+							) cond
+						)conds		
+					)
+				)outs
+			) ou	
+		);	
+
+end;
+Elseif lower(Vtran)='entitysearch' then
+Begin
+
+	VMetricname:=(select controltitle from kbentityscreenconfigurationmst where screenid=VMetricid);
+
+	VTablename:=(select entitytablename from kbentitymst where entitydef_id=Ventitydefid)	;
+
+	If VTablename is not null then
+	begin
+	
+		Execute (' select Row_to_json(outs) from ( select Row_to_json(ents) "entitydetails" from ( Select Array_to_json(Array_Agg(Row_to_json(ent))) "entity" from ( select "ID" entityid, B.Entity_name from '
+			|| VTablename || ' A Join kbentities b on A."ID"=B.entity_id  where Lower("'||VMetricname||'") like Lower(''%'||VSearchText)||'%'')) ent ) ents) outs ' into VResult ;
+
+		Return(Vresult);
+	end;
+	else
+	begin
+
+	Return(-1);
+	end;
+	End if; 
+
+End;
+Elseif lower(Vtran)='assignkpis' then
+Begin
+
+	Insert into entitykpis (entityid,kpiid)
+	select cast(rels->>'entityid' as int) entityid, cast(rels->>'kpiid' as int) kpiid
+	from
+	(
+		Select json_array_elements(relations) as rels
+		From
+		(
+		select ivalue->'input'->'relation' as relations
+		from inputtemps limit 1
+		)a
+	) relations;	
+
+	Insert into kbentitykpis(entity_id,kpi_id,createdby, createddate,modifiedby,modifieddate, isactive)
+	select entityid,kpiid, Vcreated_by, VActiondate, Vcreated_by, VActiondate,1
+	from
+	entitykpis A
+	where not exists (select 1 from kbentitykpis where entityid=entity_id and kpiid=kpi_id);
+	
+Return(select row_to_json(outs) from ( select row_to_json(a) "output" from (select 1 result)a)outs );
+
+	 
+
+End;
+Elseif lower(Vtran)='getscreenconfiguration' then
+begin
+
+	VResult:=(		
+			select array_to_json(array_agg(row_to_json(outputs)))   "entitydetails"
+			from
+			(
+				select array_to_json(array_agg(row_to_json(output)))  as "master"
+				from
+				(
+					select 
+					rowindex as "rowindex"
+					,screenid as "metricid"	
+					,controltitle "label"
+					,ServiceLabel "servicelabel"
+					,controlDataType "datatype"
+					from 
+					kbentityscreenconfigurationmst smst
+					where entitydefid=Ventitydefid and objecttype='EntityDefinition'
+					
+				) output
+			)outputs
+		)			
+		;
+
+Return(VResult);
+End;
+
+end if;
+
+End
+
+$function$;
+
+ALTER FUNCTION public.usp_kbassignkpistoentity(json)
+    OWNER TO postgres;
+
+
+

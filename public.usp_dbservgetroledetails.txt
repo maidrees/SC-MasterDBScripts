@@ -1,0 +1,200 @@
+-- FUNCTION: public.usp_dbservgetroledetailsjson
+
+-- DROP FUNCTION public.usp_dbservgetroledetailsjson;
+
+CREATE OR REPLACE FUNCTION public.usp_dbservgetroledetails(
+	input json DEFAULT NULL::json)
+RETURNS json
+    LANGUAGE 'plpgsql'
+    COST 100.0
+    VOLATILE 
+AS $function$
+
+Declare 
+	VStr2 json;
+	VStr3 json;
+	VResult Json;
+	VAttributeName varchar(200);
+	VDatatype  Varchar(50);
+	
+begin
+
+drop table if exists Dim;
+drop table if exists DimAtt;
+
+Create temp table Dim(AttributeName varchar(200),Datatype Varchar(50));
+Create temp table DimAtt(id serial, Source_ID int, Metricname varchar(200),AttributeName varchar(200),Datatype Varchar(50));
+
+VStr2:=(
+		Select Array_to_json(Array_agg(row_to_json(rol))) as "role"
+		From
+		(	
+			Select  role_id "roleid", Role_name "rolename"
+			,'roleid,rolename' "Attribute_list" 
+			,
+			(
+				Select Row_to_json(dur)
+				from
+				(
+				select FromDate "FromDate",ToDate "ToDate" 
+				,'FromDate,ToDate' "Attribute_list"
+				from kbroledetails	RD 
+				Where RD.role_id=RM.role_id and fromdate is not null
+				--for xml raw('Duration')
+				) as dur
+			)		
+			,
+			(
+				Select Array_to_json(Array_agg(row_to_json(loc))) as "location"
+				from
+				(
+				Select Country "CountyName",city "CityName",state "StateName",postcode "Pincode"
+				,'CountyName,CityName,StateName,Pincode' "Attribute_list" 
+				from kbroledetails	RD 
+				Where RD.role_id=RM.role_id		
+				and (RD.country is  not null or RD.city is not null or RD.state Is not Null or RD.postcode is not null)
+				--for xml raw('location')
+				) as loc
+			)	
+			,
+			(
+				Select Array_to_json(Array_agg(row_to_json(ent))) as "entity"
+				from
+				(
+				Select entity_id "entity_id",entitydef_id "entitydef_id",entity_locationid "entity_locationid"
+				,'entity_id,entitydef_id,entity_locationid' "Attribute_list" 	
+				from kbroledetails RD 
+				Where RD.role_id=RM.role_id and RD.entity_id is not null
+				--for xml raw('entity')
+				) as ent
+			)
+			from KBRoleMst RM
+			--for  xml raw('role'),root('roles')
+		)rol	
+	);
+
+	insert into Dim(AttributeName,Datatype)
+	Select AttributeName,(case When DimensionID =1 Then 'TimeDimension' When DimensionID =2 Then 'LocationDimension' End) 
+	from DIM_DimensionAttributes Where DimensionID in(Select ID  from KB_DIM_DImensionmst Where DimensionName in('TimeDimension','LocationDimension'))
+	;
+
+	While (Select Count(*) from Dim)>0 Loop
+	
+		Select AttributeName ,Datatype into VAttributeName,VDatatype from Dim Limit 1;
+		
+		if VDatatype='TimeDimension' Then
+		Begin
+			insert into DimAtt(Source_ID, Metricname,AttributeName,Datatype)
+			Select distinct KM1.Source_ID, KDS.MetricName Metricname, KST.Alias||'_'||KDS.MetricName||'_'||VAttributeName||'ID' ,VDatatype
+			from KBMetricmst KM1  
+			Join KB_DIm_sourcelink KDS on KDS.SourceID= KM1.Source_ID and cast(KDS.METRICID as int)=KM1.METRIC_ID
+			Join KBSourceTypemst KST on KST.SourceType_ID=KM1.Source_ID
+			Where /*KM.Source_ID=KM1.Source_ID and*/ KM1.MetricDatatype='Datetime' --and @Datatype='TimeDimension'
+			;
+		End;
+		Elseif VDatatype='LocationDimension' Then
+		Begin
+			
+			insert into DimAtt(Source_ID, Metricname,AttributeName,Datatype)	
+			Select distinct KM1.Source_ID, KDS.MetricName Metricname, /*KST.Alias||'_'||*/VAttributeName||'ID' ,VDatatype
+			from KBMetricmst KM1  
+			Join KB_DIm_sourcelink KDS on KDS.SourceID= KM1.Source_ID and cast(KDS.METRICID as int)=KM1.METRIC_ID
+			Join KBSourceTypemst KST on KST.SourceType_ID=KM1.Source_ID
+			join KBspokewisemetricsinformation KS on KM1.Source_ID=Ks.SourceTypeid and KS.MetricID=KM1.Metric_ID and KS.MetricDatatype in ('Latitude','City','Country','Longitude')
+			;
+		End;
+		End if;
+		
+	delete from Dim Where AttributeName=VAttributeName and Datatype=VDatatype;
+	End Loop;		
+		
+	With cte As 
+		( 
+			SELECT id, ROW_NUMBER() OVER (PARTITION BY Source_ID,AttributeName ORDER BY Source_ID desc ) RN 
+			FROM DimAtt 
+			Where  Datatype='LocationDimension'
+		) 
+	DELETE FROM DimAtt where id in ( select id from cte WHERE RN<> 1);
+
+	VStr3:= 
+	(
+		Select Array_to_json(Array_agg(Row_to_json(dsrc))) as "DataSource"
+		From
+		(
+			Select  Source_ID "id",KST.Alias "SourceName"
+			,
+			(
+				Select Row_to_json(dats) as "Datetimes"
+				From
+				(
+					Select Array_to_json(Array_agg(Row_to_json(dat))) as "Datetime"
+					from
+					(
+						Select KM1.MetricName "Metricname" ,'Metricname' "Attribute_list"  
+						,
+						(
+							Select Array_to_json(Array_agg(Row_to_json(att))) as "Attribute"
+							From
+							(
+							Select AttributeName "AttributeName",'AttributeName' "Attribute_list"   
+							from DimAtt DA 
+							Where DA.Source_ID=KM1.Source_ID and DA.MetricName=KM1.MetricName and DataType='TimeDimension' 
+							Group By AttributeName
+							--for xml raw('Attribute')
+							) as att
+						)
+						from KBMetricmst KM1 
+						Where KM.Source_ID=KM1.Source_ID and KM1.MetricDatatype='Datetime'  
+						Group By KM1.MetricName,KM1.Source_ID
+				--for xml path('Datetime'),root('Datetimes')
+					) as dat
+				)dats	
+			)  
+			
+			,
+			(
+				Select Row_to_json(atts) as "Locations"
+				From
+				(
+					Select Array_to_json(Array_agg(Row_to_json(att))) as "Attribute"
+					From
+					(
+					Select KST.Alias||'_'||AttributeName as "AttributeName",'AttributeName' "Attribute_list" 
+					from DimAtt DA 
+					Where DataType='LocationDimension' 
+					Group By KST.Alias||'_'||AttributeName
+					--for xml raw('Attribute') ,root('Locations')
+					)as att
+				)atts	
+			)
+			from KBMetricmst KM
+			Join KBSourceTypemst KST on KST.SourceType_ID=KM.Source_ID
+			Group By Source_ID,KST.Alias 
+			--for Xml path('DataSource'),root('DataSources')
+		)dsrc	
+	);
+
+Vresult:= 
+	(
+		Select Row_to_json(output)
+		from
+		(
+			Select Row_to_json(a) "root"
+			from
+			(
+			Select VStr2 as "roles",VStr3 as "DataSources"
+			)a
+		)output	
+	);
+--for xml path(''),root('root')
+
+Return(Vresult);
+
+End
+
+$function$;
+
+ALTER FUNCTION public.usp_dbservgetroledetails(json)
+    OWNER TO postgres;
+
+

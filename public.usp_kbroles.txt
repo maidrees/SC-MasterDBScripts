@@ -1,0 +1,1318 @@
+-- FUNCTION: public.usp_kbrolesjson
+
+-- DROP FUNCTION public.usp_kbrolesjson;
+
+CREATE OR REPLACE FUNCTION public.usp_kbroles(
+	input json)
+RETURNS json
+    LANGUAGE 'plpgsql'
+    COST 100.0
+    VOLATILE 
+AS $function$
+
+DECLARE 
+	VROLE_ID 	bigint;
+	VROLE_NAME 	VARCHAR(1000);
+	VTRAN		VARCHAR(100);
+	VCreated_By	int;
+	VKPI		varchar(1000);
+	Vevents 	Json;
+	Vcollections 	Json;
+	VMailTemplates  Json;
+	Ventities	json;
+	VScreens 	json;
+	VTEMPLATE 	json;
+	VTypes 		json;
+	VTEMPLATE_ID	int;
+	VFirstRec 	int;
+	VLastRec 	int;
+	VPage 		smallint;
+	VRecsPerPage 	smallint;
+	VstartDate	timestamp;
+	VEndDate	timestamp;
+	VActiondate	timestamp default(current_timestamp at time zone 'utc')	;
+	VType varchar(255);
+	VEntitydefid int;
+	VEntitydeftablename	varchar(255);
+	Voperator	varchar(10);
+	VWhereClause	varchar(1000);
+	VAttribname	varchar(255);
+	VprevAttribname	varchar(255);
+	Vattribid	smallint;
+	VValue		varchar(255);
+	VCnt 		smallint;
+	VCnter		smallint;
+	VResult		json;
+	VHasmultiple	bit;
+	Vpageno		int;
+	Vpagesize	smallint;
+	vfromrecord	int;
+	Vtorecord	int;
+Begin
+
+drop table if exists temps;
+drop table if exists TEMPROLES;
+drop table if exists Screendetails;
+drop table if exists DataLevel;
+drop table if exists entity;
+drop table if exists event;
+drop table if exists collection;
+drop table if exists TEMPTABLE;
+drop table if exists users;
+drop table if exists vtblentity;
+Drop table if exists Searchlist;
+Drop table if exists entdef_data;
+Drop table if exists entdef_queries;
+
+create temp table Searchlist(id serial,ikey varchar(255),ivalue varchar(255),attributename varchar(255),otype smallint);
+
+create temp table temps(id serial,ivalue json);
+create temp table TEMPTABLE (id serial,KPIID bigint);
+create temp table users (id serial,userid int);
+
+create temp table TEMPROLES (ColumnName serial,ROLE_NAME VARCHAR(1000),ROLE_DESC VARCHAR(1000),SUPPORT_DASHBOARD VARCHAR(1000)
+,PERFORMANCE_DASHBOARD VARCHAR(1000),TIME_SLIDER VARCHAR(1000),ALERT_SECTION VARCHAR(1000),PROBLEM_SECTION VARCHAR(1000)
+,DECISION_TREE VARCHAR(1000),LASTMODIFIEDBY VARCHAR(1000),CREATEDBY VARCHAR(1000),ROLE_ID BIGINT,TEMPLATE_ID BIGINT,LoginId BIGINT,RoleLevel varchar(50),DataType varchar(50),Expression json  );
+
+create temp table Screendetails (screen_detail_id serial,screen_id int,screen_name varchar(255), "create" bit,Update bit,"delete" bit,readonly bit,roleid int,typeid int);
+
+create temp table vtblentity(id serial, entitydefid int,EntityID int,entity_name varchar(255),LocationId int);
+
+create temp table entdef_data(id serial, entitydefid int, operators varchar(10),metricname  varchar(255), metricdatatype varchar(50),metriccondition varchar(10),value1 varchar(50),value2 varchar(50));
+
+create temp table entdef_queries(id serial, entitydefid int,squery text);
+                  
+insert into temps(ivalue)
+select input;
+
+select ivalue->'ROLE'->> 'TRANSTYPE' 
+,ivalue->'ROLE'->> 'LoginId'
+,ivalue->'ROLE'->> 'ROLE_NAME'
+,ivalue->'ROLE'->> 'StreamSet'
+,cast(ivalue->'ROLE'->> 'PAGENO' as smallint)
+,cast(ivalue->'ROLE'->> 'LIMIT' as smallint)
+into
+	VTRAN	
+	,VCreated_By
+	,VROLE_NAME
+	,VKPI
+	,VPage
+	,VRecsPerPage
+from 
+temps limit 1;
+-- 
+-- select ivalue->'ROLE'->'Duration'->>'FromDate'
+-- ,ivalue->'ROLE'->'Duration'->> 'ToDate'
+-- into
+-- VstartDate
+-- ,
+-- VEndDate
+-- from
+-- temps limit 1;
+
+If VCreated_By =1 then
+begin
+
+	insert into users(userid)
+	select userid
+	From
+	KBUserCustomerMapping A
+	Inner join
+	(
+		Select customerid 
+		from KBUserCustomerMapping
+		where userid=VCreated_By
+	) B  on A.customerid=B.customerid
+	;
+
+end;
+else 
+begin
+	insert into users(userid)
+	select userid
+	From
+	KBUserCustomerMapping A
+	Inner join
+	(
+		Select customerid 
+		from KBUserCustomerMapping
+		where userid=VCreated_By
+	) B  on A.customerid=B.customerid
+	where a.userid!=1
+	;
+
+end;
+end if;
+
+If lower(vtran)='getentityinstancedatalevelsecurity' then
+begin
+
+VRecsPerPage:=100;
+
+end;
+end if;
+
+	VFirstRec:= ((VPage - 1) * VRecsPerPage)+1;
+	VLastRec:= (VPage * VRecsPerPage );
+
+	if VFirstRec =0 then
+		VFirstRec:=NULL;
+	End if;
+	
+	if VLastRec =0 then
+		VLastRec:=NULL;
+	End if;
+ 
+
+/* splitting and inserting the streamsets*/
+
+	INSERT INTO TEMPTABLE(KPIID) 
+	Select cast(kpiid as bigint)
+	from
+	(
+	SELECT regexp_split_to_table(vkpi,'#CWDB01#') as kpiid  
+	)A
+	where (kpiid ~ '^[0-9]+$')
+	;
+	
+If lower(vtran)='create' or lower(vtran)='update' then
+Begin
+
+	insert into TEMPROLES(ROLE_NAME ,ROLE_DESC , LoginId,RoleLevel,DataType)
+	select ivalue->'ROLE'->> 'ROLE_NAME' as Rolename,  ivalue->'ROLE'->> 'ROLE_DESCRIPTION' as ROLEDESCRIPTION, cast(ivalue->'ROLE'->> 'LoginId' as int)
+	,ivalue->'ROLE'->> 'RoleLevel',ivalue->'ROLE'->> 'DataType'
+	from temps limit 1;
+
+	Insert into Screendetails(screen_id,screen_name,"create",update,delete,readonly,typeid)
+	Select
+	 cast(screen->>'screen_id' as int) as screenid
+	,screen->> 'screen_name' 	as 	screenname
+	,cast(screen->> 'Create' as bit) 	as	Create
+	,cast(screen->> 'Update'  as bit)	as	Update
+	,cast(screen->> 'Delete'  as bit)	as	Delete
+	,cast(screen->> 'Readonly'  as bit)	as	Readonly
+	,cast(screen->> 'typeid'  as int)	as 	typeid
+	from
+	(
+
+	select json_array_elements(screen) as screen
+	from
+	(
+	select  ivalue->'ROLE'->'ScreenDetails'->'Screen' AS Screen
+	from temps
+	)AA
+	) BB ;
+	
+
+	If lower(vtran)='create'
+	then
+	Begin
+	
+
+	-- 		
+	-- /*Reading the locations*/		
+	-- Insert into DataLevel(Country,State,City,Zipcode)
+	-- 
+	--  
+	-- 
+	  /*reading the entity definationID ,entityId and LocationID*/
+	Insert into vtblentity(entitydefid,EntityID)
+	select 
+	entitydefid, cast(ed->>'id' as int) entityid
+	from
+	(
+		Select entitydefid, json_array_elements(entdetails) as ed
+		From
+		(
+			select	cast(entities->>'entitydefid' as int) entitydefid
+			,entities->'entities' entdetails
+			from 
+			(
+				Select json_array_elements(ents) as entities
+				From
+				(
+					select ivalue->'ROLE'->'EventDetails' ->'Entity'->'entitydetails'  ents
+					from temps 
+					limit 1
+				)entity	
+			)edetails	
+		)entdet	
+	)edeta	;
+
+	--return(select array_to_json(array_Agg(row_to_json(a))) from (select * from vtblentity)a);
+				
+	-- 
+	-- 
+	-- /*Reading event details*/		
+	-- Insert into @event(EventID  ,fromdate  ,todate  ,data )
+	-- select 
+	-- 		Filter.value('@ID','INT')   
+	-- 		,Filter1.query('FromDate').value('.','DateTime')   
+	-- 		,Filter1.query('ToDate').value('.','DateTime')  
+	-- 		,Filter1.query('LocationData').value('.','varchar(max)')   
+	-- 		from @Trans_xml.nodes('ROLE/EventDetails/Event') as rep(Filter)
+	-- 		outer apply
+	-- 		filter.nodes('FilterData') as rep1(Filter1)
+	-- 	 
+	-- 		
+	-- 
+	-- /*Reading collection details*/		
+	-- Insert into @collection	(ReportID,fromdate,todate,data)	
+	-- select 
+	-- 		Filter.value('@ID','INT')   
+	-- 		,Filter1.query('FromDate').value('.','DateTime')   
+	-- 		,Filter1.query('ToDate').value('.','DateTime')   
+	-- 		,Filter1.query('LocationData').value('.','varchar(max)') 
+	-- 		from @Trans_xml.nodes('ROLE/AnalysisCollectionDetails/AnalysisCollection') as rep(Filter)
+	-- 		outer apply
+	-- 		filter.nodes('FilterData') as rep1(Filter1)
+
+			 
+	/*inserting into kbrolesmst*/
+
+	INSERT INTO KBROLEMST	(
+						
+						ROLE_NAME,
+						ROLE_DESC,
+						SUPPORT_DASHBOARD,
+						PERFORMANCE_DASHBOARD,
+						TIME_SLIDER,
+						ALERT_SECTION,
+						PROBLEM_SECTION,
+						DECISION_TREE,
+						COLUMNB001,
+						MODIFIEDBY,
+						CREATEDBY,
+						TEMPLATE_ID,
+						CREATEDDATE_ID,
+						LASTMODIFIEDDATE_ID
+						,role_type --0 for WBench,1 for DataLevel
+						,DataType
+						--,Expression
+						)	
+			SELECT		
+						TEMPROLES.ROLE_NAME,
+						ROLE_DESC,
+						SUPPORT_DASHBOARD,
+						PERFORMANCE_DASHBOARD,
+						TIME_SLIDER,
+						ALERT_SECTION,
+						PROBLEM_SECTION,
+						DECISION_TREE,
+						NULL,
+						VCreated_By LASTMODIFIEDBY,
+						VCreated_By CREATEDBY,
+						NULL TEMPLATE_ID,
+						NULL,
+						NULL
+						,RoleLevel
+						,DataType
+						--,Expression
+			      FROM TEMPROLES;
+
+			VROLE_ID := (SELECT KBROLEMST.ROLE_ID FROM kbrolemst WHERE kbrolemst.role_name=VROLE_NAME   and isactive=1 limit 1)  ;
+				   
+
+		Insert into kbrolefeatures(role_id,screen_id,"create",update,Delete,read_only,type_id,createdby,modifiedby)
+		select VROLE_ID,screen_id,"create",Update,Delete,Readonly,typeid,VCreated_By,VCreated_By from Screendetails;
+
+		Insert into kbroledetails(role_id,data_type,entity_id,entitydef_id,country,state,city,postcode,createdby,modifiedby)
+		/*Inserting entities and locations and 1 for entities*/
+		select distinct VROLE_ID,'1',EntityID,entitydefid,NULL,NULL,NULL,NULL,VCreated_By ,VCreated_By
+		from Vtblentity A
+		where not exists(select 1 from kbroledetails B where B.role_id=VROLE_ID and A.entityid=b.entity_id)
+
+		;
+
+		update KBRoleTemplates set Isactive=2 where ROLE_ID = VROLE_ID AND TEMPLATE_ID not in ( Select KPIID from TEMPTABLE)and Isactive=1;	
+
+		INSERT INTO KBRoleTemplates
+		( 
+		ROLE_ID ,
+		Template_ID ,
+		COLUMNB001 ,
+		MODIFIEDBY ,
+		MODIFIEDDATE ,
+		CREATEDBY ,
+		CREATEDDATE,
+		CREATEDDATE_ID,
+		LASTMODIFIEDDATE_ID
+		)
+		select
+		VROLE_ID , 
+		TEMPTABLE.KPIID , 
+		NULL , 
+		VCreated_By, 
+		VActiondate,
+		VCreated_By , 
+		VActiondate,
+		NULL,
+		NULL
+		from
+		TEMPTABLE
+		where kpiid is not null
+		;
+
+	return(
+		select row_to_json(AA)
+		from
+		(
+			Select VRole_id as Role_id
+		)AA
+		);
+	End;
+	Elseif Lower(VTran)='update'then
+	begin
+
+		  /*reading the entity definationID ,entityId and LocationID*/
+		Insert into vtblentity(entitydefid,EntityID)
+		select 
+		entitydefid, cast(ed->>'id' as int) entityid
+		from
+		(
+			Select entitydefid, json_array_elements(entdetails) as ed
+			From
+			(
+				select	cast(entities->>'entitydefid' as int) entitydefid
+				,entities->'entities' entdetails
+				from 
+				(
+					Select json_array_elements(ents) as entities
+					From
+					(
+						select ivalue->'ROLE'->'EventDetails' ->'Entity'->'entitydetails'  ents
+						from temps 
+						limit 1
+					)entity	
+				)edetails	
+			)entdet	
+		)edeta	;
+
+			
+		UPDATE KBROLEMST SET
+		ROLE_DESC=a.ROLE_DESC,
+		MODIFIEDBY = VCreated_by,
+		MODIFIEDDATE = VActiondate,
+		role_type=RoleLevel
+		,datatype=a.DataType
+		From temproles a
+		WHERE KBROLEMST.ROLE_NAME = a.ROLE_NAME
+		and Isactive='1';
+									    
+		VROLE_ID:= ( SELECT Role_Id FROM KBROLEMST WHERE ROLE_NAME = VROLE_NAME and Isactive='1' limit 1);
+			
+			
+		update Screendetails set roleid=VROLE_ID;
+		-- update @entity set roleid=@ROLE_ID
+-- 		update @DataLevel set roleid=@ROLE_ID
+-- 		update @event set roleid=@ROLE_ID
+-- 		update @collection set roleid=@ROLE_ID
+		 
+		   
+		 	update kbrolefeatures 
+			set 
+				"create"=B.create
+				,update=B.update
+				,Delete=B.Delete
+				,read_only=B.readonly
+				,modifieddate=VActiondate
+			from 
+			Screendetails B 
+			where kbrolefeatures.role_id=B.roleid and kbrolefeatures.screen_id=B.screen_id;
+			   
+			   	   
+			update kbroledetails set fromdate=VstartDate,todate=VEndDate where role_id=VROLE_ID and Data_Type='0';
+				   
+				    
+-- 			update A  set 
+-- 			A.entity_id=B.EntityID
+-- 			,A.entitydef_id=B.entitydefid
+-- 			,A.entity_locationid=B.LocationId
+-- 			from kbroledetails A
+-- 			join @entity B on A.role_id=B.roleid and A.entity_id=B.EntityID and A.entitydef_id=B.entitydefid 
+-- 			where A.Data_Type=1
+-- 
+-- 
+-- 			update A  set 
+-- 			A.Country=B.Country
+-- 			,A.State=B.State
+-- 			,A.City=B.City
+-- 			,A.postcode=B.Zipcode
+-- 			from kbroledetails A
+-- 			join @DataLevel B on A.role_id=B.roleid and A.Data_Type=2
+					
+					
+					/*Events update*/
+					-- if(select count(1) from @event)>0
+-- 						Begin
+-- 									update A set 
+-- 									A.Country=B.Data
+-- 									,A.fromdate=B.fromdate
+-- 									,A.todate=B.todate
+-- 									from kbroledetails A
+-- 									join @event B on A.role_id=B.roleid
+-- 									where A.is_event_report=1
+-- 						end
+-- 					else
+-- 						begin
+-- 							Delete from kbroledetails where role_id=@ROLE_ID and is_event_report=1
+-- 						END
+				 
+				 
+				 
+				 /*collections update*/
+				--  if(select count(1) from @collection)>0
+-- 					Begin
+-- 							update A set 
+-- 							A.Country=B.Data
+-- 							,A.fromdate=B.fromdate
+-- 							,A.todate=B.todate
+-- 							from kbroledetails A
+-- 							join @collection B on A.role_id=B.roleid
+-- 							where A.is_event_report=2
+-- 					 END
+-- 				else
+-- 					begin
+-- 							Delete from kbroledetails where role_id=@ROLE_ID and is_event_report=2
+-- 					END
+				 
+				  
+				   /*Workbench permissions insertion*/
+				   Insert into kbrolefeatures(role_id,screen_id,"create",Update,Delete,Read_only,type_id)
+				   select VROLE_ID,screen_id,"create",Update,Delete,Readonly,typeid
+				   from Screendetails A
+				   where not  exists (Select 1 from kbrolefeatures B where B.Role_Id=VROLE_ID and A.Screen_id=B.Screen_Id);
+		 		     
+				    /*DataLevel permissions insertion*/
+
+				Insert into kbroledetails(role_id,data_type,entity_id,entitydef_id,country,state,city,postcode,createdby,modifiedby)
+				/*Inserting entities and locations and 1 for entities*/
+				select distinct VROLE_ID,'1',EntityID,entitydefid,NULL,NULL,NULL,NULL,VCreated_By ,VCreated_By
+				from Vtblentity A
+				where not exists(select 1 from kbroledetails B where B.role_id=VROLE_ID and A.entityid=b.entity_id)
+
+				;
+-- 
+-- 
+-- 				/*DataLevel permissions insertion*/
+-- 				Insert into kbroledetails(role_id,data_type,country,state,city,postcode)
+-- 				select @ROLE_ID,2,country,state,city,zipcode
+-- 				from @DataLevel A
+-- 				where not  exists (Select 1 from kbroleDetails B where B.Role_Id=@ROLE_ID and A.country=B.country
+-- 				and A.state=B.state and A.city=B.city)
+-- 
+-- 
+-- 				/*events insertion*/
+-- 				Insert into kbroledetails(role_id,country,fromdate,todate,is_event_report,event_report_id)
+-- 				select @ROLE_ID,data,fromdate,todate,1,EventID
+-- 				from @event A
+-- 				where not  exists (Select 1 from kbroleDetails B where B.Role_Id=@ROLE_ID and A.EventID=B.event_report_id
+-- 				and B.is_event_report=1)
+
+--and A.fromdate=B.fromdate and A.todate=B.todate
+
+				/*collections insertion*/
+				    -- Insert into kbroledetails(role_id,country,fromdate,todate,is_event_report,event_report_id)
+-- 				   select @ROLE_ID,data,fromdate,todate,2,ReportID
+-- 				   from @collection A
+-- 				   where not  exists (Select 1 from kbroleDetails B where B.Role_Id=@ROLE_ID and A.ReportID=B.event_report_id
+-- 										  and B.is_event_report=2)
+
+		update KBRoleTemplates set Isactive=2 where ROLE_ID = VROLE_ID AND TEMPLATE_ID not in ( Select KPIID from TEMPTABLE)and Isactive=1;	
+
+		INSERT INTO KBRoleTemplates
+		( 
+		ROLE_ID ,
+		Template_ID ,
+		COLUMNB001 ,
+		MODIFIEDBY ,
+		MODIFIEDDATE ,
+		CREATEDBY ,
+		CREATEDDATE,
+		CREATEDDATE_ID,
+		LASTMODIFIEDDATE_ID
+		)
+		select
+		VROLE_ID , 
+		TEMPTABLE.KPIID , 
+		NULL , 
+		VCreated_By, 
+		VActiondate,
+		VCreated_By , 
+		VActiondate,
+		NULL,
+		NULL
+		from
+		TEMPTABLE
+		where kpiid is not null
+		;
+
+				Return	(  
+					select row_to_json(output)
+					from
+					(
+						Select Row_to_json(rols) "ROLEDETAILS"
+						From
+						(
+						Select Row_to_json(rol) "ROLE"
+						From
+						(
+						select VROLE_ID AS "ROLE_ID" 
+						,
+						(
+							Select row_to_json(a)
+							from
+							(
+								Select Mst.ROLE_ID "ROLE_ID"
+								,VCreated_By 	"LoginId"
+								,Mst.ROLE_NAME "ROLE_NAME"
+								,Temp.RoleLevel "RoleLevel"
+								,Temp.DataType "DataType"
+								,VTran as "TRANSTYPE"	
+								,
+								(
+									Select Row_to_json(dur) "Duration"
+									from
+									(
+										select VstartDate "FromDate",VEndDate "ToDate" 
+										--for xml path(''),root('Duration')
+									) as dur
+								)
+							,
+							(
+								Select Row_to_json(Edets) as "EntityDetails"
+								from
+								(
+								Select Array_to_json(Array_Agg(Row_to_json(ents))) as "Entity"
+								from
+								(
+									select Mst.ENTITYDEF_ID as "DefID",Mst.ENTITY_NAME as "DefName"
+									,
+									(
+										Select Array_to_json(Array_Agg(row_to_json(ent))) "Entity"
+										from
+										(
+										select   Dets.entity_id as "ID",ent.ENTITY_NAME as "NAME"
+										,
+										(
+											select row_to_json(locs) "Locations"
+											from
+											(
+												Select Array_to_json(Array_Agg(row_to_json(loc))) as "Location"
+												from
+												(
+												select distinct entity_locationid as "ID"
+												,Locs.LOCATION_NAME as "NAME" 
+												from kbentitylocations Locs 
+												join kbroledetails Det on Det.entity_locationid=Locs.LOCATION_ID
+												where Det.entity_locationid=dets.entity_locationid
+												--for xml raw('Location'),root('Locations')
+												)as loc
+											)locs	
+										)
+										from kbentities ENT 
+										join kbroledetails dets on Dets.entity_id=ENT.ENTITY_ID 
+										where dets.entity_id=Dets1.entity_id
+										group by dets.entity_id ,ent.ENTITY_NAME ,dets.entity_locationid
+										--for xml raw('Entity')
+										) ent
+									)
+								from 
+								kbentityMst Mst 
+								join kbroledetails Dets1 on Dets1.entitydef_id=Mst.ENTITYDEF_ID 
+								where Dets1.Role_id=VROLE_ID  
+								group by Mst.ENTITYDEF_ID ,Mst.ENTITY_NAME,Dets1.entity_id  
+								--for xml raw('Entity'),root('EntityDetails')
+								)ents
+								) edets	
+							)   
+							,
+							(
+								Select Row_to_json(locs) as "LocationDetails"
+								from
+								(
+									Select Array_to_json(Array_Agg(row_to_json(loc))) "Location"
+									From
+									(
+									select Country "Country",State "State",City "City",postcode "Zipcode" 
+									from kbroledetails RD 
+									where RD.role_id=Mst.ROLE_ID and RD.data_type='2' 
+									--for xml raw('Location'),ROOT('LocationDetails')
+									)loc
+								)as locs
+							)
+							,Mst.ROLE_DESC as "ROLE_DESCRIPTION"
+							,VKPI as "StreamSet"
+							,
+							(
+								Select Row_to_json(scrs) as "ScreenDetails"
+								From
+								(
+									Select Array_to_json(Array_Agg(row_to_json(scr))) as "Screen"
+									From
+									(
+										select Features.screen_id "screen_id",screen.screen_name as "screen_name"
+										,"create" "Create",Update "Update",Delete "Delete",read_only "Readonly"
+										,type_id as "typeid"
+										from kbrolefeatures Features 
+										join Kbscreensmst screen on screen.screen_id=Features.screen_id
+										where Features.role_id=Mst.role_id 
+										--for xml raw('Screen'),root('ScreenDetails')
+									)as scr
+								) scrs	
+							)
+							
+							
+							
+							from KBROLEMST Mst
+							where Mst.Role_ID=Mst1.Role_Id --and mst.Role_Id=@role_Id
+							--For XML PATH('')
+							)as a
+						)
+						 
+						from KBROLEMST Mst1 
+						join TEMPROLES Temp 
+						on Temp.ROLE_NAME=Mst1.ROLE_NAME  
+						where Mst1.ROLE_ID=VROLE_ID 
+						--FOR XML RAW('ROLE'),ROOT('ROLEDETAILS')
+						)rol
+					)rols	 
+				)output	
+				);
+	
+
+	end;
+	end if;
+	
+	
+End;	
+Elseif Lower(Vtran) ='getstreamset' then
+begin
+
+	select ivalue->'ROLE'->> 'ROLE_ID' ,ivalue->'ROLE'->> 'TEMPLATE_ID'
+	into
+	VROLE_ID
+	,VTEMPLATE_ID
+	from temps limit 1
+	;
+
+		IF (VROLE_ID is NULL or VROLE_ID=0) then
+		BEGIN
+			
+			Return(
+				select Row_to_json(output)
+				from
+				(
+				Select
+				(
+					Select Row_to_json(tempdet) "TEMPLATEDETAILS"
+					from
+					(
+						Select array_to_json(array_agg(row_to_json(temps))) as "TEMPLATE"
+						from
+						(
+						SELECT DISTINCT TEMPLATE_ID AS "TEMPLATE_ID", TEMPLATE_NAME as "TEMPLATE_NAME"
+						,Coalesce(TEMPLATE_DESC,'') AS "TEMPLATE_DESC" 
+						FROM kbtemplatemst A 
+						WHERE TEMPLATE_ID<>1 
+						and exists (Select 1 from users B where A.createdby=B.userid)
+						--FOR XML RAW('TEMPLATE'),ROOT('TEMPLATEDETAILS')
+						) temps
+					)tempdet	
+				),
+				
+				(
+					Select Row_to_json(tempdet) "ScreenDetails"
+					from
+					(
+						Select array_to_json(array_agg(row_to_json(temps))) as "Screen"
+						from
+						(
+						select screen_id "screen_id",screen_name "screen_name",screen_alias "screen_alias",Typ.typeid "typeid",Typ.typeName "typeName"
+						from kbscreensmst screen
+						join Kb_TypeMst Typ on typ. Typeid=screen.typeid
+						where screen.isactive='1'
+						--for xml raw('Screen'),ROOT('ScreenDetails')
+						) temps
+					)tempdet
+				),
+			
+			
+				(
+					Select Row_to_json(tempdet) "TypeDetails"
+					from
+					(
+						Select array_to_json(array_agg(row_to_json(temps))) as "Type"
+						from
+						(
+						select Typeid as typeid,TypeName typename,Coalesce(TypeDescription,'') as typedescription 
+						from Kb_TypeMst 
+						Where Typeid NOT in (5)
+						--for xml raw('Type'),ROOT('TypeDetails')
+						) temps
+					)tempdet
+				),
+				
+				
+			
+				(
+					select row_to_json(output) as "Entities"
+					from
+					(
+					select array_to_json(array_agg(row_to_json(entities))) as "Entity"
+					from
+					(
+					select B.ENTITY_NAME "Name",B.ENTITYDEF_ID ID,  
+					(
+						select string_Agg(sources,';')
+						from
+						(
+							Select cast(DD.SOURCETYPEID as varchar(30)) sources
+							from KBSpokeConfigurations DD
+							where DD.EntitydefID=B.entitydef_id
+							Group by DD.SOURCETYPEID
+						)src
+					)SOURCEID
+					,	
+					(
+						select row_to_json(entatt) as "EntityAttributeDetails"
+						from
+						(
+							select array_to_json(array_agg(row_to_json(attribs))) as "EntityAttribute" 
+							from
+							(
+								select distinct A.* 
+								from
+								(
+									select distinct 
+									Conf.ScreenID "ID"
+									,conf.ControlTitle "Name"
+									,Case   
+									when conf.ControlDataType ='DateTime' Then 'Timestamp'
+									else 'varchar(255)' End "DATATYPE"
+									from kbentityscreenconfigurationMst conf
+									Join KBEntityMst EntityMst on  conf.EntityDefID=EntityMst.ENTITYDEF_ID
+									Left JOIN kbMasterDataTypes MD on MD.DataTypeAlias=conf.ControlDataType
+									where  EntityMst.ENTITYDEF_ID=B.ENTITYDEF_ID and conf.ObjectType='EntityDefinition'
+									union all
+									select distinct 
+									Conf.ScreenID "ID"
+									,conf.ControlTitle "Name"
+									,Case   
+									when conf.ControlDataType ='DateTime' Then 'Timestamp'
+									else 'varchar(255)' End DATATYPE
+									from kbentityscreenconfigurationMst conf
+									Join KBEntityMst EntityMst on  conf.EntityDefID=EntityMst.ENTITYDEF_ID
+									Left JOIN kbMasterDataTypes MD on MD.DataTypeAlias=conf.ControlDataType
+									where  EntityMst.ENTITYDEF_ID=B.ENTITYDEF_ID and conf.ObjectType='Branch'
+								)A
+							--for xml RAW('EntityAttribute'),ROOT('EntityAttributeDetails')
+							) as attribs								
+						)entatt
+					)ents
+					from 
+					kbentitymst B  
+					where IsAcTive='1' 
+					and exists (Select 1 from users BB where B.CreatedBy=BB.userid)
+					Order by Entity_name
+					)entities
+					)output
+				),
+				(
+					
+					Select Row_to_json(tempdet) "EventDetails"
+					from
+					(
+						Select array_to_json(array_agg(row_to_json(temps))) as "Event"
+						from
+						(
+						select distinct Coalesce(OriginalId,EVENT_ID) as "EVENT_ID",EVENT_SD  "EVENT_SD" 
+						from KbeventsMst	A
+						where Isactive='1' 
+						and exists (Select 1 from users B where A.createdby=B.userid)
+						--for xml Raw('Event') ,root('EventDetails')
+						)temps
+					)tempdet	
+				),		
+				(
+					Select Row_to_json(tempdet) "ReportDetails"
+					from
+					(
+						Select array_to_json(array_agg(row_to_json(temps))) as "Report"
+						from
+						(
+						select distinct ReportConfigurationID as "ID",ReportConfigurationName  "NAME"
+						 from KbReportsconfigurationmst	A 
+						 where Isactive='1' 
+						 and  exists (Select 1 from users B where A.createdby=B.userid)
+						--for xml Raw('Report') ,root('ReportDetails')
+						)temps
+					)tempdet
+				),		
+				(
+					Select Row_to_json(tempdet) "MailTemplates"
+					from
+					(
+						Select array_to_json(array_agg(row_to_json(temps))) as "MailTemplate"
+						from
+						(
+						select distinct templateid as "ID",tamplatename  "NAME"
+						 from kbeventemailmst A 
+						 where "type"='Alerts'	  
+						 and exists (Select 1 from users B where A.createdby=B.userid)
+						--for xml Raw('MailTemplate') ,root('MailTemplates')
+						)temps
+					)tempdet
+				)
+				)output
+				);
+									
+		END;
+		ELSE
+		BEGIN
+			 
+			Return
+			(
+				Select Row_to_json(output)
+				from
+				(	
+					Select Row_to_json(tempdet) "TEMPLATEDETAILS"
+					from
+					(
+						Select array_to_json(array_agg(row_to_json(temps))) as "TEMPLATE"
+						from
+						(
+						SELECT KM.TEMPLATE_ID TEMPLATE_ID , KM.TEMPLATE_NAME TEMPLATE_NAME ,Coalesce(TEMPLATE_DESC,'') AS TEMPLATE_DESC 
+						FROM kbtemplatemst KM 
+						Inner join  KBRoleTemplates RK on KM.TEMPLATE_ID = RK.TEMPLATE_ID 
+						where RK.ROLE_ID = VROLE_ID AND KM.TEMPLATE_ID != 1 
+						and exists (Select 1 from users B where KM.createdby=B.userid)
+						--FOR XML RAW('TEMPLATE'), ROOT ('TEMPLATEDETAILS')
+						)temps
+					)tempdet
+				)output	
+			); 
+		END;
+		End if;
+
+end;
+Elseif Lower(VTran)='getdetail' then
+begin
+
+		select ivalue->'ROLE'->> 'ROLE_ID' ,ivalue->'ROLE'->> 'TEMPLATE_ID'
+		into
+		VROLE_ID
+		,VTEMPLATE_ID
+		from temps limit 1;
+		
+		
+		Return (
+
+			Select Row_to_json(output)
+			from
+			(
+				Select Row_to_json(locs) as "ROLEDETAILS"
+				From
+				(
+					Select Array_to_json(Array_Agg(Row_to_json(loc))) "ROLE"
+					from
+					(
+						SELECT  ROLE_NAME AS "ROLE_NAME",
+						Coalesce(ROLE_DESC,'') AS "ROLE_DESCRIPTION",
+						Coalesce(ALERT_SECTION,'0') AS "ALERT_SECTION",
+						Coalesce(DECISION_TREE,'0') AS "DECISION_TREE",
+						Coalesce(PERFORMANCE_DASHBOARD,'0') AS "PERFORMANCE_DASHBOARD",
+						Coalesce(PROBLEM_SECTION,'0') AS "PROBLEM_SECTION",
+						Coalesce(SUPPORT_DASHBOARD,'0') AS "SUPPORT_DASHBOARD",
+						Coalesce(TIME_SLIDER,'0') AS "TIME_SLIDER"
+						, 
+						(
+							Select Array_to_json(Array_Agg(Row_to_json(Rdet))) as "Duration"
+							from
+							(
+							select distinct fromdate as FromDate,todate as ToDate 
+							from kbroledetails RD
+							where RD.role_id=Mst.ROLE_ID  and RD.is_event_report is null 
+							--for xml path(''),root('Duration')
+							) as Rdet
+							)
+						,
+						(
+							Select Row_to_json(entdet) as "EntityDetails"
+							From
+							(
+								Select Array_to_json(Array_Agg(Row_to_json(ents))) "Entity"
+								from
+								(
+									select    ENT.ENTITYDEF_ID as "DefID",ENT.ENTITY_NAME as "DefName"
+									,
+										(
+											select Array_to_json(Array_Agg(Row_to_json(ent))) "Entity"
+											from
+											(
+												select     RD2.entity_id as "ID",ENTITY.ENTITY_NAME "NAME"
+												-- ,
+-- 												(
+-- 													Select Row_to_json(locs) "Locations"
+-- 													from
+-- 													(
+-- 														Select Array_to_json(Array_Agg(Row_to_json(loc))) "Location"
+-- 														from
+-- 														(
+-- 															select distinct RD3.entity_locationid as "ID"
+-- 															--,Loc.LOCATION_NAME as "NAME"
+-- 															from kbroledetails RD3 
+-- 															where RD3.Entity_id=RD2.Entity_id and RD3.role_id=RD2.role_id 
+-- 															and RD3.is_event_report is null
+-- 															--for xml raw('Location'),root('Locations')
+-- 														)as loc
+-- 													)locs
+-- 												)					
+												from kbentities ENTITY
+												join kbroledetails RD2 on RD2.entity_id=ENTITY.ENTITY_ID  
+												where RD2.role_id=RD1.role_id  and RD2.entitydef_id=RD1.entitydef_id  
+													--and  RD2.is_event_report is null
+												group by RD2.role_id  ,RD2.entitydef_id,ENTITY.ENTITY_NAME ,RD2.entity_id 
+												--for xml raw('Entity')
+											) as ent
+										)	
+								from kbroledetails RD1 
+								join kbentityMst ENT on ent.ENTITYDEF_ID=RD1.entitydef_id 
+								where  RD1.role_id= VRole_id  and RD1.role_Id=Mst.role_id
+								group by ENT.ENTITY_NAME,ENT.ENTITYDEF_ID ,RD1.role_id,RD1.entitydef_id 
+								--for xml raw('Entity'),root('EntityDetails') 
+								)as ents
+							) entdet	
+						)
+								
+						,
+						(
+							Select Row_to_json(locs) as "LocationDetails"
+							From
+							(
+								Select Array_to_json(Array_Agg(Row_to_json(loc))) "Location"
+								from
+								(
+									select Country "Country",State "State",City "City",postcode as "Zipcode" 
+									from kbroledetails Details 
+									where Details.role_id=Mst.Role_id and Details.is_event_report is null 
+									and (Country is not null or State is not null or City is not null or postcode is not null)	
+									--for xml raw('Location'),root('LocationDetails')
+								) as loc
+							)locs	
+						)
+						,
+						(
+							Select Row_to_json(locs) as "ScreenDetails"
+							From
+							(
+								Select Array_to_json(Array_Agg(Row_to_json(loc))) "Screen"
+								from
+								(
+								select RF.screen_id,screen.screen_name ,"create" "Create","update" "Update","delete" "Delete"
+								,read_only as "Readonly",type_id as "typeid" 
+								from kbrolefeatures RF
+								join kbscreensMst screen on screen.screen_id=RF.screen_id 
+								where rf.role_id=Mst.role_id 
+								--for xml raw('Screen'),root('ScreenDetails')
+								) as loc
+							)locs	
+						)
+						,
+						(
+							Select Row_to_json(locs) as "EventDetails"
+							From
+							(
+								Select Array_to_json(Array_Agg(Row_to_json(loc))) "Event"
+								from
+								(
+									select event_report_id as "ID", EVENT_SD as "Name"
+									,
+									(
+										Select Row_to_json(filt) as "FilterData"
+										from
+										(
+											select fromdate "fromdate",todate "todate",country as "LocationData"
+											from kbroledetails RD 
+											where role_id=Mst.Role_Id and RD.role_detail_id=RD1.role_detail_id 
+											--for xml path('FilterData')
+										) as filt
+									)
+									from kbroledetails RD1 
+									join  kbeventsMst evnt on RD1.event_report_id=evnt.EVENT_ID
+									where RD1.is_event_report=1 
+									and RD1.role_ID=Mst.Role_Id 
+									--for xml raw('Event'),root('EventDetails')
+								) as loc
+							)locs	
+						)
+						,
+						(
+							Select Row_to_json(locs) as "AnalysisCollectionDetails"
+							From
+							(
+								Select Array_to_json(Array_Agg(Row_to_json(loc))) "AnalysisCollection"
+								from
+								(
+									select event_report_id as "ID", ReportConfigurationName as "Name"
+									,
+									(
+											Select Row_to_json(filt) as "FilterData"
+											from
+											(
+												select fromdate "fromdate",todate "todate",country as "LocationData"
+												from kbroledetails RD 
+												where role_id=Mst.Role_Id and RD.role_detail_id=RD1.role_detail_id 
+												--for xml path('FilterData')
+											) as filt
+									)
+									from kbroledetails RD1 
+									join KBReportsConfigurationMSt evnt 
+										on RD1.event_report_id=evnt.ReportConfigurationID
+									where RD1.is_event_report=2 and RD1.role_ID=Mst.Role_Id 
+									--for xml raw('AnalysisCollection'),root('AnalysisCollectionDetails')
+								) as loc
+							)locs	
+						)		
+						,role_type as "RoleLevel"
+						,DataType as "DataType"
+						,
+						(
+							Select string_agg(streams,'')
+							from
+							(
+								select distinct cast(Template_ID as varchar(100))||'#CWDB01#' streams
+								from KBRoleTemplates 
+								where role_id=VRole_id and Isactive='1' 
+							)as str
+						) as "StreamSet"		
+						,cast(Expression   as xml) 
+						FROM KBROLEMST Mst  
+						WHERE  Mst.ROLE_ID =VRole_id  and Mst.ISACTIVE='1' 
+						order by ROLE_ID desc
+						--FOR XML Raw('ROLE'),ROOT('ROLEDETAILS')
+					) as loc
+				)locs	
+			) output	
+		        );
+
+end;
+Elseif Lower(VTran)='gettooltip' then
+begin
+	Return
+		(
+			Select Row_to_json(output) 
+			From
+			(
+				Select Row_to_json(locs) as "ROLEDETAILS"
+				From
+				(
+					Select Array_to_json(Array_Agg(Row_to_json(loc))) "ROLE"
+					from
+					(
+						select RowNumber "RowNumber",ROLE_ID "ROLE_ID",ROLE_NAME "ROLE_NAME",ROLE_DESCRIPTION "ROLE_DESCRIPTION"
+						,(RowNumber+RevRowNumber )-1 as "TotalRows" ,CreatedBy "CreatedBy","Level"
+						from
+						(
+							Select   row_number() over(Order by A.ROLE_ID desc) as RowNumber
+							,ROW_NUMBER() OVER(ORDER BY A.ROLE_ID ) RevRowNumber , ROLE_ID,ROLE_NAME,ROLE_DESCRIPTION ,CreatedBy,"Level"
+							from
+							(
+								SELECT ROLE_ID AS ROLE_ID, ROLE_NAME AS ROLE_NAME,coalesce(ROLE_DESC,'') AS ROLE_DESCRIPTION 
+								,users.USER_NAME CreatedBy, case when cmt.createdby=1 then 0 else hierarchy_level end "Level"
+								FROM KBROLEMST CMT
+								Join KBUserMst users on CMT.CREATEDBY=users.USER_ID
+								where CMT.ISACTIVE=1
+								and exists (Select 1 from users B where CMT.createdby=B.userid)
+							)A
+						)B
+						where RowNumber BETWEEN coalesce(VFirstRec,1) AND coalesce(VLastRec,100)
+						Order by ROLE_NAME
+						--FOR XML RAW('ROLE'),ROOT('ROLEDETAILS')
+					) as loc
+				)locs	
+			) output	
+		);
+
+end;
+elseif lower(vtran)='getentityforsecuritylevel' then
+begin
+
+	Insert into entdef_data(entitydefid, operators,metricname, metricdatatype,metriccondition,value1,value2)
+	select entitydefid, ioperator,entrules->>'metricname' metricname,entrules->>'metricdatatype' metricdatatype,entrules->>'condition' condition
+	,entrules->>'value1' value1,entrules->>'value2' value2
+	from
+	(
+		select entitydefid, ioperator,json_array_elements(entdet) entrules
+		from
+		(
+			Select 
+			entdat->>'Operator' ioperator
+			,cast(entdat->>'entitydefid' as int) entitydefid
+			,entdat->'Entitydetails' entdet
+			from 
+			(
+				select json_array_elements(entdata) entdat
+				from
+				(	
+					select ivalue->'ROLE'->'Entity' entdata
+					from temps limit 1
+				) es	
+			)entlist
+		)entrul	
+	) entrulz	
+
+	;
+
+	vfromrecord:=((Vpageno*Vpagesize)-Vpagesize)+1;
+	vtorecord:=(Vpageno*Vpagesize);
+	 
+	
+	
+	 
+
+	If (select count(1) from entdef_data A Left join kbentityscreenconfigurationmst mst on A.metricname=controltitle and A.entitydefid=mst.entitydefid 
+			 where mst.screenid is null )>0 then
+	Begin
+
+		Return(
+
+				Select row_to_json(a) 
+				from
+				(select 500 "code", 'invalid metric' "message")a
+
+		);
+
+	End;
+	End if;
+
+ 
+
+	 
+	Begin
+			insert into entdef_queries(entitydefid,squery)
+			select A.entitydefid
+				,
+				(
+					select String_agg(cols,ioperator)
+					from
+					(
+						Select case when lower(b.metricdatatype) like 'string%' or lower(b.metricdatatype) like '%char%' or lower(b.metricdatatype) ='bit' or lower(b.metricdatatype) like 'date%' then
+								' lower("'|| b.metricname ||'") ' || b.metriccondition ||' '''|| b.value1 ||''' ' 
+							when lower(b.metricdatatype) not like 'string%' and lower(b.metricdatatype) like '%char%' and lower(b.metricdatatype) !='bit' and lower(b.metricdatatype) not like 'date%' then	
+								case when lower(b.metriccondition)='between' then  ' "'|| b.metricname ||'"' || b.metriccondition ||' '|| b.value1 ||' and ' || b.value2 || ' '
+									else ' "'|| b.metricname ||'"' || b.metriccondition ||'  '|| b.value1 || ' ' end  
+							end cols
+						, ( select distinct operators from entdef_data C where A.entitydefid=C.entitydefid) ioperator
+						from 
+						entdef_data B
+						where A.entitydefid=b.entitydefid
+
+					)inp
+				)
+			from
+			entdef_data A
+			group by A.entitydefid
+			 
+	 		;
+				
+	End;
+
+	 while ( select count(1) from  entdef_queries)>0 loop
+
+		select entitydefid,squery into VEntitydefid,VWhereClause from entdef_queries limit 1;
+		--return(select row_to_json(a) from(select VWhereClause)a);
+		
+		select entitytablename into VEntitydeftablename 
+		from kbentitymst 
+		where  entitydef_id=VEntitydefid
+		limit 1;
+
+		Execute(	'  insert into vtblentity(entitydefid,entityid,entity_name) select ' || cast(VEntitydefid as varchar(20)) 
+				|| ', "ID" id,b.entity_name "Entity_Name" from ' 
+				|| VEntitydeftablename ||  ' A Join kbentities B on A."ID"=b.entity_id where  "ISACTIVE"=''1'' and ( ' 
+				|| VWhereClause || ' )' );
+		--where inps.serials between ' || vfromrecord || ' and ' || vtorecord ||  '
+
+		delete from entdef_queries where entitydefid=VEntitydefid;
+		
+		
+	end loop;
+
+	return(
+		select row_to_json(outs)
+		from
+		(
+			select array_to_json(array_Agg(row_to_json(a))) "output"
+			from 
+			(
+				select Entitydefid entitydefid,
+				(
+					select array_to_json(array_Agg(row_to_json(ents))) entity
+					from
+					(
+						select entityid 
+						from vtblentity B 
+						where A.Entitydefid=B.Entitydefid  
+					) ents
+				)	
+				from vtblentity A
+				Group by Entitydefid
+			) a
+		)outs
+	);
+
+end;
+ElseIf lower(vtran)='getentityinstancedatalevelsecurity' then
+begin
+
+	select ivalue->'ROLE'->> 'EntityDefId'
+	into
+	VEntitydefid
+	from 
+	temps limit 1;
+
+	insert into vtblentity(entitydefid,entityid,entity_name)
+	select entitydef_id, entity_id,entity_name
+	from
+	kbentities
+	where entitydef_id=VEntitydefid;
+
+	return(
+		select row_to_json(outs)
+		from
+		(
+			select row_to_json(emst) "ENTITYDEFINITION"
+			from
+			(
+				select entitydef_id "entitydefid", entity_name "entitydefname", entitytype "entitytype" 
+				,(select count(1) from vtblentity) "totalpages",VPage "pageno"
+				,(
+					select array_to_json(array_Agg(row_to_json(ents))) "Entity"
+					from
+					(
+						select entityid "entity_id",entity_name "entityname"
+						from vtblentity ent 
+						where entmst.entitydef_id=ent.entitydefid
+					) ents
+				)
+				from kbentitymst entmst
+				where entitydef_id=VEntitydefid
+			) emst
+		) outs	
+	)	
+		;
+
+end;
+ 
+End if;
+
+End
+
+$function$;
+
+ALTER FUNCTION public.usp_kbroles(json)
+    OWNER TO postgres;
+
+
+

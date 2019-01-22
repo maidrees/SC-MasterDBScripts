@@ -1,0 +1,77 @@
+-- FUNCTION: public.usp_facttabledetailsinfojson
+
+-- DROP FUNCTION public.usp_facttabledetailsinfojson;
+
+CREATE OR REPLACE FUNCTION public.usp_facttabledetailsinfo(
+	input json DEFAULT NULL::json)
+RETURNS json
+    LANGUAGE 'plpgsql'
+    COST 100.0
+    VOLATILE 
+AS $function$
+
+begin
+
+Return	(
+
+		Select Row_to_json(output)
+		From
+		(
+			Select Row_to_json(spks) as "root"
+			From
+			(
+				Select Row_to_json(spk) as "spokes"
+				From
+				(
+					Select Array_to_json(Array_Agg(row_to_json(cols))) "spoke"
+					from
+					(
+					select spoke_id "spokeid",SOURCETYPE_NAME "spokename",'spokeid,spokename' "Attribute_list",
+						(
+							Select Array_to_json(Array_Agg(row_to_json(tabs))) as "Table"
+							From
+							(
+								select mst.Table_Name "name",TABLE_TYPE as "tabletype",XPATH as "root"
+								,'name,tabletype,root' "Attribute_list"
+								,
+								(
+									Select Array_to_json(Array_Agg(row_to_json(cols))) as "column"
+									From
+									(
+										select A.TABLE_COLUMNS as "Name",Coalesce(A.ATTRIBUTES,'') as "attribute",DATATYPE as "datatype"
+										, A.IS_NULLABLE  "isnullable"
+										,A.IS_PRIMARY "isprimary",A.XPATH as "root"
+										,'Name,attribute,datatype,isnullable,isprimary,root' "Attribute_list"
+										from KBSPOKETABLEDETAILS A
+										where A.Table_id=Mst.recordId and A.OPERATION_TYPE IS NULL
+										order by TABLE_DETAIL_ID
+										--for xml raw('column')
+									) as cols
+								) 
+								from kbspoketable Mst
+								where Mst.type in(1,3,4)
+								and MST.spoke_id=tab.Spoke_ID and Mst.isactive='1'
+								--for xml raw('Table')
+							) as tabs
+						)
+							
+					from kbsourcetypeMst sources
+					join kbspoketable tab on tab.spoke_id=sources.SOURCETYPE_ID
+					where tab.type=1 and sources.isactive='1' 
+					group by spoke_id,SOURCETYPE_NAME
+					)cols
+				)spk
+			)spks
+		)output		
+		--for xml raw('spoke'),root('spokes')
+	)
+
+;
+End
+
+$function$;
+
+ALTER FUNCTION public.usp_facttabledetailsinfo(json)
+    OWNER TO postgres;
+
+

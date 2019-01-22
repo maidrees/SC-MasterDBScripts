@@ -1,0 +1,205 @@
+-- FUNCTION: public.usp_parsingconditions_c2json
+
+-- DROP FUNCTION public.usp_parsingconditions_c2json;
+
+CREATE OR REPLACE FUNCTION public.usp_parsingconditions_c2(
+	input json)
+RETURNS json
+    LANGUAGE 'plpgsql'
+    COST 100.0
+    VOLATILE 
+AS $function$
+
+Declare Vlogicaloperator varchar(10);
+	Vgeologicaloperator varchar(10);
+	Vgeofence	json;
+begin
+
+drop table if exists temps;	
+
+drop table if exists tempdata;	
+drop table if exists templabels;	
+drop table if exists parseddata;	
+
+create temp table temps(id serial,ivalue json);
+create temp table templabels(id smallint,ivalue char(10));
+create temp table tempdata(id serial,expression text,operators varchar(10),ivalue varchar(50), value2 varchar(50));
+create temp table parseddata(recordid serial,id smallint, expressionid smallint, ilabel varchar(50), ivalue varchar(255));
+
+insert into templabels(id,ivalue)
+select 1, 'source'
+union
+select 2, 'metric'
+union
+select 3, 'entity'
+union
+select 4, 'attribute'
+;
+
+insert into temps(ivalue)
+select input;
+
+Vlogicaloperator:=(select ivalue->> 'logical_operator' from temps limit 1);
+Vgeologicaloperator:=(select ivalue->> 'geo_logicaloperator' from temps limit 1);
+Vgeofence:=(select ivalue-> 'geofence' from temps limit 1);
+
+	insert into tempdata(expression,operators, ivalue,value2) 
+	select meas->>'expression' expression,meas->>'operator',meas->>'value1',meas->>'value2'
+	from
+	(
+		select json_array_elements(measures) meas
+		from
+		(
+			select ivalue->'conditions'-> 'measure' measures
+			from
+			temps
+			limit 1
+		)inp
+	)measure	
+;
+
+	insert into parseddata(expressionid,ivalue)
+	Select  id expressionid, regexp_split_to_table(replace(replace(replace(replace(replace(expression,'$source.',''),'$',''),'.','#flo#'),'{',''),'}',''),'#flo#') ivalue
+	from
+	tempdata;
+
+	Update parseddata
+	set id= A.serial
+	from
+	(
+		select row_number() over(partition by expressionid ) serial, recordid
+		from 
+		parseddata
+	)A
+	where parseddata.recordid=A.recordid
+	;
+Update parseddata set ilabel= A.ivalue
+from
+templabels A
+where parseddata.id=A.id;
+
+-- 
+-- select expression
+-- ,(
+-- 	select srces.sourcetype_id
+-- 	from parseddata source
+-- 	join kbsourcetypemst srces on sources.ivalue=srces.sourcetype_name
+-- 	where 
+-- 	inp.id=source.expressionid and source.ilabel='source'
+-- 
+-- )
+-- from
+-- tempdata inp
+-- ;
+
+--return(select array_to_json(array_Agg(row_to_json(a))) from (select * from parseddata)a);
+
+return(
+
+	Select Row_to_json(outs)
+	from
+	(
+		Select Vlogicaloperator "logical_operator", Row_to_json(conds) "conditions",Vgeologicaloperator "geo_logicaloperator",Vgeofence as "geofence"
+		from
+		(
+			select array_to_json(array_Agg(row_to_json(a))) "measure"
+			from 
+			(
+				select expression "expression",operators "operators", ivalue "value1", value2 as "value2"
+				,(
+					select srces.sourcetype_id
+					from parseddata source
+					join kbsourcetypemst srces on lower(source.ivalue)=lower(srces.sourcetype_name)
+					where 
+					inp.id=source.expressionid and source.ilabel='source' and coalesce(masterspokeid,0)=0 
+
+				) "sourceid"
+				,(
+					select metrics.measure_id
+					from parseddata source
+					join (
+						select srces.sourcetype_id, expressionid
+						from parseddata source1
+						join kbsourcetypemst srces on lower(source1.ivalue)=lower(srces.sourcetype_name)
+						where 
+						source1.ilabel='source' and coalesce(masterspokeid,0)=0 
+						) src on source.expressionid=src.expressionid
+					Join kbmeasuremst metrics on lower(metrics.measure_name)= lower(source.ivalue|| '_measure') and src.sourcetype_id=metrics.source_id 
+					where 
+					inp.id=source.expressionid and source.ilabel='metric' 
+				) "measureid"
+				,(
+					select srces.entitydef_id
+					from parseddata source
+					join kbentitymst srces on lower(source.ivalue)=lower(srces.entity_name)
+					where 
+					inp.id=source.expressionid and source.ilabel='entity'
+
+				) "entitydef_id"
+				,(
+					select metrics.screenid  attributeid
+					from parseddata source
+					join (
+						select srces.entitydef_id, expressionid
+						from parseddata source
+						join kbentitymst srces on lower(source.ivalue)=lower(srces.entity_name)
+						where 
+						inp.id=source.expressionid and source.ilabel='entity'
+						) src on source.expressionid=src.expressionid
+					Join kbentityscreenconfigurationmst metrics on lower(metrics.controltitle)=lower(source.ivalue) and src.entitydef_id=metrics.entitydefid
+					where 
+					inp.id=source.expressionid and source.ilabel='attribute'
+				) "entity_metricid"
+				,(
+					select datasource_metrictype
+					from parseddata source
+					join (
+						select srces.sourcetype_id, expressionid,case when srces.spoketype='1' then 'envsource'  else 'source' end datasource_metrictype
+						from parseddata source1
+						join kbsourcetypemst srces on lower(source1.ivalue)=lower(srces.sourcetype_name)
+						where 
+						source1.ilabel='source' and coalesce(masterspokeid,0)=0
+						) src on source.expressionid=src.expressionid
+					where 
+					inp.id=source.expressionid and source.ilabel='metric'
+				) "datasource_metrictype"
+				,(
+					select metrics.metricdatatype
+					from parseddata source
+					join (
+						select srces.sourcetype_id, expressionid
+						from parseddata source1
+						join kbsourcetypemst srces on lower(source1.ivalue)=lower(srces.sourcetype_name)
+						where 
+						source1.ilabel='source' and coalesce(masterspokeid,0)=0
+						) src on source.expressionid=src.expressionid
+					Join kbmetricmst metrics on lower(metrics.metricname)=lower(source.ivalue) and src.sourcetype_id=metrics.source_id
+					where 
+					inp.id=source.expressionid and source.ilabel='metric' and metrics.template_id=1
+				) "metric_datatype"
+				
+				from
+				tempdata inp
+			)a
+		) conds
+	)outs		
+);
+
+exception when others then 
+		Return(
+
+				Select row_to_json(a) 
+				from
+				(select 500 "code", 'error' "message")a
+
+		);
+
+End
+
+$function$;
+
+ALTER FUNCTION public.usp_parsingconditions_c2(json)
+    OWNER TO postgres;
+
+
+

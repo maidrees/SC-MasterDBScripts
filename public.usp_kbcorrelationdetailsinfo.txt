@@ -1,0 +1,84 @@
+-- FUNCTION: public.usp_kbcorrelationdetailsinfojson
+
+-- DROP FUNCTION public.usp_kbcorrelationdetailsinfojson;
+
+CREATE OR REPLACE FUNCTION public.usp_kbcorrelationdetailsinfo(
+	input json DEFAULT NULL::json)
+RETURNS json
+    LANGUAGE 'plpgsql'
+    COST 100.0
+    VOLATILE 
+AS $function$
+
+begin
+
+Return(
+		Select Row_to_json(output) 
+		From
+		(	
+		Select Row_to_json(cors) as "CORRELATIONS"
+		From
+		(	
+			Select Array_to_json(Array_Agg(row_to_json(cor))) as "CORRELATION"
+			from
+			(
+				SELECT   SPOKE_ID AS "CORRELATIONID",CORR.CorrelationName AS "CORRELATIONNAME"
+				,'CORRELATIONID,CORRELATIONNAME' "Attribute_list"
+				,
+				(
+					Select Row_to_json(tab) as "Tables"
+					From
+					(
+						Select Array_to_json(Array_Agg(row_to_json(tabs))) as "Table"
+						From	
+						(
+							SELECT    '' "spokeid",  ''   "spokename",MST.TABLE_NAME AS "name",DETAILS.OPERATION_TYPE AS "type"
+							,'spokeid,spokename,name,type' "Attribute_list"
+							,
+							(
+								Select Array_to_json(Array_Agg(row_to_json(cols))) as "column"
+								From
+								(
+								SELECT Coalesce(SRc.SOURCETYPE_ID,0) as "spokeid",TABLE_COLUMNS AS "Name",DETS.ATTRIBUTES AS "attribute"
+								,IS_NULLABLE AS "isnullable",IS_PRIMARY AS "isprimary",DATATYPE AS "datatype"
+								,Xpath as "root"
+								,'spokeid,Name,attribute,datatype,isnullable,isprimary,root' "Attribute_list"
+								FROM KBSPOKETABLEDETAILS DETS
+								LEFT join KbsourcetypeMst SRc on SRc.SOURCETYPE_ID=DETS.SPOKE_ID
+								WHERE  DETS.TABLE_ID=MST.RECORDID  --and TABLE_COLUMNS!='CreatedDate'
+								and TABLE_DETAIL_ID=(select min(TABLE_DETAIL_ID) from KBSPOKETABLEDETAILS bb where dets.table_id=bb.table_id and dets.table_columns =bb.table_columns)
+								order by TABLE_DETAIL_ID
+								--FOR XML RAW('column')
+								) AS cols
+							)		
+							FROM KBSPOKETABLE MST
+							JOIN KBSPOKETABLEDETAILS DETAILS ON  MST.RECORDID=DETAILS.TABLE_ID
+							WHERE MST.TYPE=2 
+							and MST.SPOKE_ID= case when mst.TABLE_TYPE!='KPI'Then CORR.CorrelationID When mst.table_type='KPI' Then mst.SPOKE_ID End
+							and coalesce(details.operation_type,'')= case when mst.TABLE_TYPE!='KPI'Then coalesce(details.operation_type,'')
+								When mst.table_type='KPI' Then 'INSERT' End
+							Group by MST.TABLE_NAME,DETAILS.OPERATION_TYPE ,MST.RECORDID  
+							--FOR XML RAW('Table'),root('Tables')
+						) AS tabs
+					)as tab
+				)	
+				FROM KBSPOKETABLE TABs
+				JOIN CBCorrelationMst CORR 
+				ON TABs.SPOKE_ID=CORR.CorrelationID 
+				WHERE TABs.TYPE=2  and TABs.SPOKE_TYPE='CORRELATION' and corr.IsActive='1'
+				Group by SPOKE_ID,CORR.CorrelationName  ,TABs.TYPE ,TABs.SPOKE_TYPE,CORR.CorrelationID
+				--FOR XML RAW('CORRELATION'),ROOT('CORRELATIONS')
+			)cor
+		)cors
+	)output			
+)
+;
+End
+
+$function$;
+
+ALTER FUNCTION public.usp_kbcorrelationdetailsinfo(json)
+    OWNER TO postgres;
+
+
+

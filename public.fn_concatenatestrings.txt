@@ -1,0 +1,72 @@
+-- FUNCTION: public.fn_concatenatestringsbigint, bigint, character varying, smallint
+
+-- DROP FUNCTION public.fn_concatenatestringsbigint, bigint, character varying, smallint;
+
+CREATE OR REPLACE FUNCTION public.fn_concatenatestrings(
+	id bigint,
+	vfieldid bigint DEFAULT NULL::bigint,
+	vselecteddatasource character varying DEFAULT NULL::character varying,
+	itype smallint DEFAULT NULL::smallint)
+RETURNS character varying
+    LANGUAGE 'plpgsql'
+    COST 100.0
+    VOLATILE 
+AS $function$
+
+DECLARE 
+	VMetricMapping varchar(2000):='';
+	
+BEGIN
+
+If iType=1 Then
+Begin
+	Select String_agg(cols,'') into VMetricMapping
+	from
+	(
+	Select  Sources.SOURCETYPE_NAME||';' ||MSTTableColumns ||'#CWT01#' as cols
+	from CBConfigurationMst ConfigMst
+	Join KBSourceTypeMst Sources on Configmst.DataSoureTypeID=Sources.SOURCETYPE_ID
+	LEFT OUTER  JOIN CBSourceInfo SI ON ConfigMst.SourceField = coalesce(SI.SourceField,MSTTableColumns) and Configmst.DataSoureTypeID=SI.Sourceid
+	where CorrelationID=ID and FieldID=VFieldID and ConfigMst.SourceField !='NULL'
+	)A;
+End;
+ElseIf iType=2 Then
+Begin
+
+	Select String_agg(cols,'') into VMetricMapping
+	from
+	(
+	Select Sources.SOURCETYPE_NAME||';'||MSTTableColumns ||':'||Value1||'#CWT01#' as cols
+	from CBConfigurationMst ConfigMst
+	Join KBSourceTypeMst Sources on Configmst.DataSoureTypeID=Sources.SOURCETYPE_ID
+	JOIN CBCORRELATIONCONFIGDETAILS DETAILS on Details.ConfigurationID=ConfigMst.ConfigurationID and Details.DataSourceID=ConfigMst.DataSoureTypeID
+	LEFT OUTER  JOIN CBSourceInfo  SI ON ConfigMst.SourceField = coalesce(SI.SourceField,MSTTableColumns) and Configmst.DataSoureTypeID=SI.Sourceid
+	where ConfigMst.CorrelationID=ID 
+	)A;
+End;
+ElseIf iType=3 Then
+Begin
+
+	Select String_agg(cols,'') into VMetricMapping
+	from
+	(
+	Select Sources.SOURCETYPE_NAME||';'  || MSTTableColumns ||'#CWT01#' as cols
+	from CBConfigurationMst ConfigMst
+	Join KBSourceTypeMst Sources on Configmst.DataSoureTypeID=Sources.SOURCETYPE_ID
+	LEFT OUTER  JOIN CBSourceInfo  SI ON ConfigMst.SourceField = coalesce(SI.SourceField,MSTTableColumns) and Configmst.DataSoureTypeID=SI.Sourceid
+	where CorrelationID=ID and FieldID=VFieldID and ConfigMst.SourceField !='NULL'
+	)A;
+End;
+End if;
+
+Return(VMetricMapping);
+    
+END
+
+$function$;
+
+ALTER FUNCTION public.fn_concatenatestrings(bigint, bigint, character varying, smallint)
+    OWNER TO postgres;
+
+
+

@@ -1,0 +1,108 @@
+-- FUNCTION: public.usp_kbgetentityrelationdatajson
+
+-- DROP FUNCTION public.usp_kbgetentityrelationdatajson;
+
+CREATE OR REPLACE FUNCTION public.usp_kbgetentityrelationdata(
+	input json DEFAULT NULL::json)
+RETURNS json
+    LANGUAGE 'plpgsql'
+    COST 100.0
+    VOLATILE 
+AS $function$
+
+DECLARE 
+	VTRAN		VARCHAR(30);
+	VCreated_By	int;
+	VId		int;
+	VEntityid	int;
+Begin
+
+drop table if exists temps;
+
+create temp table temps(id serial,ivalue json);
+
+insert into temps(ivalue)
+select input;
+
+select ivalue->'ENTITYDETAILS'->> 'TRANSTYPE' 
+,ivalue->'ENTITYDETAILS'->> 'LoginId'
+,ivalue->'ENTITYDETAILS'->> 'VID'
+,ivalue->'ENTITYDETAILS'->> 'ENTITYID'
+into
+VTRAN,VCreated_By,VID,VEntityid
+from temps limit 1;
+
+If VEntityid=0 then
+begin
+	VEntityid:=NULL;
+end;
+end if;
+
+If Lower(VTran)='getmetadata' then
+begin
+
+	Return(Select Row_to_json(outs)
+	from
+	(
+		Select Row_to_json(rels) "root"
+		from
+		(
+			Select Array_to_json(Array_Agg(Row_to_json(rel))) "relate"
+			from
+			(
+			select primaryentitydefinitionid "primary", secondaryentitydefinitionid "secondary", primaryentitytype "primarytype", secondaryentitytype "secondarytype"
+			from kbentityrelationentitydefinitiondetails
+			where isactive='1'
+			)rel
+		) rels
+	) outs	
+	)
+;
+end;
+Elseif Lower(VTran)='getrelationships' then
+begin
+	Return(
+		Select row_to_json(outs)
+		from
+		(
+			Select Array_to_json(Array_Agg(Row_to_json(rels))) "root"
+			from
+			(
+				Select primaryentityid "id"
+				,
+				(
+					Select Row_to_json(secrel) "relationships"
+					from
+					(
+						Select Array_agg(entityid) as "id"
+						from
+						(
+							select distinct secondaryentityid entityid
+							from kbentityrelationdetails B
+							where (A.primaryentityid=B.primaryentityid) 
+							 
+						)re
+					) secrel	
+				)
+				from
+				kbentityrelationdetails A
+				where primaryentityid=coalesce(VEntityid,primaryentityid) 
+				group by  primaryentityid 
+				
+			) rels
+		) outs	
+	)
+;
+
+end;
+end if;
+
+End
+
+$function$;
+
+ALTER FUNCTION public.usp_kbgetentityrelationdata(json)
+    OWNER TO postgres;
+
+
+

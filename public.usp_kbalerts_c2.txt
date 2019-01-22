@@ -1,0 +1,951 @@
+-- FUNCTION: public.usp_kbalerts_c2json
+
+-- DROP FUNCTION public.usp_kbalerts_c2json;
+
+CREATE OR REPLACE FUNCTION public.usp_kbalerts_c2(
+	input json)
+RETURNS json
+    LANGUAGE 'plpgsql'
+    COST 100.0
+    VOLATILE 
+AS $function$
+
+DECLARE
+	VTRAN		VARCHAR(30);
+	VAlertId	int;
+	VAlertName	varchar(255);
+	VAlertDescription	varchar(255);
+	VLatestkpiid	int;
+	VALERT_KPI	int;
+	VSourceid	int;
+	VTemplateId	int;
+	VEmailid	varchar(255);
+	VCreated_By	int;
+	VID		int;
+	VActiondate	timestamp default(current_timestamp at time zone 'utc')	;	
+	VSeverity	smallint;
+	VPriority	smallint;
+	VGroupid	int;
+	VAlertfor	smallint;
+	VAlertcriteria	varchar(10);
+	VSendemailcount	smallint;	
+	VAlertexpression	text;
+	VEmailtimeperiod	smallint;
+	VEmailuom		varchar(100);
+	VEmailrule		smallint;
+	VAlertfrequency		smallint;
+	VAlertFrequencyuom	varchar(100);
+	VRichTextMetricsDetails	text;
+	VEmailtemplate varchar(500);
+	VEmailTemplateID	int;
+	VSourceTypeid	int;
+	VMultidatasource bit;
+	VRichTextmetricDetails	text;
+	Valertrole	json;
+	VResult	json;
+	VEMAILdetid	 int;
+	VStartTime	varchar(50);
+	VEndTime	varchar(50);
+	VRuleCriteria	varchar(10);
+	Vscheduletype	varchar(20);
+
+begin
+
+drop table if exists temps;
+drop table if exists TEMPACTIONTABLE;
+drop table if exists users ;
+drop table if exists TEMPALERTSEMAIL;
+
+create temp table temps(id serial,ivalue json);
+create temp table TEMPACTIONTABLE (ActionID INT);
+create temp table users (id serial,userid int);
+create temp table TEMPALERTSEMAIL( ALERT_ID BIGINT,ACTIONGROUPID int,NotificationType varchar(50),MAILTO text,MAILCC text,MAILBCC text,MAILSUBJECT text,EmailTemplate text,AddEmailRule bigint);
+
+insert into temps(ivalue)
+select input;
+
+select ivalue->'ALERT'->> 'TRANSTYPE' ,ivalue->'ALERT'->> 'LoginId'
+,ivalue->'ALERT'->> 'VID'
+,ivalue->'ALERT'->> 'TEMPLATE_ID'
+,ivalue->'alert'->> 'alert_name'
+,ivalue->'ALERT'->> 'ALERT_ID'
+,ivalue->'ALERT'->> 'EMAIL_ID'
+,ivalue->'alert'->> 'alert_kpi'
+,ivalue->'ALERT'->> 'ALERT_DESCRIPTION'
+,ivalue->'ALERT'->> 'SEVERITY'
+,ivalue->'ALERT'->> 'PRIORITY'
+,ivalue->'ALERT'->> 'GROUPID'
+,ivalue->'ALERT'->> 'ALERTFOR'
+,ivalue->'alert'->> 'operator'
+,ivalue->'alert'->> 'count'
+,ivalue->'ALERT'->> 'ALERTEXPRESSION'
+,ivalue->'ALERT'->> 'EmailTimePeriod'
+,ivalue->'ALERT'->> 'EmailUOM'
+,ivalue->'ALERT'->> 'EmailRule'
+,ivalue->'ALERT'->> 'ALERTFREQUENCY'
+,ivalue->'ALERT'->> 'FREQUENCYUOM'
+,ivalue->'ALERT'->> 'RichTextMetricsDetails'
+,cast(ivalue->'ALERT'->> 'EMAIL_ID' as int)
+,ivalue->'alert'->'time_period'->> 'startdate'
+,ivalue->'alert'->'time_period'->> 'enddate'
+,ivalue->'alert'->'time_period'->> 'uom'
+,ivalue->'alert'->'time_period'->> 'type'
+into
+VTRAN,VCreated_By,VID,VTemplateId,VAlertName,VAlertId,VEmailid,VALERT_KPI,VAlertDescription,VSeverity,VPriority	,VGroupid,VAlertfor,VAlertcriteria,VSendemailcount,	
+VAlertexpression,VEmailtimeperiod,VEmailuom,VEmailrule,VAlertfrequency,VAlertFrequencyuom,VRichTextMetricsdetails,VEMAILdetid
+,VStartTime,VEndTime,VRuleCriteria,Vscheduletype	
+from temps limit 1;
+
+VTRAN:='createalert';
+
+VAlertDescription:=VAlertName;
+ 
+insert into users(userid)
+select userid
+From
+KBUserCustomerMapping A
+Inner join
+(
+	Select customerid 
+	from KBUserCustomerMapping
+	where userid=VCreated_by
+) B  on A.customerid=B.customerid
+;
+  
+Select KPI_ID, ismultidatasource,source_id,createdby  into Vlatestkpiid, VMultidatasource,VSourceTypeid , Vcreated_by
+from KBKpiMst 
+where coalesce(ORIGINALID, KPI_ID)=VALERT_KPI and ISACTIVE='1' 
+limit 1;
+
+-- 
+-- If VMultidatasource='1' then
+-- begin
+-- VSourceTypeid:=0;
+-- end;
+-- end if;
+
+VgroupID:=1;
+VTEMPLATEID:=2;
+
+		INSERT INTO TEMPACTIONTABLE 
+	  	Select KStatus.statusid
+		from kbkpirule Ranges
+		Join KBTEMPLATEGROUPINGMST Groups on Ranges.action_groupid=Groups.GROUPDETAILID
+		Join kbkpistatus KStatus on Ranges.ruleaction=KStatus.status
+		where Ranges.kpi_id=Vlatestkpiid 
+		and Groups.ACTIONID=VgroupID
+		and Groups.TEMPLATEID=VTEMPLATEID
+;
+If lower(VTran)='gettooltip' then
+begin
+VALERT_KPI:=(select ivalue->'ALERT'->> 'kpiid' from temps limit 1);
+
+	Return(	select row_to_json(AA)
+		from
+		(
+		select row_to_json(outputs) as "ALERTDETAILS"
+		from
+		(	
+			select "ALERT","RANGES"
+			from
+			(
+			select array_to_json(array_agg(row_to_json(output))) as "ALERT"
+			from
+			(
+					select ROWNUMBER "ROWNUMBER"
+					,ALERT_ID "ALERT_ID"
+					,KPI_NAME "KPI_NAME"
+					,ALERT_DESCRIPTION "ALERT_DESCRIPTION"
+					,TEMPLATE_ID "TEMPLATE_ID"
+					,ALERTFOR "ALERTFOR"
+					,EVENTID "EVENTID"
+					,ALERTFORNAME "ALERTFORNAME"
+					,(RowNumber+RevRowNumber )-1 as "TotalRows"
+					,CreatedBy "CreatedBy"
+					,SOURCEID as "SOURCEID"
+					,KPIID "KPIID"
+					 from
+							(
+							Select   row_number() over(Order by B.ALERT_ID desc) as RowNumber
+							,ROW_NUMBER() OVER(ORDER BY B.ALERT_ID ) RevRowNumber ,ALERT_ID,KPI_NAME,ALERT_DESCRIPTION,TEMPLATE_ID
+							,ALERTFOR,EVENTID,ALERTFORNAME,CreatedBy,SOURCEID, KPIID
+							from
+							(
+									Select ALERT_ID,A.KPI_NAME,ALERT_DESCRIPTION,A.TEMPLATE_ID ,ALERTFOR,coalesce(EVENTID,0) EVENTID
+									,Case when A.ALERTFOR=0 Then km.KPI_NAME Else Problems.EVENT_SD End ALERTFORNAME
+									,users.USER_NAME CreatedBy
+									,source_id SOURCEID, kpi_id KPIID
+									From
+											
+									(
+											SELECT  AM.ALERT_ID,KM.KPI_NAME,am.ALERT_KPI,AM.ALERT_DESCRIPTION,AM.TEMPLATE_ID 
+											,coalesce(AlertType,0) ALERTFOR,coalesce(EVENTID,0) EVENTID,AM.createdby CreatedBy
+											FROM KBALERTMST AM
+											Inner JOIN KBKPIMST KM ON AM.ALERT_KPI = KM.KPI_ID --AND AM.TEMPLATE_ID = @TEMPLATE_ID
+											WHERE AM.ALERT_ID != 1 and coalesce(AlertType,0)=0 and AM.ISACTIVE='1'
+											and exists (Select 1 from users B where AM.createdby=B.userid)
+											Union All
+				
+											SELECT  AM.ALERT_ID,KM.EVENT_SD KPI_NAME,am.ALERT_KPI,AM.ALERT_DESCRIPTION,AM.TEMPLATE_ID 
+											,coalesce(AlertType,0) ALERTFOR,coalesce(EVENTID,0) EVENTID,AM.createdby CreatedBy
+											 FROM KBALERTMST AM
+											Inner JOIN kbEventsmst KM ON AM.EVENTID = KM.EVENT_ID --AND AM.TEMPLATE_ID = @TEMPLATE_ID
+											WHERE 
+											AlertType=1 and AM.ISACTIVE='1' 
+											and exists (Select 1 from users B where AM.createdby=B.userid)
+									) A
+									Join kbusermst_c2 users on A.createdby=users.user_id
+									Left Outer  JOIN KBKPIMST KM ON A.ALERT_KPI = KM.KPI_ID 
+									Left Outer  JOIN kbEventsmst Problems ON A.EVENTID = Problems.EVENT_ID 
+									where exists (Select 1 from users B where KM.createdby=B.userid)
+							 
+							)B
+							)c
+							Order by ALERT_DESCRIPTION
+			) output
+			)A
+			,
+			(
+				select array_to_json(array_agg(row_to_json(output))) as "RANGES"
+				from
+				(
+				SELECT STATUSID AS "RANGEID",STATUS AS "RANGENAME"
+				FROM KBKPISTATUS KM 
+				where  exists (Select 1 from users B where KM.createdby=B.userid) 
+				Order by Status
+				) output
+
+			)B
+		)outputs
+		)AA
+		)
+;
+
+end;
+elseIf lower(VTran)='createalert' then
+begin
+
+If VTEMPLATEID=0 or VTEMPLATEID is null
+then 
+VTEMPLATEID=2;
+End if;
+		--  if exists(select 1 from kbalertmst A where alert_description =VAlertDescription  
+-- 					 --and exists(Select 1 from users B where A.createdby=B.userid)
+-- 					 ) then
+-- 		begin  
+-- 
+-- 			Return(
+-- 
+-- 				Select row_to_json(a) 
+-- 				from
+-- 				(select 500 "code", 'alert already exists' "message")a
+-- 
+-- 		);
+-- 					
+-- 		end;  
+-- 		end if;
+
+		INSERT INTO KBALERTMST
+					( 
+					  ALERT_NAME ,
+					  ALERT_KPI ,
+					  ALERT_DESCRIPTION ,
+					  SEVERITY ,
+					  PRIORITY ,
+					  MODIFIEDBY ,
+					  MODIFIEDDATE ,
+					  CREATEDBY ,
+					  CREATEDDATE,
+					   TEMPLATE_ID ,
+					  AlertType
+					 )
+
+					SELECT 	VAlertName
+						  ,VALERT_KPI
+						  ,VALERTDESCRIPTION
+						  ,VSEVERITY
+						  ,VPRIORITY
+						  ,VCreated_by
+						  ,VActionDate
+						  ,VCreated_by
+						  ,VActionDate
+						  ,VTEMPLATEID
+						  ,VAlertfor;
+
+ 
+		VAlertId:=(SELECT currval(pg_get_serial_sequence('KBALERTMST','alert_id')));
+
+		-- /* inserting the scheduling information*/
+-- 
+-- 		if coalesce(VStartTime,'')!='' then 
+-- 		insert into kbalertschedules(alert_id, fromdate, todate, uom, sch_type, sch_operator, mail_count)
+-- 		select VAlertId,VStartTime,VEndTime,VRuleCriteria,Vscheduletype,VAlertcriteria,VSendemailcount;
+-- 		end if;
+
+		VEmailtemplate=VAlertName;
+	 
+		insert into kbeventemailmst_TempHold(tamplatename,EmailHtmlContent,EmailRichTextContent,"type",createddate,modifieddate,createdby,modifiedby,NotificationAlertType
+		)
+		select  VEmailtemplate EmailTemplate,NULL,NULL,'Alerts',VActionDate,VActionDate,Vcreated_by,Vcreated_by,VEmailrule;
+		
+		VEmailTemplateID:= (SELECT currval(pg_get_serial_sequence('kbeventemailmst_TempHold','templateid')));
+			
+  
+	 if(VEmailTemplateID is not null or VEmailTemplateID!=0) then
+	 Begin
+
+		Insert into kbeventemailDetails_TempHold(templateid,eventid,EmailSubject,EmailTo,EmailCC,EmailBCC,mailcount,EmailRule,emailtimeperiod,emailuom,active,Metricplaceholder
+		,createddate,modifieddate,createdby,modifiedby,AlertFrequency,AlertFrequencyUOM,ANotificationOperator
+		,starttime, endtime, sch_uom,rulecriteria, sch_type
+		)
+	
+		select 	VEmailTemplateID,VALERTID,NULL,NULL, NULL, NULL,  VSendEmailCount
+		,case when VEmailRule=0 or VEmailRule is null then 1 else VEmailrule end AddEmailRule 
+		,case when lower(Vscheduletype)='dynamic' then  cast(VEndTime as int) else  VEmailTimePeriod end EmailTimePeriod
+		,VRuleCriteria  EmailUOM
+		,1
+		, NULL
+		,VActionDate
+		,VActionDate
+		,Vcreated_by
+		,Vcreated_by
+		,VAlertFrequency
+		,VAlertFrequencyUOM
+		,VAlertexpression
+		,VStartTime,VEndTime,VRuleCriteria,VAlertcriteria,Vscheduletype
+		;
+		    
+	END;
+	End if;	
+
+	INSERT INTO KBAlertAction
+	( 
+	  ALERT_ID ,
+	  KPI_ID ,
+	  ALERTACTION ,
+	  CREATEDBY ,
+	  ModifiedBy,
+	  CREATEDDATE,
+	  ModifiedDate,	
+	  TEMPLATE_ID
+	)
+	Select
+	  VALERTID 
+	  ,coalesce(VALERT_KPI,Vlatestkpiid)
+	  ,Actionid
+	  ,VCreated_by
+	  ,VCreated_by
+	  ,VActiondate
+	  ,VActiondate
+	  ,VTEMPLATEID
+	  
+	from
+	TEMPACTIONTABLE A
+	where not exists(select 1 from KBAlertAction B where A.Actionid=cast(B.ALERTACTION as int) and B.ALERT_ID=VALERTID and B.kpi_id=coalesce(VALERT_KPI,Vlatestkpiid))
+;
+
+			Return(
+				select row_to_json(a) 
+				from
+				(
+					select row_to_json(output) as "ALERTDETAILS"
+					from
+					(
+
+					SELECT VAlertId "ALERTID"
+					,VALERTNAME "ALERT_NAME"
+					,VTEMPLATEID "TEMPLATE_ID"
+					,VSourceTypeid "SOURCE_ID"
+					,(
+
+						select string_agg(Aactions,';')
+						from
+						(
+						select cast(alertaction as varchar(20)) as Aactions
+						from kbalertaction Actions where Actions.alert_id=VALERTID and alertmst.alert_id=actions.alert_id
+						)a
+					) "ACTIONS"
+					,VALERT_KPI "ALERT_KPI"
+					,VALERTDESCRIPTION  "ALERT_DESCRIPTION"
+					,VSEVERITY   "SEVERITY"
+					,VPRIORITY "PRIORITY"
+					,VAlertfor "ALERTFOR"
+					,kpis.KPI_NAME as "KPI_NAME"
+					,kpis.KPI_DESCRIPTION as "KPI_DESCRIPTION"
+					,Kpis.SOURCE_ID as "SOURCE_ID"
+					,Templates.TEMPLATE_NAME as "TEMPLATE_NAME"
+					,VTRAN "TRANSTYPE"
+					,coalesce(IsMailConfigured,'0') "EMAIL"
+					,coalesce(IsSMSConfigured,'0') "SMS"
+					,coalesce(IsAPIConfigured,'0') "API"
+					,VID	"VID"
+					from
+					kbalertmst alertmst 
+					Left join KBKpiMst Kpis on VALERT_KPI=Kpis.KPI_ID
+					Join KBTemplateMst Templates on VTEMPLATEID=TEmplates.TEMPLATE_ID
+					where alertmst.alert_id=VAlertId 
+					) output 
+				)a
+			);
+
+		-- exception when others then 
+-- 		Return(
+-- 			select row_to_json(outs) 
+-- 			from 
+-- 			(
+-- 				Select row_to_json(a) "ALERT"
+-- 				from
+-- 				(select 404 "code", 'invalid' "message")a
+-- 			)outs
+-- 		);
+
+End;
+Elseif Lower(Vtran)='getdetail' Then
+Begin
+
+Valertrole:=(
+		select  array_to_json(array_agg(row_to_json(a))) as "ROLE"
+		from
+		(
+			SELECT RM.ROLE_ID,RM.ROLE_NAME,coalesce(RM.ROLE_DESC,'') AS ROLE_DESC
+			FROM KBALERTROLE AR 
+			INNER JOIN KBROLEMST RM ON AR.ROLE_ID = RM.ROLE_ID 
+			WHERE AR.ALERT_ID = VAlertId
+			--FOR XML RAW('ROLE')
+		)a
+		);	
+			
+		if(
+			Select sum(Records)
+			From
+			(
+			select count(1) Records 
+			from kbeventemailDetails Details
+			join KBALERTMST AM on Am.ALERT_ID=Details.eventid
+			join kbeventemailmst MailMst on MailMst.templateid=Details.templateid	  
+			where AM.Alert_Id=VALERTID and  MailMst.type='Alerts' and Details.Active='1'
+			Union
+			select count(1) 
+			from kbeventemailDetails_TempHold Details
+			join KBALERTMST AM on Am.ALERT_ID=Details.eventid
+			join kbeventemailmst_TempHold MailMst on MailMst.templateid=Details.templateid	  
+			where AM.Alert_Id=VALERTID and  MailMst.type='Alerts' and Details.Active='1'
+			) SA
+		  )>0 Then
+	 Begin
+	 
+ 	 
+	  VResult:= (
+
+			select row_to_json(alertdetail) as "ALERTDETAILS"
+			from
+			(
+			select Array_to_json(Array_agg(row_to_json(alerts))) as "ALERT"			
+			from
+			(
+			SELECT   
+			 KM.KPI_NAME "KPI_NAME"
+			,AM.ALERT_NAME "ALERT_NAME"
+			,AM.ALERT_DESCRIPTION "ALERT_DESCRIPTION"
+			,AM.SEVERITY "SEVERITY"
+			,AM.PRIORITY "PRIORITY"
+			,AD.MAILBCC "MAILBCC"
+			,AD.MAILBODY "MAILBODY"
+			,AD.MAILCC  "MAILCC"
+			,AD.MAILSUBJECT  "MAILSUBJECT"
+			,AD.MAILTO "MAILTO"
+			,AD.TEMPLATE_ID "TEMPLATE_ID"
+			,(SELECT mailto FROM KBALERTDETAIL WHERE ALERT_ID=VALERTID and ISACTIVE='1') as "EMAILEXIST"
+			,Valertrole as "ROLE"
+			,coalesce(AlertType,0) "ALERTFOR"
+			,AM.EVENTID  "EVENTID"
+			,KM.KPI_ID "KPI_ID"
+			, coalesce(Details.EmailHtmlContent,tempMailMst.EmailHtmlContent) "EmailHtmlContent"
+			, coalesce(Details.EmailRichTextContent,tempMailMst.EmailRichTextContent) "EmailRichTextContent"
+			, coalesce(Details.EmailTo, tempDetails.EmailTo ) "EmailTo"
+			, coalesce(Details.EmailBCC, tempDetails.EmailBCC) "EmailBCC"
+			, coalesce(Details.EmailCC, tempDetails.EmailCC) "EmailCC"
+			, coalesce(Details.EmailSubject,tempDetails.EmailSubject) "EmailSubject"
+			,coalesce(MailMst.tamplatename,tempMailMst.tamplatename) "EmailTemplate"
+			, coalesce(Details.Metricplaceholder,tempDetails.Metricplaceholder) as "RichTextMetricsDetails"
+			, coalesce(Details.EmailRule, tempDetails.EmailRule) "AddEmailRule"
+			, coalesce(Details.mailcount,tempDetails.mailcount) "SendEmailCount"
+			, coalesce(Details.EmailTimePeriod,tempDetails.EmailTimePeriod) "EmailTimePeriod"
+			, coalesce(Details.EmailUOM,tempDetails.EmailUOM ) "EmailUOM"
+			, coalesce(MailMst.NotificationAlertType,tempMailMst.NotificationAlertType) "NotificationAlertType"
+			, coalesce(Details.AlertFrequency,tempDetails.AlertFrequency) "AlertFrequency"
+			, coalesce(Details.AlertFrequencyUOM,tempDetails.AlertFrequencyUOM) "AlertFrequencyUOM"
+			, coalesce(Details.StartTime,tempDetails.StartTime)	"StartTime"	
+			, coalesce(Details.EndTime,tempDetails.EndTime)	"EndTime"	
+			, coalesce(Details.RuleCriteria,tempDetails.RuleCriteria)	"RuleCriteria"	
+
+			,
+				(
+				select row_to_json(aactions) as "Rules"
+				from
+				(
+					Select Array_to_json(Array_agg(row_to_json(actions)))as "Rule"
+					from	
+					(
+					Select ACTIONS.ALERT_ID "ALERT_ID", ASTATUS.STATUS "ACTIONNAME",AGROUPS.ACTION_CUSTOMIZE_NAME "GROUPNAME",AGROUPS.ACTIONID "GROUPID"
+					from kbalertaction Actions 
+					Join kbkpistatus AStatus on cast(Actions.alertaction as int)=AStatus.statusid
+					Join (
+							Select A.ruleaction, coalesce(B.originalid,B.kpi_id) kpi_id,action_groupid
+							from 
+							kbkpirule  A
+							Join kbkpimst B on A.kpi_id=B.kpi_id
+							where A.isactive='1' and B.isactive='1' --and B.kpi_id=20035
+						) Krule on Astatus.status=Krule.ruleaction and Actions.kpi_id=krule.kpi_id
+					Join KBTEMPLATEGROUPINGMST AGroups on Krule.action_groupid=AGroups.GROUPDETAILID
+					where AM.alert_id=Actions.alert_id and Actions.alert_id=VALERTID and Actions.isactive='1'
+					and exists (Select 1 from users BB where AStatus.createdby=BB.userid)
+					--For xml RAW('Rule'), Root('Rules')
+					) actions
+				 )aactions
+				 )
+			
+		FROM KBALERTMST AM
+			LEFT OUTER JOIN KBALERTDETAIL AD ON AM.ALERT_ID = AD.ALERT_ID 
+			Left Outer  JOIN KBKPIMST KM ON AM.ALERT_KPI = KM.KPI_ID 
+			Left Outer  JOIN kbEventsmst Problems ON AM.EVENTID = Problems.EVENT_ID
+			Left outer Join kbeventemailDetails Details on Details.eventid=AM.ALERT_ID
+			Left outer join kbeventemailmst MailMst on MailMst.templateid=Details.templateid
+			Left outer Join kbeventemailDetails_TempHold tempDetails on tempDetails.eventid=AM.ALERT_ID
+			Left outer join kbeventemailmst_TempHold tempMailMst on tempMailMst.templateid=tempDetails.templateid
+			WHERE AM.ALERT_ID = VALERTID   and ( MailMst.type='Alerts' or tempMailMst.type='Alerts')   and AM.Isactive='1'
+			--FOR XML RAW('ALERT'), ROOT ('ALERTDETAILS')
+
+			) alerts
+		)alertdetail	
+		);
+END;
+
+else
+	Begin
+	 
+			VResult:= (
+			select row_to_json(alertdetail) as "ALERTDETAILS"
+			from
+			(
+			select Array_to_json(Array_agg(row_to_json(alerts))) as "ALERT"			
+			from
+			(
+			 SELECT KM.KPI_NAME "KPI_NAME"
+			,AM.ALERT_NAME "ALERT_NAME"
+			,AM.ALERT_DESCRIPTION "ALERT_DESCRIPTION"
+			,AM.SEVERITY "SEVERITY"
+			,AM.PRIORITY "PRIORITY"
+			,AD.MAILBCC "MAILBCC"
+			,AD.MAILBODY "MAILBODY"
+			,AD.MAILCC  "MAILCC"
+			,AD.MAILSUBJECT  "MAILSUBJECT"
+			,AD.MAILTO "MAILTO"
+			,AD.TEMPLATE_ID "TEMPLATE_ID"
+			,(SELECT mailto FROM KBALERTDETAIL WHERE ALERT_ID=VALERTID and ISACTIVE='1') as "EMAILEXIST"
+			,Valertrole as "ROLE"
+			,coalesce(AlertType,'') "ALERTFOR"
+			,AM.EVENTID  "EVENTID"
+			,KM.KPI_ID "KPI_ID"
+			,'' "EmailHtmlContent"
+			,'' "EmailRichTextContent"
+			,'' "EmailTo"
+			,'' "EmailBCC"
+			,'' "EmailCC"
+			,'' "EmailSubject"
+			,'' "EmailTemplate"
+			,''as "RichTextMetricsDetails"
+			,'' "AddEmailRule"
+			,'' "SendEmailCount"
+			,'' "EmailTimePeriod"
+			,'' "EmailUOM"
+			,'' "NotificationAlertType"
+			,
+				(
+				select row_to_json(aactions) as "Rules"
+				from
+				(
+					Select Array_to_json(Array_agg(row_to_json(actions)))as "Rule"
+					from	
+					(
+					Select ACTIONS.ALERT_ID as "ALERT_ID", ASTATUS.STATUS "ACTIONNAME",AGROUPS.ACTION_CUSTOMIZE_NAME "GROUPNAME",AGROUPS.ACTIONID "GROUPID"
+					from kbalertaction Actions 
+					Join kbkpistatus AStatus on Actions.alertaction=AStatus.statusid
+					Join (
+							Select A.ruleaction, coalesce(B.originalid,B.kpi_id) kpi_id,action_groupid
+							from 
+							kbkpirule  A
+							Join kbkpimst B on A.kpi_id=B.kpi_id
+							where A.isactive='1' and B.isactive='1' --and B.kpi_id=20035
+						) Krule on Astatus.status=Krule.ruleaction and Actions.kpi_id=krule.kpi_id
+					Join KBTEMPLATEGROUPINGMST AGroups on Krule.action_groupid=AGroups.GROUPDETAILID
+					where AM.alert_id=Actions.alert_id and Actions.alert_id=VALERTID and Actions.isactive='1'
+					and exists (Select 1 from users BB where AStatus.createdby=BB.userid)
+					--For xml RAW('Rule'), Root('Rules')
+					) actions
+				 )aactions
+				 )
+			
+			FROM KBALERTMST AM
+			LEFT OUTER JOIN KBALERTDETAIL AD ON AM.ALERT_ID = AD.ALERT_ID 
+			Left Outer  JOIN KBKPIMST KM ON AM.ALERT_KPI = KM.KPI_ID 
+			Left Outer  JOIN kbEventsmst Problems ON AM.EVENTID = Problems.EVENT_ID
+			WHERE AM.ALERT_ID = VALERTID  and aM.isactive='1' 
+			) alerts
+		)alertdetail
+		);
+end;
+
+End if;
+
+Return(VResult);
+
+End; 
+ELSEIF lower(VTran)='addalertnotifications' Then
+Begin 
+
+	select ivalue->'ALERT'->> 'RichTextMetricsDetails' into VRichTextmetricDetails
+	from temps limit 1;
+
+	
+
+	VEmailTemplateID:= ( select templateid from kbeventemailDetails_TempHold where eventid=VALERTID);
+		
+	Insert into TEMPALERTSEMAIL(NotificationType,ACTIONGROUPID,MAILTO,MAILCC,MAILBCC,MAILSUBJECT,EmailTemplate)
+	Select
+			ivalue->'ALERT'->'ACTIONS'->> 'NOTIFICATIONTYPE' as NOTIFICATIONTYPE
+			,cast(ivalue->'ALERT'->'ACTIONS'->>'ACTIONGROUPID' as int) as ACTIONGROUPID
+			,ivalue->'ALERT'->'ACTIONS'->'EMAILDETAILS'->>'EmailTo' EmailTo
+			,ivalue->'ALERT'->'ACTIONS'->'EMAILDETAILS'->>'EmailCC' EmailCC
+			,ivalue->'ALERT'->'ACTIONS'->'EMAILDETAILS'->>'EmailBCC' EmailBCC
+			,ivalue->'ALERT'->'ACTIONS'->'EMAILDETAILS'->>'EmailSubject' EmailSubject
+			,ivalue->'ALERT'->'ACTIONS'->'EMAILDETAILS'->>'EmailTemplate' EmailTemplate
+	from temps limit 1;	
+
+		Update kbalertmst set IsMailConfigured= case when email.MAILTO is not null and email.mailTo!='' then cast('1' as bit) else cast('0' as bit) end 
+		From 
+		(Select MAILTO From TEMPALERTSEMAIL where mailto !='' and MAilto is not null limit 1) email 
+
+;
+		Insert into kbeventemailmst(tamplatename,"type",createddate,modifieddate,createdby,modifiedby,NotificationAlertType )
+		Select tamplatename, "type",createddate,modifieddate,createdby,modifiedby,NotificationAlertType 
+		from kbeventemailmst_TempHold 
+		where templateid=VEmailTemplateID
+; 
+ 		VEmailTemplateID:=(SELECT currval(pg_get_serial_sequence('kbeventemailmst','templateid')));
+
+		Insert into kbeventemailDetails(templateid,eventid,EmailSubject,EmailTo,EmailCC,EmailBCC,Active,mailcount,EmailRule,emailtimeperiod,emailuom,Metricplaceholder,createddate,modifieddate,createdby,modifiedby,AlertFrequency,AlertFrequencyUOM,ANotificationOperator,EmailHtmlContent,EmailRichTextContent,starttime,endtime,rulecriteria)
+		Select VEmailTemplateID templateid,eventid,MAILSUBJECT EmailSubject, MAILTO EmailTo, MAILCC EmailCC, MAILBCC EmailBCC,Active,mailcount,A.EmailRule,emailtimeperiod,emailuom,VRichTextmetricDetails Metricplaceholder,VActiondate createddate,VActiondate modifieddate, Vcreated_by createdby,Vcreated_by modifiedby,AlertFrequency,AlertFrequencyUOM,ANotificationOperator , B.emailtemplate, B.emailtemplate,starttime,endtime,rulecriteria
+		from kbeventemailDetails_TempHold A
+		Join TEMPALERTSEMAIL B on 1=1
+		where eventid=VALERTID	
+ ;
+
+ Select A.alert_kpi,source_id into VALERT_KPI, VSourceId
+ from kbalertmst A
+ Join kbkpimst B on A.alert_kpi=B.kpi_id 
+ where alert_id=VALERTID
+ ;
+
+		Vresult:=( 			
+				Select row_to_json(alerts) as "ALERTDETAILS"
+				from
+				(
+					Select VAlertId "ALERT_ID", VALERT_KPI "KPIID"
+						,  (
+							select case when IsMultiDataSource='0' 
+										then cast(source_id as varchar(50)) Else corr.SourceID End
+							from kbkpimst kpis
+							left outer join 
+									(
+									select Correlationid, string_agg(cast(SourceID as varchar(50)),';') Sourceid
+									from
+									CBCorrelationDetails 
+									group by Correlationid
+									)corr 
+									on kpis.CorrelationID=corr.CorrelationID
+							where coalesce(originalid,kpi_id)=VALERT_KPI and kpis.isactive='1'
+						) "SOURCE_ID", VTRAN "TRANSTYPE"
+					,(
+						select string_agg(cast(alertaction as varchar(50)),';') 
+						from kbalertaction Actions 
+						where Actions.alert_id=VALERTID 
+					) "ACTIONS"
+					,Vcreated_by "LOGINID"
+					,
+					(
+
+						Select Array_to_json(array_agg(row_to_json(emails))) as "EMAILDETAILS"
+						from
+						(
+							Select templatedetailid "EmailID", A.eventid "AlertID",EmailSubject "EmailSubject",EmailTo "EmailTo",EmailCC "EmailCC",EmailBCC "EmailBCC"
+							,A.EmailHtmlContent "EmailTemplate", B.NotificationAlertType "AddEmailRule"
+							from kbeventemailDetails A
+							Join kbeventemailmst B on A.templateid=B.templateid
+							where A.eventid=VALERTID and "type"='Alerts' and B.templateid=VEmailTemplateID
+						)emails
+					)
+					) alerts
+					)
+;
+Return(select row_to_json(a) from (select VResult as "ALERTDETAILS") a);
+
+End;
+Elseif Lower(VTran)='update' then
+begin
+	Update kbeventemaildetails
+		set 
+		 mailcount=VSendEmailCount
+		,EmailRule=VEmailRule
+		,modifiedDate=VActionDate 
+		,modifiedby=Vcreated_by
+		,emailtimeperiod=VEmailTimePeriod
+		,emailuom=VEmailUOM
+		From
+		kbeventemailmst b  
+		where kbeventemaildetails.templateid=b.templateid and b."type"='Alerts' and kbeventemaildetails.eventid=VAlertId;
+		 
+
+		if exists (select 1 from kbeventemailDetails_TempHold a join kbeventemailmst_temphold b on a.templateid=b.templateid where eventid=VALERTID and b."type"='Alerts') Then
+		Begin  
+
+	 	 VEmailTemplateID:=(Select a.templateid from kbeventemailDetails_TempHold a 
+					join kbeventemailmst_temphold b on a.templateid=b.templateid where eventid=VALERTID and b."type"='Alerts');
+
+		 VEmailtemplate:=VAlertDescription;
+ 		
+		Update kbeventemailmst_TempHold set tamplatename = VEmailtemplate
+		,modifieddate=VActionDate, Modifiedby=Vcreated_by
+		,NotificationAlertType=VEmailRule
+		where templateid=VEmailTemplateID;
+		
+	
+		Update kbeventemailDetails_TempHold 
+		set 
+		mailcount=  VSendEmailCount
+		,EmailRule=case when VEmailRule=0 or VEmailRule is null then 1 else VEmailRule end 
+		,emailtimeperiod= VEmailTimePeriod
+		,emailuom= VEmailUOM
+		,modifieddate=VActionDate
+		,Modifiedby=VCreated_by
+		,AlertFrequency= VAlertFrequency
+		,AlertFrequencyUOM= VAlertFrequencyUOM
+		,ANotificationOperator= VAlertexpression
+		,starttime=Vstarttime
+		,endtime=Vendtime	
+		,rulecriteria=Vrulecriteria
+		where templateid=VEmailTemplateID;
+		End;
+		End if;
+
+		UPDATE KBALERTMST
+		SET 
+		 ALERT_DESCRIPTION = VALERTDESCRIPTION
+		,SEVERITY = VSEVERITY
+		,PRIORITY = VPRIORITY
+		,CREATEDDATE = VActiondate
+		,MODIFIEDBY = VCREATED_BY
+		,MODIFIEDDATE = VActiondate
+		,TEMPLATE_ID = VTEMPLATEID
+		,AlertType=VAlertfor
+		where ALERT_ID = VALERTID ;
+
+		
+		Update KBAlertAction Set IsActive=0
+		,modifieddate=VActiondate
+		,Modifiedby=VCreated_by
+		where 
+		 alert_id=VALERTID ;
+
+		INSERT INTO KBAlertAction
+		( 
+		  ALERT_ID ,
+		  KPI_ID ,
+		  ALERTACTION ,
+		  CREATEDBY ,
+		  ModifiedBy,
+		  CREATEDDATE,
+		  ModifiedDate,	
+		  TEMPLATE_ID
+		)
+		Select
+		  VALERTID 
+		  ,coalesce(VALERT_KPI,Vlatestkpiid)
+		  ,Actionid
+		  ,VCreated_by
+		  ,VCreated_by
+		  ,VActiondate
+		  ,VActiondate
+		  ,VTEMPLATEID
+		from
+		TEMPACTIONTABLE
+		where Not exists(Select 1 from KBAlertAction AAction Where ALERT_ID=VALERTID and cast(ALERTACTION as int)=ActionID and Isactive='1');
+
+			Return(
+				select row_to_json(a) 
+				from
+				(
+					select row_to_json(output) as "ALERTDETAILS"
+					from
+					(
+
+					SELECT VAlertId "ALERTID"
+					,VALERTNAME "ALERT_NAME"
+					,VTEMPLATEID "TEMPLATE_ID"
+					,VSourceTypeid "SOURCE_ID"
+					,(
+
+						select string_agg(Aactions,';')
+						from
+						(
+						select cast(alertaction as varchar(20)) as Aactions
+						from kbalertaction Actions where Actions.alert_id=VALERTID and alertmst.alert_id=actions.alert_id
+						)a
+					) "ACTIONS"
+					,VALERT_KPI "ALERT_KPI"
+					,VALERTDESCRIPTION  "ALERT_DESCRIPTION"
+					,VSEVERITY   "SEVERITY"
+					,VPRIORITY "PRIORITY"
+					,VAlertfor "ALERTFOR"
+					,kpis.KPI_NAME as "KPI_NAME"
+					,kpis.KPI_DESCRIPTION as "KPI_DESCRIPTION"
+					,Kpis.SOURCE_ID as "SOURCE_ID"
+					,Templates.TEMPLATE_NAME as "TEMPLATE_NAME"
+					,VTRAN "TRANSTYPE"
+					,coalesce(IsMailConfigured,'0') "EMAIL"
+					,coalesce(IsSMSConfigured,'0') "SMS"
+					,coalesce(IsAPIConfigured,'0') "API"
+					,VID	"VID"
+					from
+					kbalertmst alertmst 
+					Left join KBKpiMst Kpis on VALERT_KPI=Kpis.KPI_ID
+					Join KBTemplateMst Templates on VTEMPLATEID=TEmplates.TEMPLATE_ID
+					where alertmst.alert_id=VAlertId
+					) output 
+				)a
+			);
+		
+end;
+Elseif Lower(VTran)='getalertnotifications' Then
+Begin
+
+Vresult:=
+	( 
+
+		Select Row_to_json(output) as "ALERTDETAILS"
+		From
+		(
+		Select VAlertId "ALERT_ID",
+				
+				(
+					Select Array_to_json(Array_agg(Row_to_json(emails))) As "EMAILDETAILS"
+					From
+					(
+						Select templatedetailid "EmailID",eventid "AlertID",EmailSubject "EmailSubject",EmailTo "EmailTo",EmailCC "EmailCC",EmailBCC "EmailBCC"
+						,A.EmailHtmlContent "EmailTemplate", B.NotificationAlertType "AddEmailRule"
+						from kbeventemailDetails A
+						Join kbeventemailmst B on A.templateid=B.templateid
+						where eventid=VALERTID and Type='Alerts'
+						--For XML PATH('EMAILDETAILS')
+					)as emails
+				)
+		) output
+	);
+
+Return(Select Row_to_json(a) from( Select VResult as "ALERTDETAILS")a );
+
+End;
+Elseif Lower(VTran)='editalertnotifications' then
+begin
+
+	VEmailTemplateID:= ( select templateid from kbeventemailDetails where templatedetailid=VEMAILdetid);
+		
+	Insert into TEMPALERTSEMAIL(NotificationType,ACTIONGROUPID,MAILTO,MAILCC,MAILBCC,MAILSUBJECT,EmailTemplate)
+	Select
+		ivalue->'ALERT'->'ACTIONS'->> 'NOTIFICATIONTYPE' as NOTIFICATIONTYPE
+		,cast(ivalue->'ALERT'->'ACTIONS'->>'ACTIONGROUPID' as int) as ACTIONGROUPID
+		,ivalue->'ALERT'->'ACTIONS'->'EMAILDETAILS'->>'EmailTo' EmailTo
+		,ivalue->'ALERT'->'ACTIONS'->'EMAILDETAILS'->>'EmailCC' EmailCC
+		,ivalue->'ALERT'->'ACTIONS'->'EMAILDETAILS'->>'EmailBCC' EmailBCC
+		,ivalue->'ALERT'->'ACTIONS'->'EMAILDETAILS'->>'EmailSubject' EmailSubject
+		,ivalue->'ALERT'->'ACTIONS'->'EMAILDETAILS'->>'EmailTemplate' EmailTemplate
+	from temps limit 1;
+
+	update kbeventemailDetails  
+		set emailto= B.MAILTO
+		,EmailCC=B.MAILCC
+		,EmailBCC=B.MAILBCC
+		,EmailSubject=B.MAILSUBJECT
+		,Metricplaceholder=VRichTextmetricDetails
+		,EmailHtmlContent=B.EmailTemplate
+	from
+	TEMPALERTSEMAIL B 
+	where kbeventemailDetails.templatedetailid=VEMAILdetid ;
+
+	 
+	 
+		Vresult:=( 			
+				Select row_to_json(alerts) as "ALERTDETAILS"
+				from
+				(
+					Select VAlertId "ALERT_ID", VALERT_KPI "KPIID"
+						,  (
+							select case when IsMultiDataSource='0' 
+										then cast(source_id as varchar(50)) Else corr.SourceID End
+							from kbkpimst kpis
+							left outer join 
+									(
+									select Correlationid, string_agg(cast(SourceID as varchar(50)),';') Sourceid
+									from
+									CBCorrelationDetails 
+									group by Correlationid
+									)corr 
+									on kpis.CorrelationID=corr.CorrelationID
+							where coalesce(originalid,kpi_id)=VALERT_KPI 
+						) "SOURCE_ID", VTRAN "TRANSTYPE"
+					,(
+						select string_agg(cast(alertaction as varchar(50)),';') 
+						from kbalertaction Actions 
+						where Actions.alert_id=VALERTID 
+					) "ACTIONS"
+					,Vcreated_by "LOGINID"
+					,
+					(
+
+					Select Array_to_json(array_agg(row_to_json(emails))) as "EMAILDETAILS"
+					from
+					(
+						Select templatedetailid "EmailID", A.eventid "AlertID",EmailSubject "EmailSubject",EmailTo "EmailTo",EmailCC "EmailCC",EmailBCC "EmailBCC"
+						,A.EmailHtmlContent "EmailTemplate", B.NotificationAlertType "AddEmailRule"
+						from kbeventemailDetails A
+						Join kbeventemailmst B on A.templateid=B.templateid
+						where A.eventid=VALERTID and "type"='Alerts' and B.templateid=VEmailTemplateID
+					)emails
+					)
+					) alerts
+					)
+;
+Return(select row_to_json(a) from (select VResult as "ALERTDETAILS") a);
+
+end;
+
+End if;
+
+exception when others then 
+		Return(
+
+				Select row_to_json(a) 
+				from
+				(select 500 "code", 'error' "message")a
+
+		);
+
+End
+
+$function$;
+
+ALTER FUNCTION public.usp_kbalerts_c2(json)
+    OWNER TO postgres;
+
+
+

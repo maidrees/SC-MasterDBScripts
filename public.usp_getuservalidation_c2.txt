@@ -1,0 +1,128 @@
+-- FUNCTION: public.usp_getuservalidation_c2json
+
+-- DROP FUNCTION public.usp_getuservalidation_c2json;
+
+CREATE OR REPLACE FUNCTION public.usp_getuservalidation_c2(
+	input json)
+RETURNS json
+    LANGUAGE 'plpgsql'
+    COST 100.0
+    VOLATILE 
+AS $function$
+
+DECLARE 
+	VUser_ID 	bigint;
+	VC2User_ID 	Varchar(100);
+	VUserName 	VARCHAR(1000);
+	VTRAN		VARCHAR(30);
+	VCreated_By	int;
+	Vtoken 		VARCHAR(100);
+	Vtimeout	smallint;
+	Vtimestamp	timestamp;
+	VEndtime	timestamp;
+	Vmessagetype	smallint;
+	VActiondate	timestamp default(current_timestamp at time zone 'utc')	;
+Begin
+
+drop table if exists temps;
+drop table if exists TEMPTABLE;
+
+create temp table temps(id serial,ivalue json);
+create temp table TEMPTABLE (id serial,RoleId bigint);
+
+insert into temps(ivalue)
+select input;
+
+	select ivalue->'user'->> 'username' 
+	,ivalue->'user'->> 'token' 
+	,ivalue->'user'->> 'timeout' 
+	,ivalue->'user'->> 'timestamp' 
+	,ivalue->'user'->> 'messagetype' 
+	,ivalue->'user'->> 'circles_userid'
+	into VUserName,Vtoken,Vtimeout,Vtimestamp,Vmessagetype,VC2User_ID
+	from temps limit 1;
+
+ 
+	If Not Exists(select 1 from kbusermst_c2 where Lower(user_name)=Lower(VUserName) and isactive=1 limit 1) then
+	begin
+
+	INSERT INTO public.kbusermst_c2(id, user_name,isactive)
+	VALUES (VC2User_ID,VUserName,1);
+
+	VUser_ID:=(select user_id from kbusermst_c2 where user_name=VUserName and isactive=1 );
+
+	Insert into KBUserCustomerMapping(UserID,CustomerID,CreatedBy,CreatedDate,ModifiedDate,ModifiedBy,IsActive)
+	select VUser_ID, (select customerid from kbcustomersmst where isactive='1' and customerid!=1 limit 1),VCreated_By,  VActiondate, VActiondate, VCreated_By,'1'
+	where not exists(select 1 from KBUserCustomerMapping where userid=VUser_ID and customerid=(select customerid from kbcustomersmst where isactive='1' and customerid!=1 limit 1))
+	;
+
+	
+	end;
+	end if;
+	
+	select user_id, id into VUser_ID,VC2User_ID  from kbusermst_c2 where Lower(user_name)=Lower(VUserName) and isactive=1 limit 1;
+	
+
+	VEndtime:=(Select Vtimestamp+ Vtimeout*Interval '1 second');
+
+ 	If not exists(select 1 from kblogindetails where userid=Vuser_id and tokenid=Vtoken and isactive=1) then
+ 	begin
+
+		insert into kblogindetails(userid, starttime, endtime, tokenid,createdby,modifiedby,createddate,modifieddate, isactive)
+		select VUser_ID,Vtimestamp,VEndtime,Vtoken,VUser_ID,VUser_ID,VActiondate,VActiondate,1;
+
+		Return(
+			Select row_to_json(outs)
+			from
+			(
+				Select Row_to_json(users) "user"
+				from
+				(
+					Select VUser_ID "userid",VC2User_ID "circles_userid",VUserName "username"
+					,Vtoken "token", 0 "vid", 'true' "isvalid"
+					,400 "code", 'valid' "message"
+					
+				)users
+			)outs	
+		);
+
+		exception when others then 
+		Return(
+			Select row_to_json(a)
+			from
+			(select 404 "code", 'invalid' "message")a
+		);
+
+		
+
+ 	end;
+ 	end if;
+	
+	Return(
+			Select row_to_json(a)
+			from
+			(select 404 "code", 'invalid' "message")a
+		);
+
+	
+exception when others then 
+		Return(
+			Select row_to_json(a)
+			from
+			(select 404 "code", 'invalid' "message")a
+		);
+
+-- {user:{userid:2345,circles_userid:"ldiemfjkimeimsiejnf",username:"ssfesd",vid:"",token:"ksdafdf"},error:{code:400,message:"valid"},isvalid:true}
+
+	--VTRAN:= (select ivalue->'User'->> 'TransType' from temps limit 1);
+	--VCreated_By:= (select ivalue->'User'->> 'LoginId' from temps limit 1);
+	
+
+End
+
+$function$;
+
+ALTER FUNCTION public.usp_getuservalidation_c2(json)
+    OWNER TO postgres;
+
+

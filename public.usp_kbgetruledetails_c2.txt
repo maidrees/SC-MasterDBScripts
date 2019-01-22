@@ -1,0 +1,281 @@
+-- FUNCTION: public.usp_kbgetruledetails_c2json
+
+-- DROP FUNCTION public.usp_kbgetruledetails_c2json;
+
+CREATE OR REPLACE FUNCTION public.usp_kbgetruledetails_c2(
+	input json)
+RETURNS json
+    LANGUAGE 'plpgsql'
+    COST 100.0
+    VOLATILE 
+AS $function$
+
+declare 
+	valerts json;
+	vactions json;
+	vkpiid int;
+	vkpis json;
+	vruleactiondetail json;
+	vlatestkpiid int;
+	vcreated_by int;
+	Vcount	int;
+	vtype varchar(200);
+	vuom varchar(200);
+	voperator varchar(200);
+	vstartdate varchar(30);
+	venddate	varchar(30);
+
+begin
+
+drop table if exists users;
+drop table if exists temps;
+
+create temp table temps(id serial,ivalue json);
+create temp table users (id serial,userid int);
+
+insert into temps(ivalue)
+select input;
+
+select ivalue->'rule'->> 'loginid'
+,ivalue->'rule'->> 'id'
+into
+vcreated_by
+,vkpiid
+from 
+temps limit 1;
+
+If not exists(Select 1 from KBKpiMst  where coalesce(ORIGINALID, KPI_ID)=VKPIID and ISACTIVE=1) then
+Begin
+
+	Return(
+		Select row_to_json(a) 
+		from
+		(select 500 "code", 'invalid kpi id' "message")a
+	);
+end;
+end if;
+ 
+Select kpi_id,createdby  into VLatestKPIID,vcreated_by
+from KBKpiMst 
+where coalesce(ORIGINALID, KPI_ID)=VKPIID and ISACTIVE=1 ;
+
+insert into users(userid)
+select userid
+from
+kbusercustomermapping a
+inner join
+(
+	select customerid 
+	from kbusercustomermapping
+	where userid=vcreated_by
+) b  on a.customerid=b.customerid
+
+;
+
+	
+
+ select   
+			  coalesce(details.mailcount,tempdetails.mailcount) 
+			, coalesce(details.starttime,tempdetails.starttime)	
+			, coalesce(details.endtime,tempdetails.endtime)	
+			, coalesce(details.rulecriteria,tempdetails.rulecriteria)
+			, tempdetails.sch_uom  "uom"
+			, tempdetails.sch_type "type"
+			into vcount,vstartdate,venddate,voperator,vuom, vtype
+			from kbalertmst am
+			left outer  join kbkpimst km on am.alert_kpi = km.kpi_id 
+			left outer join kbeventemaildetails details on details.eventid=am.alert_id
+			left outer join kbeventemailmst mailmst on mailmst.templateid=details.templateid
+			left outer join kbeventemaildetails_temphold tempdetails on tempdetails.eventid=am.alert_id
+			left outer join kbeventemailmst_temphold tempmailmst on tempmailmst.templateid=tempdetails.templateid
+			where am.alert_kpi = vkpiid   and ( lower(mailmst.type)='alerts' or lower(tempmailmst.type)='alerts')   and am.isactive='1';
+ 
+valerts:=	(
+
+			select row_to_json(alertdetail)  
+			from
+			(
+			select voperator "operator", vcount "count", row_to_json(alerts) as "time_period" 		
+			from
+			(
+			select  vstartdate "startdate",venddate "enddate",vuom "uom", vtype "type"
+			
+			) alerts
+		)alertdetail	
+		);
+ 
+	vactions:=(
+		select array_to_json(array_agg(row_to_json(actions)))as "action"
+		from	
+		(
+		select  mst.tamplatename "action_name",'' "action_description",emailto "url",method_type "method_type"
+		,det.emailhtmlcontent "parameters"
+		,det.emailrichtextcontent "body"
+		,cast(api_headers as text) "headers"
+		,case when authentication_type=0 then 'anonymous' 
+			when authentication_type=1 then 'authenticated'
+				when authentication_type=2 then 'custom' end  "authentication_type"
+		 
+		from 
+		kbalertmst am
+		join kbeventemaildetails det on det.eventid=am.alert_id
+		join kbeventemailmst mst on mst.templateid=det.templateid
+		where am.alert_kpi = vkpiid  and lower(mst.type)='alerts' and am.isactive='1' and det.active=1 and  exists (select 1 from users bb where am.createdby=bb.userid)
+		--for xml raw('rule'), root('rules')
+		) actions
+	 );
+
+vruleactiondetail:=(    
+		 
+			Select row_to_json(aa)	
+			from
+			(
+				select  array_to_json(array_agg(row_to_json(output))) "rule"
+				from 
+				(
+					select     ruleaction as "rulename"
+					,
+				 
+					cast(
+					(
+						select row_to_json(exp)
+						from
+						(
+						select row_to_json(expbuilder) "ifcondition"
+						From
+						(
+							select 
+							case when coalesce(cast(replace(lower(expression),'ifcondtion','ifcondition')as json)->'ifcondition'->>'logical_operator','')!='' 
+								 then	cast(replace(lower(expression),'ifcondtion','ifcondition') as json)->'ifcondition'->>'logical_operator' 
+										else cast(replace(lower(expression),'ifcondtion','ifcondition') as json)->'ifcondition'->>'operator' end 
+								logical_operator
+							,
+							(
+								Select row_to_json(exprs) "conditions"
+								from
+								(
+									select  array_to_json(array_agg(row_to_json(expr))) "measure"
+									from
+									(
+
+										select expression,"operator", value1, value2,measureid
+										,case when lower(kmeas.type) ='measure' then 'source' else lower(kmeas.type) end metrictype
+											,case when lower(kmeas.type) ='measure' 
+												then (	
+													select 
+													(
+														select sourcetype_name 
+														from kbsourcetypemst src where src.sourcetype_id=mes.source_id
+													) sourcename 
+													from kbmeasuremst mes where mes.measure_id=kmeas.measure_id 
+													) ||'.'|| measure 
+												when lower(kmeas.type) ='entity' 	
+												then
+													(	
+													select 
+													(
+														select entity_name 
+														from kbentitymst src where src.entitydef_id=mes.entitydefid
+													) sourcename 
+													from kbentityscreenconfigurationmst mes where mes.screenid=kmeas.measure_id 
+													) ||'.'|| measure
+											   end measure
+										from
+										(
+											select measures->>'expression' expression,case when coalesce(measures->>'operators','')!='' 
+												then
+												measures->>'operators' else measures->>'operator' end "operator", measures->>'value1' value1
+											, measures->>'value2' value2
+											, measures->>'measureid' measureid
+											,measures->>'measure' measure
+											
+											From
+											(
+												select case when isarray=1 then json_array_elements(mea) else mea end  as measures
+												from
+												(
+													Select 
+													cast(replace(replace(lower(expression),'ifcondtion','ifcondition'),'condtions','conditions') 
+													as json)->'ifcondition'->'conditions'->'measure' mea
+													, case when left(cast(cast(replace(replace(lower(expression),'ifcondtion','ifcondition'),'condtions','conditions') as json)
+														-> 'ifcondition'->'conditions'-> 'measure' as text),1)='[' then 1 else 0 
+														end isarray
+													from
+													kbkpirule rj 
+													where r.kpirule_id=rj.kpirule_id
+												) exp
+											) exps	
+										)measur	
+										Join kbkpimeasure kmeas on cast(measur.measureid as int)=kmeas.measure_id and kmeas.kpi_id=vlatestkpiid
+										join kbkpimst kpis on kmeas.kpi_id=kpis.kpi_id
+										where kmeas.isactive=1 and kpis.isactive=1 and kmeas.template_id!=1
+										group by expression,"operator", value1, value2,measureid,kmeas.type,kmeas.measure_id ,measure 
+									)expr	
+								) exprs	
+
+							)
+							,cast(replace(lower(expression),'ifcondtion','ifcondition') as json)->'ifcondition'->>'geo_logicaloperator' geo_logicaloperator
+							,cast(cast(replace(lower(expression),'ifcondtion','ifcondition') as json)->'ifcondition'->>'geofence' as json)	geofence
+							from kbkpirule r 
+							where r.kpi_id=vlatestkpiid 
+							and  r.ruleaction=rules.ruleaction and r.isactive='1'
+						) expbuilder
+					)exp		
+				--for xml path('')
+				) 
+				as json)as "expression" 
+				 from  kbkpirule rules  
+				left join kbkpistatus alertactions on rules.ruleaction=alertactions.status
+				left join kbtemplategroupingmst t on t.groupdetailid=rules.action_groupid
+				where rules.kpi_id = vlatestkpiid and rules.isactive=1
+				) output
+			)aa	
+			 
+		);
+
+vkpis:=(
+
+	select row_to_json(kpi)
+	from
+	(
+	select   coalesce(originalid,km.kpi_id) as "id", km.kpi_name as "kpi_name", coalesce(kpi_description,'') as "kpi_description" 
+	,(
+		select 
+		row_to_json(a) "schedule"
+		from
+		(
+			select case when cast(fromdate as varchar(50)) is null then '' else cast(fromdate as varchar(50)) end  startdate
+			,case when cast(todate as varchar(50)) is null then '' else cast(todate as varchar(50)) end  enddate,uom 
+			--,schedule_type "type"
+			from kbkpischedules schedule
+			where schedule.kpi_id=coalesce(originalid,km.kpi_id) and schedule.isactive='1'
+		) a	
+	)
+	, vruleactiondetail as "rule_details"
+	from kbkpimst km
+	where km.kpi_id = vlatestkpiid and isactive='1'
+	)kpi
+	
+ );
+ 
+return(select Array_to_json(array_agg(row_to_json(a)))   from ( select  vkpis as "kpi",valerts as "alert", vactions as "action") a);
+
+exception when others then 
+		Return(
+
+				Select row_to_json(a) 
+				from
+				(select 500 "code", 'error' "message")a
+
+		);
+		
+
+end
+
+$function$;
+
+ALTER FUNCTION public.usp_kbgetruledetails_c2(json)
+    OWNER TO postgres;
+
+
+

@@ -1,0 +1,3308 @@
+-- FUNCTION: public.usp_kbentityjson
+
+-- DROP FUNCTION public.usp_kbentityjson;
+
+CREATE OR REPLACE FUNCTION public.usp_kbentity(
+	input json)
+RETURNS json
+    LANGUAGE 'plpgsql'
+    COST 100.0
+    VOLATILE 
+AS $function$
+
+DECLARE
+	Vtypename varchar(100);
+ 	Vtype int=0;
+	VError	varchar(8000);
+	VTRAN		VARCHAR(30);
+	Ventityscreen	json;
+	VEntityDefId	bigint;
+	VEntityName	varchar(255);
+	VEntityType	smallint;
+	VServiceType	varchar(50);
+	VCreated_By	int;
+	VCustomerName	varchar(255);
+	VID		int;
+	VEntdefTablename Varchar(255);
+	VEDMasterdata	json;
+	VEntDeftblcols	text;
+	VEntinstcoldata	varchar(4000);
+	VEntInstName	varchar(500);
+	VEntInstId	int=0;
+	VPassword	varchar(100);
+	VResult		Json;
+	VEarlyArrivingFacts	Json;
+	VMeausres	Json;
+	VKPIS		Json;
+	VAnalysisupdate	Json;
+	VEventsupdate	Json;
+	VFactsInfo	Json;
+	VFinalResult	Json;
+	VIsentityUpdate	bit;
+	VEntityRelationname varchar(255);
+	Vrelationid	int;
+	VUrlid		int;
+	VObjectType	varchar(50);
+	VCols_data		varchar(500);	
+	VDataExists		int;
+	VGroupname	varchar(255);
+	VPageno		int;
+	VPageSize	smallint;
+	VFromrecord	int;
+	VTorecord	int;
+	VSourceEntityId	int;
+	Vsearchmetric	varchar(255);
+	Vsearchtext	varchar(100);
+	Ventitydata	text;
+	VFirstmetric	varchar(500);
+	Vsecondmetric	varchar(500);
+	VThirdmetric	varchar(500);
+	VFourthmetric	varchar(500);
+	VFifthmetric	varchar(500);
+	Vsql text;
+	Vtotalrows	int;
+	Vtotalpages	smallint;
+	Vsearchmetricdatatype	varchar(50);
+	VActiondate	timestamp default(current_timestamp at time zone 'utc')	;	
+	VSourceid bigint;
+begin
+
+drop table if exists temps;
+drop table if exists users;
+drop table if exists ScreenConfig;
+drop table if exists EntityCreation;
+drop table if exists Entity;
+drop table if exists Branches;
+drop table if exists EntitiesCreation;
+drop table if exists Branches;
+drop table if exists mindates;
+drop table if exists EntityRelations;	
+drop table if exists Entitymetrics;	
+
+create temp Table mindates(Id serial,Createdate varchar(100));
+create temp table temps(id serial,ivalue json);
+create temp table users (id serial,userid int);
+create temp table ScreenConfig (Id Serial,EntityID int,MRowIndex int,MLabel varchar(500),ServiceLabel varchar(500),MDataTypeId varchar(50), MCtrlType varchar(100), IsRequired bit
+, Identifier bit , IsSearchable bit,IsDisplay bit,DefaultValue varchar(100), CRowIndex int, CValue varchar(100),SValue varchar(100), OType varchar(50)
+,TOrder smallint,groupname varchar(255),IsNewlyAdded smallint,actualdatatype varchar(100));
+
+create temp table EntityCreation (id serial, EntityName varchar(100),ColumnName varchar(255),ColumnValue varchar(100),DataType varchar(50),actualdatatype varchar(100));
+	
+create temp table Entity (ID serial, EntityDefID int, EntityScreenName varchar(100), EntityID int, EntityName varchar(100),HasBranches smallint, Screenxml json);
+
+create temp table EntitiesCreation (id serial,EntityName varchar(100),ColumnName varchar(100),ColumnValue varchar(100),CtrlType varchar(100),DataType varchar(100)
+,"Name" varchar(100),"Value" varchar(100),Isidentifier bit, ServiceLabel varchar(100),BranchNumber int, RowIndex int, IsRequired bit
+, GroupName varchar(100), IsUpdate bit,Issearchable bit,originaldatatype varchar(50),IsDisplay bit);
+
+create temp table Branches (Id serial,BranchID int ,BranchName varchar(100),BranchNumber smallint);
+create temp table Entitymetrics (Id serial,columnname varchar(500));
+
+Create temp table EntityRelations(Relationid serial, Relationname varchar(255), PrimaryEntityId int, PrimaryEntityType varchar(50), SecondaryEntityId int
+, SecondaryEntityType varchar(50),lookupmetric varchar(255),relationstype varchar(50));
+
+insert into temps(ivalue)
+select input;
+
+VTRAN:= (select ivalue->'ENTITYDETAILS'->> 'TRANSTYPE' from temps limit 1);
+VCreated_By:= (select ivalue->'ENTITYDETAILS'->> 'LoginId' from temps limit 1);
+VID:= (select ivalue->'ENTITYDETAILS'->> 'VID' from temps limit 1);
+VEntityName:= (select ivalue->'ENTITYDETAILS'->> 'EntityName' from temps limit 1);
+VEntityType:= (select ivalue->'ENTITYDETAILS'->> 'EntityType' from temps limit 1);
+Ventityscreen:= (select ivalue->'ENTITYDETAILS'-> 'EntityScreen' from temps limit 1);
+VEDMasterdata:=(select ivalue->'ENTITYDETAILS'-> 'EntityScreen'->'Entity'->'Master' from temps limit 1);
+VEntityDefId:= (select ivalue->'ENTITYDETAILS'->> 'EntityDefId' from temps limit 1);
+VSourceid:= (select ivalue->'ENTITYDETAILS'->>'DataSourceId' from temps limit 1);
+																			  
+If lower(VTran)='createdynamicentity' or lower(VTran)='updatedynamicentity'  then
+begin
+
+VEntInstName:=VEntityName;
+
+VEntityType:= (select entitytype from  kbentitymst where entitydef_id=VEntityDefId limit 1);
+
+end;
+
+end if;
+
+/* Multi tenancy implementaion */
+
+If (VCreated_By=0 or VCreated_By is null) then
+Begin
+
+VCreated_By:= (select userid 
+		From
+		KBUserCustomerMapping users
+		Join (select CustomerId from KBLicenseDetails where LicenseKeyId=VID) cust on users.CustomerID=cust.CustomerId
+		where userid !=1
+		limit 1
+		);
+
+End;
+End if;
+
+VCustomerName:=(Select customername from KBUserCustomerMapping usermap join kbcustomersmst customers on usermap.customerid=customers.customerid	where userid=VCreated_By limit 1);
+
+insert into users(userid)
+select userid
+From
+KBUserCustomerMapping A
+Inner join
+(
+	Select customerid 
+	from KBUserCustomerMapping
+	where userid=VCreated_By
+) B  on A.customerid=B.customerid
+where A.customerid!=1
+
+;
+
+If Lower(VTran)='gettooltip' then
+Begin
+
+VResult:=(
+	select array_to_json(array_agg(row_to_json(ENTITYDEFINITION))) as "ENTITYDEFINITION"
+	from
+	(
+		select array_to_json(array_agg(row_to_json(entity))) as "ENTITYDEFINITION"
+		from	
+		(
+			select entmst.entitydef_id as "EntityDefID", entmst.entity_name as EntityDefName, entmst.entitytype as "EntityType" , entusers.user_name "CreatedBy"
+			,(
+			select array_to_json(array_agg(row_to_json(entities))) as "ENTITY"
+			from
+			(
+
+				select a.entity_id as "EntityID", a.entity_name as "EntityName", user_name "CreatedBy"
+				from kbentities a
+				join kbusermst users on a.createdby=users.user_id
+				where a.entitydef_id=entmst.entitydef_id
+			)entities	
+			)
+			,(
+				select Array_Agg(id)
+				from
+				(
+					Select distinct case when entmst.entitydef_id=primaryentitydefinitionid then  secondaryentitydefinitionid else primaryentitydefinitionid end id
+					from kbentityrelationentitydefinitiondetails rels
+					where entmst.entitydef_id=primaryentitydefinitionid or entmst.entitydef_id=secondaryentitydefinitionid
+					
+				)A
+			) Relations
+			from
+			kbentitymst entmst	
+			join kbusermst entusers on entmst.createdby=entusers.user_id	 
+			where entmst.entitydef_id!=1
+			and exists (select 1 from users where entmst.createdby=users.userid )
+		) entity
+	)ENTITYDEFINITION	
+
+);
+--where exists(select 1 from users b where a.createdby=b.userid);
+
+return(	VResult	)
+;
+end;
+ElseIf Lower(VTran)='getentitytooltip' then
+Begin
+
+VResult:=(
+	select array_to_json(array_agg(row_to_json(ENTITYDEFINITION))) as "ENTITYDEFINITION"
+	from
+	(
+		select array_to_json(array_agg(row_to_json(entity))) as "ENTITYDEFINITION"
+		from	
+		(
+			select row_number() over(Order by entitydef_id desc) as "RowNumber"
+			, entmst.entitydef_id as "ID"
+			, entmst.entitydef_id as "EntityDefID", entmst.entity_name as "EntityDefName", entmst.entity_name as "Name"
+			, entmst.entitytype as "Type",entmst.entitytype as "DefinitionType" 
+			, entusers.user_name "CreatedBy"
+			,(select Count(*) from kbentitymst where entitydef_id!=1) as "TotalRows"
+			from
+			kbentitymst entmst	
+			join kbusermst entusers on entmst.createdby=entusers.user_id	 
+			where entmst.entitydef_id!=1 and exists (select 1 from users B where entmst.createdby=B.userid)
+		) entity
+	)ENTITYDEFINITION	
+
+);
+--where exists(select 1 from users b where a.createdby=b.userid);
+
+return(VResult)
+;
+end;
+
+ElseIf Lower(VTran)='createentitydefinition' then
+begin
+
+VEntdefTablename:=(select '"KB_ENTITY_'||VCustomerName||'_'||VEntityName||'"');
+INSERT INTO public.kbentitymst(
+             entity_name, entitytype,  entitytablename, Screenjson, createdby,  modifiedby, isactive,entityguid)
+ select      VEntityName,   VEntityType,VEntdefTablename,Ventityscreen,   VCreated_By, VCreated_By, '1' , uuid_in(md5(random()::text || clock_timestamp()::text)::cstring) 
+where not exists (select 1 from kbentitymst entmst 
+			where entity_name=VEntityName and isactive='1' and exists(select 1 from users b where entmst.createdby=b.userid )) ;
+ 
+VEntityDefId:=(select entitydef_id from kbentitymst entmst where entity_name=VEntityName and isactive='1' and exists(select 1 from users b where entmst.createdby=b.userid ));
+
+Insert into ScreenConfig(EntityID,MRowIndex,MLabel,ServiceLabel, MDataTypeId, MCtrlType, IsRequired, Identifier, IsSearchable,IsDisplay,DefaultValue
+	,CRowIndex,CValue,SValue, OType,TOrder,groupname,actualdatatype)
+
+	select Entitydefid
+		,RowIndex
+		,VLabel
+		,ServiceLabel
+		,DataTypeId
+		,CtrlType
+		,IsRequired
+		,Isidentifier
+		,IsSearchable
+		,IsDisplay
+		,DefaultValue
+		,CRowIndex
+		,CValue
+		,SValue
+		,Objecttype
+		,TOrder
+		,groupname
+		,replace(actualdatatype,'nvarchar','varchar') actualdatatype
+	from
+	(
+
+		select  VEntityDefId as Entitydefid
+			,RowIndex
+			,VLabel
+			,ServiceLabel
+			,DataTypeId
+			,CtrlType
+			,IsRequired
+			,Isidentifier
+			,IsSearchable
+			,IsDisplay  as IsDisplay
+			,DefaultValue
+			,CRowIndex
+			,CValue
+			,SValue
+			,'EntityDefinition' as Objecttype
+			,cast(NULL as smallint) as TOrder
+			,groupname
+			,Lower(actualdatatype) actualdatatype
+		from
+		(
+			Select  RowIndex
+			,VLabel
+			,ServiceLabel
+			,DataTypeId
+			,CtrlType
+			,IsRequired
+			,Isidentifier
+			,IsSearchable
+			,IsDisplay
+			,DefaultValue
+			,NULL CRowIndex
+			,NULL CValue
+			, NULL SValue
+			,groupname
+			,actualdatatype
+			from
+			(
+				select 
+				cast(EDScreen->>'RowIndex' as int) as  RowIndex
+				,EDScreen->>'Label' as  VLabel
+				,EDScreen->>'ServiceLabel' as ServiceLabel
+				,EDScreen->>'DataTypeId' as DataTypeId
+				,EDScreen->>'CtrlType' as CtrlType
+				,cast(EDScreen->>'IsRequired' as bit) as IsRequired
+				,cast(EDScreen->>'Identifier' as bit) as Isidentifier
+				,cast(EDScreen->>'IsSearchable' as bit) as IsSearchable
+				,cast(EDScreen->>'IsDisplay' as bit) as IsDisplay
+				,EDScreen->>'DefaultValue' as DefaultValue
+				,EDScreen->>'GroupName' as groupname
+				,EDScreen->>'HasData' as HasData
+				,EDScreen->>'Actualdatatype' as actualdatatype
+				from
+				(
+					Select json_array_elements(EDScreen) as EDScreen
+					From
+					(
+					select ivalue->'ENTITYDETAILS'-> 'EntityScreen'->'Entity'->'Master' as EDScreen
+					from temps limit 1
+					)a
+				)AA
+			) vals	
+			where HasData='0'
+
+			
+		)entityscreen
+
+		Union
+
+		select distinct VEntityDefId as Entitydefid
+			,RowIndex
+			,VLabel
+			,ServiceLabel
+			,DataTypeId
+			,CtrlType
+			,IsRequired
+			,Isidentifier
+			,IsSearchable
+			,cast(NULL as bit) as IsDisplay
+			,DefaultValue
+			,cast(SData->>'RowIndex' as smallint) as CRowIndex
+			,SData->>'Value' as CValue
+			,SData->>'ServiceValue' as SValue
+			,'EntityDefinition' as Objecttype
+			,cast(NULL as smallint) as TOrder
+			,groupname
+			,replace(actualdatatype,'nvarchar','varchar') actualdatatype
+		from
+		(
+			Select json_array_elements(CData) as SData,RowIndex
+			,VLabel
+			,ServiceLabel
+			,DataTypeId
+			,CtrlType
+			,IsRequired
+			,Isidentifier
+			,IsSearchable
+			,DefaultValue
+			,groupname
+			,Lower(actualdatatype) actualdatatype
+			from
+			(
+				select 
+				cast(EDScreen->>'RowIndex' as int) as  RowIndex
+				,EDScreen->>'Label' as  VLabel
+				,EDScreen->>'ServiceLabel' as ServiceLabel
+				,EDScreen->>'DataTypeId' as DataTypeId
+				,EDScreen->>'CtrlType' as CtrlType
+				,cast(EDScreen->>'IsRequired' as bit) as IsRequired
+				,cast(EDScreen->>'Identifier' as bit) as Isidentifier
+				,cast(EDScreen->>'IsSearchable' as bit) as IsSearchable
+				,EDScreen->>'DefaultValue' as DefaultValue
+				,EDScreen->>'GroupName' as groupname
+				,EDScreen->'Data' CData
+				,EDScreen->>'HasData' as HasData
+				,EDScreen->>'Actualdatatype' as actualdatatype
+				from
+				(
+					Select json_array_elements(EDScreen) as EDScreen
+					From
+					(
+					select ivalue->'ENTITYDETAILS'-> 'EntityScreen'->'Entity'->'Master' as EDScreen
+					from temps limit 1
+					)a
+				)AA
+			) vals	
+			where HasData='1'
+		)entityscreen
+	)inpdata
+	Order by RowIndex
+;
+update ScreenConfig
+set actualdatatype='timestamp'
+where lower(actualdatatype)='datetime';
+update EntityCreation
+set actualdatatype='timestamp'
+where lower(actualdatatype)='datetime';
+update EntitiesCreation
+set DataType='timestamp'
+where lower(DataType)='datetime';
+
+ 	Insert into KBEntityScreenConfigurationMst(EntityDefID,ControlTitle,ServiceLabel,ControlDataType,ControlType,ObjectType,IsIndentifier
+	,IsSearchable,IsDisplay,IsRequired,CreatedBy,ModifiedBy,RowIndex,DefaultdataValue,GroupName)
+	Select EntityID,MLabel,ServiceLabel, MDataTypeId, MCtrlType, OType, Identifier, IsSearchable,IsDisplay , IsRequired,CreatedBy, ModifiedBy
+	,RowIndex,DefaultValue,groupname
+	From
+	(
+		Select distinct EntityID,MLabel,ServiceLabel, MDataTypeId, MCtrlType, OType, Identifier, IsSearchable,IsDisplay 
+		, IsRequired,VCreated_By CreatedBy, VCreated_By ModifiedBy,TOrder,MRowIndex RowIndex,DefaultValue,groupname
+		from ScreenConfig
+	) A
+	where not exists(select 1 from KBEntityScreenConfigurationMst b where A.EntityID=b.EntityDefID and A.ServiceLabel=B.ServiceLabel and B.objecttype='EntityDefinition')
+	Order by RowIndex;
+
+	Insert into KBEntityScreenConfigurationDetails(ScreenID,ControlValues,CreatedBy,createddate,ModifiedBy,modifieddate,RowIndex,servicevalue)
+	Select distinct  C.ScreenID,B.CValue,VCreated_By CreatedBy,VActiondate, VCreated_By ModifiedBy,VActiondate,A.RowIndex,B.Svalue 
+	from (Select Distinct EntityID,MLabel, MDataTypeId, MCtrlType, OType,MRowIndex,CRowIndex RowIndex 
+			From ScreenConfig ) A 
+	join ScreenConfig B on A.OType=b.OType and A.MRowIndex=B.CRowIndex
+	Join KBEntityScreenConfigurationMst C on B.EntityID=C.entityDefid and  B.MLabel=C.ControlTitle and B.OType=C.ObjectType;
+ 
+VEntDeftblcols:='';
+
+		Insert into EntityCreation(EntityName,ColumnName,DataType,actualdatatype)
+		select distinct VEntityName
+		--,  Case when A.controltype='CheckBox' then B.ControlValues else A.controltitle end ColumnName
+		,A.controltitle
+		,Case when A.ControlDataType ='DateTime' then 'timestamp' else 'varchar(500)' END as DataType
+		,Case when actualdatatype ='DateTime' then 'timestamp' else actualdatatype END as actualdatatype 
+		from 
+		KBEntityScreenConfigurationMst  A
+		join (
+			Select distinct EntityID,MLabel,ServiceLabel, MDataTypeId, MCtrlType, OType, Identifier, IsSearchable,IsDisplay 
+			, IsRequired,VCreated_By CreatedBy, VCreated_By ModifiedBy,TOrder,MRowIndex RowIndex,DefaultValue,groupname,actualdatatype
+			from ScreenConfig
+		) C on C.EntityID=A.EntityDefID and C.ServiceLabel=A.ServiceLabel and A.objecttype='EntityDefinition'
+		 LEFT  JOIN  KBEntityScreenConfigurationDetails B on A.ScreenID=B.ScreenID
+		 where A.EntityDefId=VEntityDefId and A.ObjectType='EntityDefinition' ;
+
+		Insert into EntityCreation (EntityName,ColumnName,DataType)
+		select VEntityName as EntityName,ColumnName||'ID','BIGINT' 
+		from EntityCreation 
+		where DataType='DateTime' ;
+ 
+
+		VEntDeftblcols:=(Select string_agg(Ecolumns,',') as cols
+		From
+		(
+			select '"'||ColumnName||'"'||' '||actualdatatype as Ecolumns
+			from EntityCreation
+			Order by id
+		)cols	);
+
+		VEntDeftblcols:=VEntDeftblcols||',"CreatedDate" varchar(100),"ModifiedDate" varchar(100)';			
+
+		execute(' Create Table '||VEntdefTablename || '("ID" int,"LocationDimensionId" bigint ,'||VEntDeftblcols||',"VirtusUTCStartTime" timestamp,"VirtusUTCEndTime" timestamp,"ISACTIVE" BIT Default(''1''))');
+
+--	14thsept-2018
+-- create new datasourceid variable 
+
+if(VSourceid is not null and VSourceid>0) then 
+begin
+
+insert into public.kbsourceurlmst(sourceid,objecttype,url,username,password,data_retrieval_time,data_retrieval_uom,
+createdby,createddate,modifiedby,modifieddate,isactive,datasourceid,servername,portnumber,organisation,databasename,
+dbquery,tablequery,dbauthtype,databasetype,wsdlurl,wsdlaction,wsdlclassname,isrestbased,initialpulltype,initialpullfromdate,
+initialpulltodate,intialpulltimeperiod,initialpulltimeperioduom,attributemapping,data_fetch_type,parameter,
+parameterappender,haspaging,pagingcolumn,noofrecords,uploadtype,dbidcolumn,dbidcolumndatatype,query_maxrecord,createurl,
+custom_authenticationtype,urlname,createurltype,pulltype,objectname,concatenation_operator,concatenation_rule,rerun,
+entitysourceid,entitydataformattype,entitydataformatsubseparator,entitydataformatmainseparator,entitysourcepk,
+                                  entitydataformatobject
+                                 )
+select VEntityDefId,'Entity',url,username,password,data_retrieval_time,data_retrieval_uom,kbsourceurlmst.createdby,
+kbsourceurlmst.createddate,kbsourceurlmst.modifiedby,kbsourceurlmst.modifieddate,'1',datasourceid,servername,portnumber,organisation,databasename,dbquery,tablequery,
+dbauthtype,databasetype,wsdlurl,wsdlaction,wsdlclassname,isrestbased,initialpulltype,initialpullfromdate,initialpulltodate,
+intialpulltimeperiod,initialpulltimeperioduom,attributemapping,data_fetch_type,parameter,parameterappender,haspaging,pagingcolumn,
+noofrecords,uploadtype,dbidcolumn,dbidcolumndatatype,query_maxrecord,createurl,custom_authenticationtype,urlname,createurltype,
+pulltype,objectname,concatenation_operator,concatenation_rule,rerun,VSourceid,dataformat,subseparator,mainseparator, 
+primarykeycolumns,dataformat
+from kbsourceurlmst,kbsourcetypemst where sourceid=VSourceid and sourcetype_id=VSourceid;
+
+insert into public.kbsourceurldetails(sourceid,urlid,param_name,param_value,param_type,formula,createdby
+,createddate,modifiedby,modifieddate,filteroption,param_valuetype,operator,entitydefid,locationdimid,concatenator,parametertype
+,format)
+select VEntityDefId,b.id,param_name,param_value,param_type,formula,a.createdby
+,a.createddate,a.modifiedby,a.modifieddate,filteroption,param_valuetype,operator,entitydefid,
+locationdimid,concatenator,parametertype
+,format from  kbsourceurlmst b ,kbsourceurldetails a
+where b.sourceid=VEntityDefId and objecttype='Entity' and b.data_fetch_type='CurrentData' and 
+a.urlid=(select id from kbsourceurlmst where sourceid=VSourceid and data_fetch_type='CurrentData'  )
+and a.sourceid=VSourceid ;
+
+insert into public.kbsourceurldetails(sourceid,urlid,param_name,param_value,param_type,formula,createdby
+,createddate,modifiedby,modifieddate,filteroption,param_valuetype,operator,entitydefid,locationdimid,concatenator,parametertype
+,format)
+select VEntityDefId,b.id,param_name,param_value,param_type,formula,a.createdby
+,a.createddate,a.modifiedby,a.modifieddate,filteroption,param_valuetype,operator,entitydefid,
+locationdimid,concatenator,parametertype
+,format from  kbsourceurlmst b ,kbsourceurldetails a
+where b.sourceid=VEntityDefId and objecttype='Entity' and b.data_fetch_type='HistoricalData'
+and a.urlid=(select id from kbsourceurlmst where sourceid=VSourceid and data_fetch_type='HistoricalData'  )
+and a.sourceid=VSourceid ;
+
+end;
+end if;
+
+																													 
+return(
+
+	select array_to_json(array_agg(row_to_json(a)))   
+	from
+	(
+		select 1 as "Result", 0 as "ErrorMessage", 0 as "ErrorCode", array_to_json(array_agg(row_to_json(output)))  as "ENTITYDETAILS"
+		from
+		(
+			select VEntityDefId  as "ENTITY"
+			
+		) output
+	)a
+	);
+
+end;																				   
+Elseif lower(VTran)='createdynamicentity' then
+Begin 
+
+VEntityName:=(select entity_name from kbentitymst where entitydef_id=VEntityDefId);
+VEntityType=(select EntityType from kbentitymst where entitydef_id=VEntityDefId); 
+VEntdefTablename:=(select '"KB_ENTITY_'||VCustomerName||'_'||VEntityName||'"');
+
+ 	Insert into Entity(EntityDefID,EntityName,HasBranches,SCREENXML)
+	select VEntityDefId,ivalue->'ENTITYDETAILS'->> 'EntityName',NULL ,ivalue->'ENTITYDETAILS'-> 'EntityScreen' 
+	from temps limit 1;
+	
+	UPdate Entity 
+	set EntityScreenName=Mst.Entity_Name 
+	from  
+	KBEntityMst Mst 
+	where Entity.EntityDefID=Mst.ENTITYDEF_ID ;
+
+	
+ 	Insert into EntitiesCreation(EntityName,ColumnName,ColumnValue,CtrlType,DataType,"Name","Value",Isidentifier
+	, ServiceLabel,BranchNumber, RowIndex, IsRequired, GroupName, IsUpdate,Issearchable, originaldatatype,IsDisplay)
+
+	select  VEntInstName
+	,EDScreen->>'Label'
+	,EDScreen->>'InputValue'
+	,EDScreen->>'CtrlType'
+	,EDScreen->>'DataType'
+	,NULL "Name"
+	,NULL "Value"
+	,cast(EDScreen->>'Identifier' as bit)
+	,EDScreen->>'ServiceLabel'
+	,1 as BranchNumber
+	,cast(EDScreen->>'RowIndex' as int) RowIndex
+	,cast(EDScreen->>'IsRequired' as bit)IsRequired
+	,EDScreen->>'GroupName'	
+	,NULL isupdate
+	, cast(EDScreen->>'IsSearchable' as bit)
+	,EDScreen->>'DataType'
+	, cast(EDScreen->>'IsDisplay' as bit)	IsDisplay
+	from
+	(
+		Select json_array_elements(EDScreen) as EDScreen
+		From
+		(
+		select ivalue->'ENTITYDETAILS'-> 'EntityScreen'->'Entity'->'Master' as EDScreen
+		from temps limit 1
+		)a
+	)entityscreen
+	;
+
+ Update EntitiesCreation set Isidentifier='1'
+ From
+ (
+	 select ControlTitle ,EntityDefID
+	 from KBEntityScreenConfigurationMst 
+	 where IsIndentifier='1' and EntityDefID=VEntityDefId
+ ) B where EntitiesCreation.ColumnName=B.ControlTitle  ;
+
+ Update EntitiesCreation set isrequired='1'
+	 From
+	 (
+		 select ControlTitle ,EntityDefID
+		 from KBEntityScreenConfigurationMst 
+		 where isrequired='1' and EntityDefID=VEntityDefId
+	 ) B where EntitiesCreation.ColumnName=B.ControlTitle  ;
+	 
+
+ Update EntitiesCreation set Issearchable='1'
+  From
+  (
+   select ControlTitle ,EntityDefID
+   from KBEntityScreenConfigurationMst 
+   where issearchable='1' and EntityDefID=VEntityDefId
+  ) B where EntitiesCreation.ColumnName=B.ControlTitle  ;
+
+ Update EntitiesCreation set isdisplay='1'
+  From
+  (
+   select ControlTitle ,EntityDefID
+   from KBEntityScreenConfigurationMst 
+   where isdisplay='1' and EntityDefID=VEntityDefId
+  ) B where EntitiesCreation.ColumnName=B.ControlTitle  ;
+	
+
+	If VEntInstName is null or VEntInstName='' then
+	begin
+
+		select  String_Agg(ColumnValue,' ') from EntitiesCreation into VEntInstName
+		where 
+		Isidentifier='1' and Issearchable='1';
+	
+		Update EntitiesCreation set EntityName= VEntInstName
+		where 
+		Isidentifier='1' ;
+		--and Issearchable='1';
+
+		--VEntInstName:=(select EntityName from EntitiesCreation where Isidentifier='1' and Issearchable='1' limit 1);
+
+	end;
+	end if;
+
+	 delete from EntitiesCreation 
+	 where ColumnName not in (
+				  Select B.ControlTitle
+				 from  KBEntityScreenConfigurationMst B where B.EntityDefID=VEntityDefId and ObjectType='EntityDefinition'
+				 );
+
+-- Update EntitiesCreation set DataType='varchar(500)';
+--------------------------------
+
+--//04march2016
+
+if exists  (select 1 from EntitiesCreation  
+Join KBEntityScreenConfigurationMst B on  
+EntitiesCreation.ColumnName=B.ControlTitle 
+and B.EntityDefID=VEntityDefId
+where (B.defaultdatavalue is not null  and B.defaultdatavalue!='')
+and (EntitiesCreation.ColumnValue is null or  EntitiesCreation.ColumnValue='')
+)
+then 
+begin
+ Update EntitiesCreation set ColumnValue=defaultdatavalue
+	 From
+	 (
+		 select defaultdatavalue,ControlTitle
+		 from KBEntityScreenConfigurationMst 
+		 where  EntityDefID=VEntityDefId and defaultdatavalue is not null and defaultdatavalue is not null and defaultdatavalue!=''
+	 ) B where EntitiesCreation.ColumnName=B.ControlTitle and (EntitiesCreation.ColumnValue is null or  EntitiesCreation.ColumnValue='') ;
+end;
+end if;
+	
+
+	
+	VCols_data:=
+	(
+
+	select String_Agg(col,' and ')
+	from
+	(
+		Select '"'|| ilabel ||'"= ''' || lvalue || '''' col
+		from
+		(
+			Select screenj->>'Label' ilabel ,screenj->>'InputValue' lvalue,screenj->>'IsSearchable' IsSearchable, screenj->>'Identifier' IsIdentifier
+			from
+			(
+				Select json_array_elements(escreen) as screenj
+				from
+				(
+					select VEDMasterdata escreen
+				)a 
+			) scr
+
+		)a
+		where 
+		--IsSearchable='1' and 
+		IsIdentifier='1'
+	) aar
+	)
+	;
+
+	-- If VCols_data is not null and VEntdefTablename is not null then
+-- 	
+-- 	Execute(' select "ID" from '||VEntdefTablename|| ' where '|| VCols_data ) into VDataExists;
+-- 	end if;
+
+VDataExists=(select 1 from kbentities where entity_name=VEntInstName and entitydef_id=VEntityDefId);
+
+	If coalesce(VDataExists,'0')!='0' Then
+	Begin  
+		
+		VEntInstId:=	VDataExists;
+
+				
+	End;
+	Else
+	Begin   
+	
+		If (select count(*) from kbentities where entity_id=VEntInstId)=0 then
+		begin
+			
+		
+			Insert into kbentities(ENTITYDEF_ID,ENTITY_NAME,HAS_BRANCHES,screenjson,CREATEDDATE,ModifiedDate,CREATEDBY,ModifiedBy,isactive)
+ 			SELECT   
+ 			EntityDefID,VEntInstName ENTITYNAME,'1' as HasBranches,screenxml,VActionDate,VActionDate,VCREATED_BY,VCREATED_BY,'1' isactive
+ 			from Entity;
+
+			
+			
+			VEntInstId:=(SELECT currval(pg_get_serial_sequence('kbentities','entity_id')))  ;
+
+			
+ 
+ 				If VEntityType=1 then
+				Begin
+				
+					VPassword:=ivalue->'ENTITYDETAILS'->>'Password'
+					from temps 
+					limit 1;
+					
+					Insert into kbusermst(USER_NAME,PASSWORD,USERTYPE,STATUS,ISACTIVE)
+					SELECT   ENTITYNAME,COALESCE( NULLIF(VPassword,ENTITYNAME) , ENTITYNAME ),0 userType,0 Status,'0' IsActive 
+					from Entity ;
+
+				End;
+				End if;
+
+			
+				Insert into Branches(BranchName,BranchID,BranchNumber)
+				SELECT '-100', 0,1;
+			
+ 
+				Insert into KBEntityLocations(LOCATION_NAME,ENTITY_ID,CREATEDBY,ISACTIVE,CREATEDDATE,ModifiedDate)
+				SELECT '-100' BranchID,VEntInstId,VCREATED_BY,'0',VActiondate,VActiondate
+				from Branches;
+				
+					
+				Begin
+				 
+						Update Branches
+							Set BranchID= Locs.LOCATION_ID
+						From
+						 KBEntityLocations Locs where Cast(Branches.BranchID as varchar(100))=Locs.LOCATION_NAME and ENTITY_ID=VEntInstId;
+				
+				end;
+				
+
+			/* inserting into the dynamic table*/
+
+			
+
+			VEntDeftblcols:='';
+			
+			VEntDeftblcols:=(Select string_agg(Ecolumns,',') as cols
+			From
+			(
+				select '"'||ColumnName||'"' as Ecolumns
+				from EntitiesCreation
+				Order by id
+			)cols	);
+
+			VEntDeftblcols:=VEntDeftblcols||',"CreatedDate" ,"ModifiedDate"';
+
+	 
+ 
+			VEntinstcoldata:='' ;
+			VEntinstcoldata:=(Select string_agg(Ecolumns,',') as cols
+			From
+			(
+				select 
+				
+					 case when lower(datatype) like '%int%' then (case when ColumnValue='' or ColumnValue is null then 'null' else ColumnValue end )
+					 when lower(datatype) like '%decimal%' then (case when ColumnValue='' or ColumnValue is null then 'null' else ColumnValue end )
+					 when lower(datatype) like '%string%' or lower(datatype) like '%var%'  or lower(datatype) like '%latitude%' or lower(datatype) like '%longitude%' or lower(datatype) like '%city%' or lower(datatype) like '%state%' or lower(datatype) like '%country%' or lower(datatype) like '%zip%' or lower(datatype) like '%post%'
+					 then 	 
+					( case when ( ColumnValue='' or ColumnValue is null ) then 'NULL' else ''''||ColumnValue||''''  end )
+					else ''''||ColumnValue||'''' 
+				end as Ecolumns
+				from EntitiesCreation
+				Order by id
+			)cols	);
+
+		
+
+			raise notice '% ', VEntDeftblcols;
+			raise notice '% ', VEntinstcoldata;
+			
+			VEntinstcoldata=VEntinstcoldata||','''||cast(VActionDate as varchar(100))||''''||','||''''||cast(VActionDate as varchar(100))||''''; --GetutcDate()
+			
+
+			Execute('Insert into '||VEntdefTablename || '("ID",'||  VEntDeftblcols ||',"VirtusUTCStartTime","VirtusUTCEndTime","ISACTIVE")Values('||
+				cast(VEntInstId as varchar(50))||','||VEntinstcoldata||','''||cast(VActiondate as varchar(50)) ||''',NULL,''1'')');
+
+			exception when others then 
+				raise notice '% %', SQLERRM, SQLSTATE;
+			
+		end;
+		end if;
+
+	End;
+	End if;
+
+	/* inserting into entityphone*/
+
+	BEGIN
+
+		Insert into KBEntityPhone(ENTITY_ID, SOURCETYPEID, SOURCENAME, LOCATION_ID, "name","value" ,RowID   ,PHONENO,CREATEDBY,CREATEDDATE,MODIFIEDDATE)
+		Select VEntInstId EntityId, b.SOURCETYPEID, NULL,C.LOCATION_ID,b.METRICNAME,A.ColumnValue,row_number() Over(Order by b.sourcetypeid) rowid,A.ColumnValue
+		,VCREATED_BY,VActionDate,VActionDate
+		From
+		EntitiesCreation A
+		Join KBSpokeConfigurations b on A.ColumnName=B.EntityAttribute and B.EntitydefID=VEntityDefId
+		Join KBEntityLocations C on C.ENTITY_ID=VEntInstId
+		join kbsourcetypemst sources on b.sourcetypeid=sources.sourcetype_id
+		where not exists(Select 1 from KBEntityPhone CC where b.SOURCETYPEID=CC.SOURCETYPEID and C.ENTITY_ID=CC.ENTITY_ID)
+		--and coalesce(sources.masterspokeid,0)=0
+		;
+		
+	
+	END;
+
+	/*storing the relations details */
+
+	
+	VSourceEntityId:=VEntInstId ;
+ 
+	INSERT INTO public.kbentityrelationdetails(relationid, primaryentitydefinitionid, primaryentityid,primaryentitytype, secondaryentitydefinitionid, secondaryentityid, 
+	secondaryentitytype, createdby, modifiedby)
+	select relationid,primaryentitydefinitionid, primaryentityid,primaryentitytype,secondaryentitydefinitionid,cast(secondaryentityid as int) secondaryentityid, 
+	secondaryentitytype,createdby,modifiedby
+	from
+	(
+		select A.relationid,primaryentitydefinitionid,primaryentitytype,secondaryentitydefinitionid,data.primaryentityid,secondaryentitytype,data.secondaryentityid, data.createdby,data.modifiedby
+		from
+		(
+
+			select *
+			from
+			(
+				select VSourceEntityId primaryentityid, ColumnName,
+				regexp_split_to_table(Replace(Replace(columnvalue,'[',''),']',''),',')  secondaryentityid, 
+				VCreated_By createdby,VCreated_By modifiedby
+				from entitiescreation temps
+			) vals
+			where (secondaryentityid ~ '^([0-9]?[0-9]*|[0-9]+)$')='t'	
+		) data	
+		join kbentities primaryent on data.primaryentityid=primaryent.entity_id
+		left join kbentities secondaryent on cast(data.secondaryentityid as int)=secondaryent.entity_id
+		Join kbentityrelationentitydefinitiondetails B on primaryent.entitydef_id=b.primaryentitydefinitionid 
+				and secondaryent.entitydef_id=b.secondaryentitydefinitionid and lower(b.lookupmetric)=lower(data.ColumnName)
+		join kbentityrelationsmst A on A.relationid=B.relationid
+		where data.secondaryentityid is not null and data.secondaryentityid!='' and A.Isactive='1'
+	)Aa
+	where  
+	not exists (select 1 from kbentityrelationdetails A
+					where A.primaryentitydefinitionid= AA.primaryentitydefinitionid and A.primaryentityid=AA.primaryentityid 
+					and  A.secondaryentitydefinitionid=AA.secondaryentitydefinitionid and  A.secondaryentityid=cast(AA.secondaryentityid as int)  and isactive='1');
+
+	
+VResult:=	(
+		 	select array_to_json(array_agg(row_to_json(output)))  as "ENTITYDETAILS"
+			From
+			(  
+				select 
+				case when coalesce(VDataExists,'0')!='0'  then -1 else 1 end as "Result"
+				, 0 as "ErrorMessage"
+				, 0 as "ErrorCode"
+				,VTran "TRANSTYPE"
+				,VCreated_by  "LoginId"
+				,VActiondate "VirtusUtcDate"
+				,VEntInstName "EntityScreenName"
+				,VEntityDefId "EntityDefId"
+				,VEntInstId "EntityId"
+				,VEntityDefId "ENTITYDEFID"
+				,VEntInstId "ENTITYID"
+				,VEntInstName "EntityName"
+				,Case When VEntityType=0 Then 'Device' When VEntityType=1 Then 'Human' when VEntityType=2 then 'Thing' End "EntityType"
+				,VActionDate "CreatedDate"
+				,(select user_name from kbusermst where user_id=VCreated_by) as "CreatedBy"
+				,VActionDate "ModifiedDate"
+				,(select user_name from kbusermst where user_id=VCreated_by) as "ModifiedBy"
+				,VEntityName "EntityDefName"
+				,VID as "VID"
+				,array_to_json(array_agg(row_to_json(aa)))   "EntityScreen"
+				,array_agg(branches) "Branchs"
+				from
+				(
+					select 
+					array_to_json(array_agg(row_to_json(a)))   as "Entity"
+					from
+					(
+						select array_to_json(array_agg(row_to_json(output)))  as "Master"
+						from
+						(
+							select 
+							RowIndex as "RowIndex"
+							,ColumnName "Label",ServiceLabel "ServiceLabel",originaldatatype "DataType", CtrlType "ControlType",  IsRequired "IsRequired"
+							, isIdentifier "IsIndentifier"
+							, '' "DefaultValue", ColumnValue "InputValue", groupname "GroupName", branchnumber "BranchNumber", IsDisplay "IsDisplay"
+							from 
+							EntitiesCreation
+							
+						) output
+					)a
+				) aa
+				,(
+					Select Array_to_json(Array_Agg(Row_to_json(br))) "Branch"
+					from
+					(
+						select Locs.Location_Name as "Name", Locs.Location_ID as "ID"
+						,'Name,ID' "Attribute_list" 
+						,
+						(
+							Select Row_to_json(spks) "SPOKES"
+							from
+							(
+								Select Array_to_json(Array_Agg(Row_to_json(spk))) "SPOKE"
+								from
+								(
+								select SOURCETYPEID as "SpokeID",Spokes.SOURCETYPE_NAME as "SpokeName"
+								,'' as "BranchNumber"
+								,'SpokeID,SpokeName,BranchNumber' "Attribute_list" 
+								,
+								(
+									Select Array_to_json(Array_Agg(Row_to_json(cust))) as "CUSTOMERIDENTIFIER"
+									from
+									(
+										select RowID as "RowId","value" as "Value",Name as "Name",LOCATION_ID as "BranchId"
+										,'RowId,Value,Name,BranchId' "Attribute_list" 
+										from KBEntityPhone Phone
+										where Mst.SOURCETYPEID=Phone.SOURCETYPEID and Phone.ENTITY_ID=Locs.ENTITY_ID
+										--Locs.Location_id
+										and isactive='1'
+										--for xml raw('CUSTOMERIDENTIFIER')
+									) as Cust
+								)
+								from KBEntityPhone Mst 
+								JOIN KbsourcetypeMst Spokes on Mst.SOURCETYPEID=Spokes.SOURCETYPE_ID
+								where Mst.ENTITY_ID=Locs.ENTITY_ID--Locs.Location_id
+								group by SOURCETYPE_NAME,Mst.SOURCETYPEID
+								--for xml raw('SPOKE'),Root('SPOKES')
+								)as spk
+							)spks	
+						)
+						from KbEntitylocations Locs
+						Left JOIN KBEntityPhone KCP on Locs.Location_id=KCP.LOCATION_ID
+						where Locs.ENTITY_ID= VEntInstId
+						group by  Locs.Location_Name  ,Locs.Location_ID,Locs.ENTITY_ID
+						--for xml raw('Branch'),root('Branchs')
+					)as br
+				)branches
+			)output	
+		 
+	);
+
+VEarlyArrivingFacts:=(	Select array_to_json(array_agg(row_to_json(oprocesstype)))  as "processtype"
+			From
+			(
+				Select array_to_json(array_agg(row_to_json(iprocesstype)))  as "processtype"
+				From
+				(
+					select   'earlyarrivingfacts' "type",1 as seq,
+					(
+
+						Select array_to_json(array_agg(row_to_json(query)))  as "query"
+						from
+						(	
+
+							select  'update' as type,'Fact_'||SourceMst.Alias||'MetricDetails' "table",'attributevalue' as messagetype
+							,	
+								(
+									select array_to_json(array_agg(row_to_json(filters)))   as "filters"
+									from
+									(
+										select array_to_json(array_agg(row_to_json(filters)))   as "filter"
+										from
+										(
+											select 'where' "type",
+
+												(
+													select array_to_json(array_agg(row_to_json(a)))   as "column"
+													from
+													(
+														Select 'entityid' "name",'int' datatype,cast(1 as varchar) as value
+														UNION ALL
+														select 'entitylocationid' "name",'int' datatype,cast(1 as varchar) as value
+														UNION ALL
+														select distinct "name" "name",'varchar(500)' datatype,Value as value
+														from kbentityphone phone
+														where phone.ENTITY_ID=PH.ENTITY_ID and phone.SOURCETYPEID=PH.SOURCETYPEID and ISACTIVE='1' 
+
+													)a
+												)aa
+										)"filters"
+									) "filters"
+								)	
+							
+							,					
+							(
+									select array_to_json(array_agg(row_to_json(aa)))   as "row"
+									from
+									(
+										select array_to_json(array_agg(row_to_json(a)))   as "column"
+										from
+										(				
+											select distinct 'entityid' as "name",'bigint'as datatype,ENTITY_ID as value
+											from kbentityphone EP where EP.ENTITY_ID=PH.ENTITY_ID
+											UNION ALL
+											select distinct 'entitylocationid' as "name",'BIGINT'as datatype,LOCATION_ID as value
+											from kbentityphone EP where EP.ENTITY_ID=PH.ENTITY_ID
+										)a
+									)aa
+							)
+							
+							from kbentityphone PH
+							JOIN KbSourcetypeMst SourceMst on PH.SOURCETYPEID=SourceMst.SOURCETYPE_ID
+							where PH.ENTITY_ID=VEntInstId and PH.ISactive='1'	 
+							Group by SourceMst.Alias,PH.ENTITY_ID,PH.SOURCETYPEID
+						) as query
+					)
+				)iprocesstype			
+			)oprocesstype
+		   )	
+;
+
+VMeausres:=(		Select array_to_json(array_agg(row_to_json(oprocesstype)))  as processtype
+			From
+			(
+
+				Select array_to_json(array_agg(row_to_json(iprocesstype)))  as processtype
+				From
+				(
+					select   'structuralupdate' "type",2 as seq
+					,
+						(
+							
+							Select array_to_json(array_agg(row_to_json("table")))  as "table"
+							From
+							(
+								Select 'DBKPIFactDetails_'||SourceMst.Alias "name",'meausres' as "type",'' as scheduletime,'' as uom
+								,
+								(
+									select array_to_json(array_agg(row_to_json("A")))  as "column"
+									from 
+									(
+									
+									select distinct 'EntityID' as "name",'bigint' as datatype,'meausres'	as "type",'seq' as idcolumn
+									,'Fact_'||SourceMst.Alias||'MetricDetails' as inputtable
+									,'EntityID' as inputcolumn,'seq' as inputidcolumn
+									from kbentityphone PH
+									JOIN KbSourcetypeMst SourceMst on PH.SOURCETYPEID=SourceMst.SOURCETYPE_ID
+									where PH.ENTITY_ID=VEntInstId and PH.ISactive='1'	
+									and PH.ENTITY_ID=PH1.ENTITY_ID and PH.SOURCETYPEID=PH1.SOURCETYPEID
+									
+									
+									UNION ALL
+									
+									
+									select distinct 'EntityLocationId' as "name",'bigint' as datatype,'meausres'	as type,'"seq"' as idcolumn
+									,'Fact_'||SourceMst.Alias||'MetricDetails' as inputtable
+									,'EntityLocationId' as inputcolumn,'seq' as inputidcolumn
+									from kbentityphone PH
+									JOIN KbSourcetypeMst SourceMst on PH.SOURCETYPEID=SourceMst.SOURCETYPE_ID
+									where PH.ENTITY_ID=VEntInstId and PH.ISactive='1'
+									and PH.ENTITY_ID=PH1.ENTITY_ID and PH.SOURCETYPEID=PH1.SOURCETYPEID
+									)"A"
+
+								)
+
+								from   kbentityphone PH1
+								JOIN KbSourcetypeMst SourceMst on PH1.SOURCETYPEID=SourceMst.SOURCETYPE_ID
+								where PH1.ENTITY_ID=VEntInstId and PH1.ISactive='1'
+								group by SourceMst.Alias ,PH1.SOURCETYPEID, 	PH1.ENTITY_ID
+							)"table"	
+
+						)
+
+				)iprocesstype	
+			)oprocesstype	
+	);
+
+VKPIS:=(		Select array_to_json(array_agg(row_to_json(oprocesstype)))  as processtype
+			From
+			(
+
+				Select array_to_json(array_agg(row_to_json(iprocesstype)))  as processtype
+				From
+				(
+					select   'structuralupdate' "type",3 as seq
+					,
+						(
+							
+							Select array_to_json(array_agg(row_to_json("table")))  as "table"
+							From
+							(
+								Select 'DBKPIFact_'||SourceMst.Alias "name",'meausres' as "type",'' as scheduletime,'' as uom
+								,
+								(
+									select array_to_json(array_agg(row_to_json("A")))  as "column"
+									from 
+									(
+									
+									select distinct 'EntityID' as "name",'bigint' as datatype,'meausres'	as "type",'seq' as idcolumn
+									,'Fact_'||SourceMst.Alias||'MetricDetails' as inputtable
+									,'EntityID' as inputcolumn,'seq' as inputidcolumn
+									from kbentityphone PH
+									JOIN KbSourcetypeMst SourceMst on PH.SOURCETYPEID=SourceMst.SOURCETYPE_ID
+									where PH.ENTITY_ID=VEntInstId and PH.ISactive='1'	
+									and PH.ENTITY_ID=PH1.ENTITY_ID and PH.SOURCETYPEID=PH1.SOURCETYPEID
+									
+									
+									UNION ALL
+									
+									
+									select distinct 'EntityLocationId' as "name",'bigint' as datatype,'meausres'	as type,'"seq"' as idcolumn
+									,'Fact_'||SourceMst.Alias||'MetricDetails' as inputtable
+									,'EntityLocationId' as inputcolumn,'seq' as inputidcolumn
+									from kbentityphone PH
+									JOIN KbSourcetypeMst SourceMst on PH.SOURCETYPEID=SourceMst.SOURCETYPE_ID
+									where PH.ENTITY_ID=VEntInstId and PH.ISactive='1'
+									and PH.ENTITY_ID=PH1.ENTITY_ID and PH.SOURCETYPEID=PH1.SOURCETYPEID
+									)"A"
+
+								)
+
+								from   kbentityphone PH1
+								JOIN KbSourcetypeMst SourceMst on PH1.SOURCETYPEID=SourceMst.SOURCETYPE_ID
+								where PH1.ENTITY_ID=VEntInstId and PH1.ISactive='1'
+								group by SourceMst.Alias ,PH1.SOURCETYPEID, 	PH1.ENTITY_ID
+							)"table"	
+
+						)
+
+				)iprocesstype	
+			)oprocesstype	
+	);
+
+-- 
+-- /* 
+-- 
+-- VAnalysisupdate:=(	Select array_to_json(array_agg(row_to_json(processtype)))  as processtype
+-- 			From
+-- 			(
+-- 
+-- 				Select array_to_json(array_agg(row_to_json(processtype)))  as processtype
+-- 				From
+-- 				(
+-- 
+-- 					select   'structuralupdate' "type",4 as seq
+-- 					,
+-- 					(select array_to_json(array_agg(row_to_json(atables))) as "table"
+-- 					from
+-- 					(
+-- 						select   '"RPT_'|| ReportConfigurationName||'"' as "name",'collection' as "type",R.ServiceTime as scheduletime,R.ServiceTimeUOM as uom,
+-- 								(Select array_to_json(array_agg(row_to_json(columns)))  as "column"
+-- 								from
+-- 								(
+-- 
+-- 									select A.name as name,A.datatype,A.type,A.idcolumn,A.inputtable,A.inputcolumn,A. inputidcolumn ,A."rule" from 
+-- 													( 
+-- 									  
+-- 														select distinct  MetaData.TABLECOL  as name,MetaData.METRICDATATYPE as datatype,MetaData.ObjectType   as type
+-- 														,case when MetaData.MetricName like '%EntityID_%' then Src.SOURCETYPE_NAME||'_seq' else EntitiyMst.ENTITY_NAME||'_ID' end idcolumn
+-- 														,case when MetaData.MetricName like '%EntityID_%' then 'Fact_'||Src.Alias|'MetricDetails' else '"DIM_Entity_'||EntitiyMst.ENTITY_NAME||'"' end inputtable
+-- 														,case when MetaData.MetricName like '%entity_%' then 'SEQ' else screen.ControlTitle /*MetaData.MetricName*/ end inputcolumn
+-- 														,case when MetaData.MetricName like '%entity_%' then 'EntityId' else 'ID' end inputidcolumn
+-- 														,'entityfilters' as "rule"
+-- 														,recordid as Torder
+-- 														from EntityLocations T
+-- 														  join kbentityphone phone on T.Sourceid=phone.Sourcetypeid
+-- 														  join kbsourcetypeMst src on Src.SOURCETYPE_ID=T.Sourceid
+-- 														  join kbentities e on e.ENTITY_ID=phone.Entity_id
+-- 														  join kbentityMst EntitiyMst on EntitiyMst.ENTITYDEF_ID=e.ENTITYDEF_ID
+-- 														  JOIN kbReportsmetaData MetaData on MetaData.ENTITYDEFID=EntitiyMst.ENTITYDEF_ID
+-- 														Left JOIN kbreportsConfigurationdetails Det on Det.ReportConfigDetailID=MetaData.ReportConfigDetailID
+-- 													   Left JOIN kbentityscreenconfigurationMst screen on screen.EntityDefID=MetaData.ENTITYDEFID and MetaData.MetricName=screen.ServiceLabel
+-- 														where   MetaData.ObjectType = 'Entity'  and phone.Isactive=1 and (screen.ObjectType='EntityDefinition' or screen.ObjectType is null)
+-- 														 and MetaData.ReportConfigurationID=R.ReportConfigurationID
+-- 										
+-- 													UNION ALL
+-- 													
+-- 													select distinct  MetaData.TABLECOL  as name,MetaData.METRICDATATYPE as datatype,MetaData.ObjectType   as type
+-- 													,case when MetaData.MetricName like '%EntityID_%' then Src.SOURCETYPE_NAME||'_seq' else EntitiyMst.ENTITY_NAME||'_ID' end idcolumn
+-- 													,case when MetaData.MetricName like '%EntityID_%' then 'Fact_'||Src.Alias||'MetricDetails' else '"DIM_EnBranch_'||EntitiyMst.ENTITY_NAME||'"' end inputtable
+-- 													,case when MetaData.MetricName like '%entity_%' then 'SEQ' else screen.ControlTitle /*MetaData.MetricName*/ end inputcolumn
+-- 													,case when MetaData.MetricName like '%entity_%' then 'EntityId' else 'ID' end inputidcolumn
+-- 													,'entityfilters' as "rule"
+-- 													,recordid as Torder
+-- 													from EntityLocations T
+-- 													  join kbentityphone phone on T.Sourceid=phone.Sourcetypeid
+-- 													  join kbsourcetypeMst src on Src.SOURCETYPE_ID=T.Sourceid
+-- 													  join kbentities e on e.ENTITY_ID=phone.Entity_id
+-- 													  join kbentityMst EntitiyMst on EntitiyMst.ENTITYDEF_ID=e.ENTITYDEF_ID
+-- 													  JOIN kbReportsmetaData MetaData on MetaData.ENTITYDEFID=EntitiyMst.ENTITYDEF_ID
+-- 													  JOIN kbreportsConfigurationdetails Det on Det.ReportConfigDetailID=MetaData.ReportConfigDetailID
+-- 													  JOIN kbentityscreenconfigurationMst screen on screen.EntityDefID=MetaData.ENTITYDEFID and MetaData.MetricName=screen.ServiceLabel
+-- 													where   MetaData.ObjectType = 'Entity'  and phone.Isactive=1 and screen.ObjectType='Branch'
+-- 													and MetaData.ReportConfigurationID=R.ReportConfigurationID
+-- 										 
+-- 										 
+-- 										
+-- 											)A order by A.Torder desc
+-- 								) as columns
+-- 								)
+-- 								,
+-- 								(
+-- 									select 'entityfilters' as "name"
+-- 									,
+-- 									(select array_to_json(array_agg(row_to_json(b)))  as "filter"
+-- 									from
+-- 										(	
+-- 											select array_to_json(array_agg(row_to_json(a)))  as "and"
+-- 											from
+-- 											(
+-- 											    select A.idcolumn,A.inputidcolumn,A.condition, A.isnull
+-- 											    from
+-- 											    (
+-- 												  select 'RECORDDATEUTC' as idcolumn,'VirtusUTCStartTime' as inputidcolumn,'<=' condition,'' isnull
+-- 												  UNION ALL
+-- 												  select 'RECORDDATEUTC' as idcolumn,'VirtusUTCEndTime' as inputidcolumn,'>=' condition,'true' isnull
+-- 											    )A 
+-- 											)a
+-- 										)b
+-- 									)	
+-- 								)
+-- 
+-- 
+-- 
+-- 								
+-- 							
+-- 							from KBReportsConfigurationMSt R
+-- 							where R.IsActive='1'	
+-- 						)atables
+-- 						)
+-- 						)iprocesstype	
+-- 			)processtype	
+-- 		)					;
+-- 
+-- VEventsupdate:=(	Select array_to_json(array_agg(row_to_json(processtype)))  as processtype
+-- 			From
+-- 			(
+-- 
+-- 				Select array_to_json(array_agg(row_to_json(processtype)))  as processtype
+-- 				From
+-- 				(
+-- 
+-- 					select   'structuralupdate' "type",4 as seq
+-- 					,
+-- 					(select array_to_json(array_agg(row_to_json(atables))) as "table"
+-- 					from
+-- 					(
+-- 						select   '"DMCOLLECTION_'|| EVENT_SD||'"' as name,'events' as type,R.ServiceTime as scheduletime,R.ServiceTimeUOM as uom,
+-- 								(Select array_to_json(array_agg(row_to_json(columns)))  as "column"
+-- 								from
+-- 								(
+-- 
+-- 									select A.name as name,A.datatype,A.type,A.idcolumn,A.inputtable,A.inputcolumn,A. inputidcolumn ,A."rule" from 
+-- 													(
+-- 									  
+-- 														select distinct  MetaData.TABLECOL  as name,MetaData.METRICDATATYPE as datatype,MetaData.ObjectType   as type
+-- 														,case when MetaData.MetricName like '%EntityID_%' then Src.SOURCETYPE_NAME||'_seq' else EntitiyMst.ENTITY_NAME||'_ID' end idcolumn
+-- 														,case when MetaData.MetricName like '%EntityID_%' then 'Fact_'||Src.Alias||'MetricDetails' else '"DIM_Entity_'||EntitiyMst.ENTITY_NAME||'"' end inputtable
+-- 														,case when MetaData.MetricName like '%entity_%' then 'SEQ' else screen.ControlTitle /*MetaData.MetricName*/ end inputcolumn
+-- 														,case when MetaData.MetricName like '%entity_%' then 'EntityId' else 'ID' end inputidcolumn
+-- 														,'entityfilters' as "rule"
+-- 														,recordid as Torder
+-- 														from EntityLocations T
+-- 														  join kbentityphone phone on T.Sourceid=phone.Sourcetypeid
+-- 														  join kbsourcetypeMst src on Src.SOURCETYPE_ID=T.Sourceid
+-- 														  join kbentities e on e.ENTITY_ID=phone.Entity_id
+-- 														  join kbentityMst EntitiyMst on EntitiyMst.ENTITYDEF_ID=e.ENTITYDEF_ID
+-- 														  JOIN kbReportsmetaData MetaData on MetaData.ENTITYDEFID=EntitiyMst.ENTITYDEF_ID
+-- 														Left JOIN kbreportsConfigurationdetails Det on Det.ReportConfigDetailID=MetaData.ReportConfigDetailID
+-- 													   Left JOIN kbentityscreenconfigurationMst screen on screen.EntityDefID=MetaData.ENTITYDEFID and MetaData.MetricName=screen.ServiceLabel
+-- 														where   MetaData.ObjectType = 'Entity'  and phone.Isactive=1 and (screen.ObjectType='EntityDefinition' or screen.ObjectType is null)
+-- 														 and MetaData.eventid=ISNULL(R.OriginalID,R.Event_ID)
+-- 										
+-- 													UNION ALL
+-- 													
+-- 													select distinct  MetaData.TABLECOL  as name,MetaData.METRICDATATYPE as datatype,MetaData.ObjectType   as type
+-- 													,case when MetaData.MetricName like '%EntityID_%' then Src.SOURCETYPE_NAME||'_seq' else EntitiyMst.ENTITY_NAME||'_ID' end idcolumn
+-- 													,case when MetaData.MetricName like '%EntityID_%' then 'Fact_'||Src.Alias||'MetricDetails' else '"DIM_EnBranch_'||EntitiyMst.ENTITY_NAME||'"' end inputtable
+-- 													,case when MetaData.MetricName like '%entity_%' then 'SEQ' else screen.ControlTitle /*MetaData.MetricName*/ end inputcolumn
+-- 													,case when MetaData.MetricName like '%entity_%' then 'EntityId' else 'ID' end inputidcolumn
+-- 													,'entityfilters' as "rule"
+-- 													,recordid as Torder
+-- 													from EntityLocations T
+-- 													  join kbentityphone phone on T.Sourceid=phone.Sourcetypeid
+-- 													  join kbsourcetypeMst src on Src.SOURCETYPE_ID=T.Sourceid
+-- 													  join kbentities e on e.ENTITY_ID=phone.Entity_id
+-- 													  join kbentityMst EntitiyMst on EntitiyMst.ENTITYDEF_ID=e.ENTITYDEF_ID
+-- 													  JOIN kbReportsmetaData MetaData on MetaData.ENTITYDEFID=EntitiyMst.ENTITYDEF_ID
+-- 													  JOIN kbreportsConfigurationdetails Det on Det.ReportConfigDetailID=MetaData.ReportConfigDetailID
+-- 													  JOIN kbentityscreenconfigurationMst screen on screen.EntityDefID=MetaData.ENTITYDEFID and MetaData.MetricName=screen.ServiceLabel
+-- 													where   MetaData.ObjectType = 'Entity'  and phone.Isactive=1 and screen.ObjectType='Branch'
+-- 													and MetaData.eventid=ISNULL(R.OriginalID,R.Event_ID)
+-- 										 
+-- 										 
+-- 										
+-- 											)A order by A.Torder desc
+-- 								) as columns
+-- 								)
+-- 								,
+-- 								(
+-- 									select 'entityfilters' as "name"
+-- 									,
+-- 									(select array_to_json(array_agg(row_to_json(b)))  as "filter"
+-- 									from
+-- 										(	
+-- 											select array_to_json(array_agg(row_to_json(a)))  as "and"
+-- 											from
+-- 											(
+-- 											    select A.idcolumn,A.inputidcolumn,A.condition, A.isnull
+-- 											    from
+-- 											    (
+-- 												  select 'RECORDDATEUTC' as idcolumn,'VirtusUTCStartTime' as inputidcolumn,'<=' condition,'' isnull
+-- 												  UNION ALL
+-- 												  select 'RECORDDATEUTC' as idcolumn,'VirtusUTCEndTime' as inputidcolumn,'>=' condition,'true' isnull
+-- 											    )A 
+-- 											)a
+-- 										)b
+-- 									)	
+-- 								)
+-- 
+-- 
+-- 
+-- 								
+-- 							
+-- 							from kbeventsMst R
+-- 							where R.IsActive=1	
+-- 						)atables
+-- 						)
+-- 						)processtype	
+-- 			)processtype
+-- 		);
+-- 
+-- VFactsInfo:=	(	select array_to_json(array_agg(row_to_json(output)))  as "tables"
+-- 			from
+-- 			(
+-- 				select array_to_json(array_agg(row_to_json(FactsInfo)))  as "table"
+-- 				from
+-- 				(
+-- 					select distinct '"Fact_'||Mst.Alias||'MetricDetails"' "name" 
+-- 					from EntityLocations EL
+-- 					join kbsourcetypeMst Mst on Mst.SOURCETYPE_ID=EL.Sourceid
+-- 				)FactsInfo	
+-- 			) output
+-- 		)	;
+-- 
+-- 
+-- */
+
+VEarlyArrivingFacts:=	(select array_to_json(array_agg(row_to_json(Earlyarrivingfacts)))  as root
+			from
+				(
+					select   '' delaytime,'' uom,VEarlyArrivingFacts,VMeausres,VKPIS,VAnalysisupdate,VEventsupdate
+				) as Earlyarrivingfacts
+			);
+
+			
+
+VFinalResult:=(	select array_to_json(array_agg(row_to_json(ENTITYDETAILS)))  as "ENTITYDETAILS"
+		from
+		(	
+			select array_to_json(array_agg(row_to_json(a)))  as "ENTITYDETAILS"
+			from
+			(
+			select  VResult as "Entity",VEarlyArrivingFacts as "EarlyArrivingFacts",VFactsInfo "FactsInfo"
+			) a
+		)ENTITYDETAILS
+		)
+
+		;
+
+Return(VFinalResult);
+		
+
+end;
+Elseif lower(VTran)='updatedynamicentity' then
+Begin 
+
+VEntityName:=(select entity_name from kbentitymst where entitydef_id=VEntityDefId);
+VEntityType=(select EntityType from kbentitymst where entitydef_id=VEntityDefId); 
+VEntInstId:=(select ivalue->'ENTITYDETAILS'->> 'EntityId' from temps limit 1);
+VEntdefTablename:=(select '"KB_ENTITY_'||VCustomerName||'_'||VEntityName||'"');
+
+ 	Insert into Entity(EntityDefID,EntityName,HasBranches,SCREENXML)
+	select VEntityDefId,ivalue->'ENTITYDETAILS'->> 'EntityName',NULL ,ivalue->'ENTITYDETAILS'-> 'EntityScreen' 
+	from temps limit 1;
+	
+	UPdate Entity 
+	set EntityScreenName=Mst.Entity_Name 
+	from  
+	KBEntityMst Mst 
+	where Entity.EntityDefID=Mst.ENTITYDEF_ID ;
+
+	
+ 	Insert into EntitiesCreation(EntityName,ColumnName,ColumnValue,CtrlType,DataType,"Name","Value",Isidentifier
+	, ServiceLabel,BranchNumber, RowIndex, IsRequired, GroupName, IsUpdate,Issearchable,originaldatatype,IsDisplay)
+
+	select  VEntInstName
+	,EDScreen->>'Label'
+	,EDScreen->>'InputValue'
+	,EDScreen->>'CtrlType'
+	,EDScreen->>'DataType'
+	,NULL "Name"
+	,NULL "Value"
+	,cast(EDScreen->>'Identifier' as bit)
+	,EDScreen->>'ServiceLabel'
+	,1 as BranchNumber
+	,cast(EDScreen->>'RowIndex' as int) RowIndex
+	,cast(EDScreen->>'IsRequired' as bit)IsRequired
+	,EDScreen->>'GroupName'	
+	,NULL isupdate
+	, cast(EDScreen->>'IsSearchable' as bit)
+	,EDScreen->>'DataType'
+	,cast(EDScreen->>'IsDisplay' as bit) IsDisplay
+	from
+	(
+		Select json_array_elements(EDScreen) as EDScreen
+		From
+		(
+		select ivalue->'ENTITYDETAILS'-> 'EntityScreen'->'Entity'->'Master' as EDScreen
+		from temps limit 1
+		)a
+	)entityscreen
+	;
+
+--return (select count(1) from EntitiesCreation);
+
+ Update EntitiesCreation set Isidentifier='1'
+	 From
+	 (
+		 select ControlTitle ,EntityDefID
+		 from KBEntityScreenConfigurationMst 
+		 where IsIndentifier='1' and EntityDefID=VEntityDefId
+	 ) B where EntitiesCreation.ColumnName=B.ControlTitle  ;
+
+ Update EntitiesCreation set isrequired='1'
+	 From
+	 (
+		 select ControlTitle ,EntityDefID
+		 from KBEntityScreenConfigurationMst 
+		 where isrequired='1' and EntityDefID=VEntityDefId
+	 ) B where EntitiesCreation.ColumnName=B.ControlTitle  ;
+	 
+
+ Update EntitiesCreation set Issearchable='1'
+  From
+  (
+   select ControlTitle ,EntityDefID
+   from KBEntityScreenConfigurationMst 
+   where issearchable='1' and EntityDefID=VEntityDefId
+  ) B where EntitiesCreation.ColumnName=B.ControlTitle  ;
+
+ Update EntitiesCreation set isdisplay='1'
+  From
+  (
+   select ControlTitle ,EntityDefID
+   from KBEntityScreenConfigurationMst 
+   where isdisplay='1' and EntityDefID=VEntityDefId
+  ) B where EntitiesCreation.ColumnName=B.ControlTitle  ;
+	
+
+	 delete from EntitiesCreation 
+	 where ColumnName not in (
+				  Select B.ControlTitle
+				 from  KBEntityScreenConfigurationMst B where B.EntityDefID=VEntityDefId and ObjectType='EntityDefinition'
+				 );
+
+ --Update EntitiesCreation set DataType='varchar(500)';
+--------------------------------
+
+--select * from KBEntityScreenConfigurationMst where entitydefid=32
+
+--//04march2016
+
+if exists  (select 1 from EntitiesCreation  
+Join KBEntityScreenConfigurationMst B on  
+EntitiesCreation.ColumnName=B.ControlTitle 
+and B.EntityDefID=VEntityDefId
+where (B.defaultdatavalue is not null  and B.defaultdatavalue!='')
+and (EntitiesCreation.ColumnValue is null or  EntitiesCreation.ColumnValue='')
+)
+then 
+begin
+ Update EntitiesCreation set ColumnValue=defaultdatavalue
+	 From
+	 (
+		 select defaultdatavalue,ControlTitle
+		 from KBEntityScreenConfigurationMst 
+		 where  EntityDefID=VEntityDefId and defaultdatavalue is not null and defaultdatavalue is not null and defaultdatavalue!=''
+	 ) B where EntitiesCreation.ColumnName=B.ControlTitle and (EntitiesCreation.ColumnValue is null or  EntitiesCreation.ColumnValue='') ;
+end;
+end if;
+	
+ 
+
+ 
+	Begin   
+	 
+
+		--If (select count(*) from kbentities where entity_id=VEntInstId)>0 then
+		begin
+
+			-- VEntInstId:=(select entity_id from kbentities where ENTITY_NAME=VEntInstName and isactive='1' limit 1);
+-- 
+-- 			
+ 			 VEntityDefId:=(Select ENTITYDEF_ID from KBEntities where ENTITY_ID=VEntInstId limit 1);
+
+ 
+	
+			update KBEntities 
+			set screenjson=Ventityscreen,entity_name=VEntInstName, modifieddate=Vactiondate, modifiedby=VCreated_By
+			where Entity_id=VEntInstId;
+		
+		 	
+				Insert into Branches(BranchName,BranchID,BranchNumber)
+				SELECT '-100', 0,1;
+			
+ 
+				Begin
+				 
+						Update Branches
+							Set BranchID= Locs.LOCATION_ID
+						From
+						 KBEntityLocations Locs where Cast(Branches.BranchID as varchar(100))=Locs.LOCATION_NAME and ENTITY_ID=VEntInstId;
+				
+				end;
+				
+
+			/* inserting into the dynamic table*/
+
+			VEntDeftblcols:='';
+			
+			VEntDeftblcols:=(Select string_agg(Ecolumns,',') as cols
+			From
+			(
+				select '"'||ColumnName||'"' as Ecolumns
+				from EntitiesCreation
+				Order by id
+			)cols	);
+
+			--VEntDeftblcols:=VEntDeftblcols||',"CreatedDate" ,"ModifiedDate"';
+--return (select count(1) from EntitiesCreation);
+			VEntinstcoldata:='';
+			VEntinstcoldata:=(Select string_agg(Ecolumns,',') as cols
+			From
+			(
+				select 
+				case 
+					when lower(datatype) like '%int%' or lower(datatype) like '%decimal%' then (case when ColumnValue='' then 'NULL' else ColumnValue end )
+					else ''''||ColumnValue||'''' 
+				 end as Ecolumns
+				from EntitiesCreation
+				Order by id
+			)cols	);
+
+			--raise notice '% ',  VEntinstcoldata;
+
+			--VEntinstcoldata=VEntinstcoldata||','''||cast(VActionDate as varchar(100))||''''||','||''''||cast(VActionDate as varchar(100))||''''; --GetutcDate()
+
+						
+			VIsentityUpdate:= (select cast(ivalue->'ENTITYDETAILS'->> 'IsUpdate' as bit) from temps limit 1);
+
+			Begin
+
+				 Execute(' update '||VEntdefTablename || ' set "VirtusUTCEndTime"='''||Cast(VActiondate as varchar(50))||''',"ISACTIVE"=''0'' where "ID"='
+				 || Cast(VEntInstId as varchar(50))||' and "ISACTIVE"=''1''');
+
+			
+VError:=('Insert into '||VEntdefTablename || '("ID",'||  VEntDeftblcols ||',"VirtusUTCStartTime","VirtusUTCEndTime","ISACTIVE")Values('||
+				cast(VEntInstId as varchar(50))||','||VEntinstcoldata||','''||cast(VActiondate as varchar(50)) ||''',NULL,''1'')');
+
+				Execute(VError);
+
+				--Try catch in the given 
+				exception when others then 
+				raise notice '% %', SQLERRM, VError;
+				
+				
+			End;
+			--End if;
+
+			/* inserting into entityphone*/
+
+			BEGIN
+
+			Update KBEntityPhone set isactive='0' where entity_id=VEntInstId and isactive='1';
+	  
+				Insert into KBEntityPhone(ENTITY_ID, SOURCETYPEID, SOURCENAME, LOCATION_ID, "name","value" ,RowID   ,PHONENO,CREATEDBY,CREATEDDATE,MODIFIEDDATE)
+				Select VEntInstId EntityId, b.SOURCETYPEID, NULL,C.LOCATION_ID,b.METRICNAME,A.ColumnValue,row_number() Over(Order by b.sourcetypeid) rowid,A.ColumnValue
+				,VCREATED_BY,VActionDate,VActionDate
+				From
+				EntitiesCreation A
+				Join KBSpokeConfigurations b on A.ColumnName=B.EntityAttribute and B.EntitydefID=VEntityDefId
+				Join KBEntityLocations C on C.ENTITY_ID=VEntInstId
+				join kbsourcetypemst sources on b.sourcetypeid=sources.sourcetype_id
+				where not exists(Select 1 from KBEntityPhone CC where b.SOURCETYPEID=CC.SOURCETYPEID and C.ENTITY_ID=CC.ENTITY_ID  and CC.isactive='1')
+				--and coalesce(sources.masterspokeid,0)=0
+				;
+			END;
+			
+			
+		end;
+		--end if;
+
+		VSourceEntityId:=VEntInstId ;
+
+		INSERT INTO public.kbentityrelationdetails(relationid, primaryentitydefinitionid, primaryentityid,primaryentitytype, secondaryentitydefinitionid, secondaryentityid, 
+	secondaryentitytype, createdby, modifiedby)
+	select relationid,primaryentitydefinitionid, primaryentityid,primaryentitytype,secondaryentitydefinitionid,cast(secondaryentityid as int) secondaryentityid, 
+	secondaryentitytype,createdby,modifiedby
+	from
+	(
+		select A.relationid,primaryentitydefinitionid,primaryentitytype,secondaryentitydefinitionid,data.primaryentityid,secondaryentitytype,data.secondaryentityid, data.createdby,data.modifiedby
+		from
+		(
+			select *
+			from
+			(
+				select VSourceEntityId primaryentityid, ColumnName,
+				regexp_split_to_table(Replace(Replace(columnvalue,'[',''),']',''),',')  secondaryentityid, 
+				VCreated_By createdby,VCreated_By modifiedby
+				from entitiescreation temps
+			) vals
+			where (secondaryentityid ~ '^([0-9]+[.]?[0-9]*|[.][0-9]+)$')='t'
+		) data	
+		join kbentities primaryent on data.primaryentityid=primaryent.entity_id
+		left join kbentities secondaryent on cast(data.secondaryentityid as int)=secondaryent.entity_id
+		Join kbentityrelationentitydefinitiondetails B on primaryent.entitydef_id=b.primaryentitydefinitionid 
+				and secondaryent.entitydef_id=b.secondaryentitydefinitionid and lower(b.lookupmetric)=lower(data.ColumnName)
+		join kbentityrelationsmst A on A.relationid=B.relationid
+		where data.secondaryentityid is not null and data.secondaryentityid!='' and A.Isactive='1'
+	)Aa
+	where  
+	not exists (select 1 from kbentityrelationdetails A
+					where A.primaryentitydefinitionid= AA.primaryentitydefinitionid and A.primaryentityid=AA.primaryentityid 
+					and  A.secondaryentitydefinitionid=AA.secondaryentitydefinitionid and  A.secondaryentityid=cast(AA.secondaryentityid as int)  and isactive='1');
+
+VResult:=	(
+		 	select array_to_json(array_agg(row_to_json(output)))  as "ENTITYDETAILS"
+			From
+			(  
+				select 
+				1 as "Result"
+				, 0 as "ErrorMessage"
+				, 0 as "ErrorCode"
+				,VTran "TRANSTYPE"
+				,VCreated_by  "LoginId"
+				,VActiondate "VirtusUtcDate"
+				,VEntInstName "EntityScreenName"
+				,VEntityDefId "EntityDefId"
+				,VEntInstId "EntityId"
+				,VEntityDefId "ENTITYDEFID"
+				,VEntInstId "ENTITYID"
+				,VEntInstName "EntityName"
+				,Case When VEntityType=0 Then 'Device' When VEntityType=1 Then 'Human' when VEntityType=2 then 'Thing' End "EntityType"
+				,VActionDate "CreatedDate"
+				,(select user_name from kbusermst where user_id=VCreated_by) as "CreatedBy"
+				,VActionDate "ModifiedDate"
+				,(select user_name from kbusermst where user_id=VCreated_by) as "ModifiedBy"
+				,VEntityName "EntityDefName"
+				,VID as "VID"
+				,array_to_json(array_agg(row_to_json(aa)))   "EntityScreen"
+				,array_agg(branches) "Branchs"
+				from
+				(
+					select 
+					array_to_json(array_agg(row_to_json(a)))   as "Entity"
+					from
+					(
+						select array_to_json(array_agg(row_to_json(output)))  as "Master"
+						from
+						(
+							select 
+							RowIndex as "RowIndex"
+							,ColumnName "Label",ServiceLabel "ServiceLabel",originaldatatype "DataType", CtrlType "ControlType",  IsRequired "IsRequired", isIdentifier "IsIndentifier"
+							, '' "DefaultValue", ColumnValue "InputValue", groupname "GroupName", branchnumber "BranchNumber", IsDisplay "IsDisplay"
+							from 
+							EntitiesCreation
+							
+						) output
+					)a
+				) aa
+				,(
+					Select Array_to_json(Array_Agg(Row_to_json(br))) "Branch"
+					from
+					(
+						select Locs.Location_Name as "Name", Locs.Location_ID as "ID"
+						,'Name,ID' "Attribute_list" 
+						,
+						(
+							Select Row_to_json(spks) "SPOKES"
+							from
+							(
+								Select Array_to_json(Array_Agg(Row_to_json(spk))) "SPOKE"
+								from
+								(
+								select SOURCETYPEID as "SpokeID",Spokes.SOURCETYPE_NAME as "SpokeName"
+								,'' as "BranchNumber"
+								,'SpokeID,SpokeName,BranchNumber' "Attribute_list" 
+								,
+								(
+									Select Array_to_json(Array_Agg(Row_to_json(cust))) as "CUSTOMERIDENTIFIER"
+									from
+									(
+										select RowID as "RowId","value" as "Value",Name as "Name",LOCATION_ID as "BranchId"
+										,'RowId,Value,Name,BranchId' "Attribute_list" 
+										from KBEntityPhone Phone
+										where Mst.SOURCETYPEID=Phone.SOURCETYPEID and Phone.ENTITY_ID=Locs.ENTITY_ID
+										--Locs.Location_id
+										and isactive='1'
+										--for xml raw('CUSTOMERIDENTIFIER')
+									) as Cust
+								)
+								from KBEntityPhone Mst 
+								JOIN KbsourcetypeMst Spokes on Mst.SOURCETYPEID=Spokes.SOURCETYPE_ID
+								where Mst.ENTITY_ID=Locs.ENTITY_ID--Locs.Location_id
+								group by SOURCETYPE_NAME,Mst.SOURCETYPEID
+								--for xml raw('SPOKE'),Root('SPOKES')
+								)as spk
+							)spks	
+						)
+						from KbEntitylocations Locs
+						Left JOIN KBEntityPhone KCP on Locs.Location_id=KCP.LOCATION_ID
+						where Locs.ENTITY_ID= VEntInstId
+						group by  Locs.Location_Name  ,Locs.Location_ID,Locs.ENTITY_ID
+						--for xml raw('Branch'),root('Branchs')
+					)as br
+				)branches
+			)output	
+		 
+	);
+
+VEarlyArrivingFacts:=(	Select array_to_json(array_agg(row_to_json(oprocesstype)))  as "processtype"
+			From
+			(
+				Select array_to_json(array_agg(row_to_json(iprocesstype)))  as "processtype"
+				From
+				(
+					select   'earlyarrivingfacts' "type",1 as seq,
+					(
+
+						Select array_to_json(array_agg(row_to_json(query)))  as "query"
+						from
+						(	
+
+							select  'update' as type,'Fact_'||SourceMst.Alias||'MetricDetails' "table",'attributevalue' as messagetype
+							,	
+								(
+									select array_to_json(array_agg(row_to_json(filters)))   as "filters"
+									from
+									(
+										select array_to_json(array_agg(row_to_json(filters)))   as "filter"
+										from
+										(
+											select 'where' "type",
+
+												(
+													select array_to_json(array_agg(row_to_json(a)))   as "column"
+													from
+													(
+														Select 'entityid' "name",'int' datatype,cast(1 as varchar) as value
+														UNION ALL
+														select 'entitylocationid' "name",'int' datatype,cast(1 as varchar) as value
+														UNION ALL
+														select distinct "name" "name",'varchar(500)' datatype,Value as value
+														from kbentityphone phone
+														where phone.ENTITY_ID=PH.ENTITY_ID and phone.SOURCETYPEID=PH.SOURCETYPEID and ISACTIVE='1' 
+
+													)a
+												)aa
+										)"filters"
+									) "filters"
+								)	
+							
+							,					
+							(
+									select array_to_json(array_agg(row_to_json(aa)))   as "row"
+									from
+									(
+										select array_to_json(array_agg(row_to_json(a)))   as "column"
+										from
+										(				
+											select distinct 'entityid' as "name",'bigint'as datatype,ENTITY_ID as value
+											from kbentityphone EP where EP.ENTITY_ID=PH.ENTITY_ID
+											UNION ALL
+											select distinct 'entitylocationid' as "name",'BIGINT'as datatype,LOCATION_ID as value
+											from kbentityphone EP where EP.ENTITY_ID=PH.ENTITY_ID
+										)a
+									)aa
+							)
+							
+							from kbentityphone PH
+							JOIN KbSourcetypeMst SourceMst on PH.SOURCETYPEID=SourceMst.SOURCETYPE_ID
+							where PH.ENTITY_ID=VEntInstId and PH.ISactive='1'	 
+							Group by SourceMst.Alias,PH.ENTITY_ID,PH.SOURCETYPEID
+						) as query
+					)
+				)iprocesstype			
+			)oprocesstype
+		   )	
+;
+
+VMeausres:=(		Select array_to_json(array_agg(row_to_json(oprocesstype)))  as processtype
+			From
+			(
+
+				Select array_to_json(array_agg(row_to_json(iprocesstype)))  as processtype
+				From
+				(
+					select   'structuralupdate' "type",2 as seq
+					,
+						(
+							
+							Select array_to_json(array_agg(row_to_json("table")))  as "table"
+							From
+							(
+								Select 'DBKPIFactDetails_'||SourceMst.Alias "name",'meausres' as "type",'' as scheduletime,'' as uom
+								,
+								(
+									select array_to_json(array_agg(row_to_json("A")))  as "column"
+									from 
+									(
+									
+									select distinct 'EntityID' as "name",'bigint' as datatype,'meausres'	as "type",'seq' as idcolumn
+									,'Fact_'||SourceMst.Alias||'MetricDetails' as inputtable
+									,'EntityID' as inputcolumn,'seq' as inputidcolumn
+									from kbentityphone PH
+									JOIN KbSourcetypeMst SourceMst on PH.SOURCETYPEID=SourceMst.SOURCETYPE_ID
+									where PH.ENTITY_ID=VEntInstId and PH.ISactive='1'	
+									and PH.ENTITY_ID=PH1.ENTITY_ID and PH.SOURCETYPEID=PH1.SOURCETYPEID
+									
+									
+									UNION ALL
+									
+									
+									select distinct 'EntityLocationId' as "name",'bigint' as datatype,'meausres'	as type,'"seq"' as idcolumn
+									,'Fact_'||SourceMst.Alias||'MetricDetails' as inputtable
+									,'EntityLocationId' as inputcolumn,'seq' as inputidcolumn
+									from kbentityphone PH
+									JOIN KbSourcetypeMst SourceMst on PH.SOURCETYPEID=SourceMst.SOURCETYPE_ID
+									where PH.ENTITY_ID=VEntInstId and PH.ISactive='1'
+									and PH.ENTITY_ID=PH1.ENTITY_ID and PH.SOURCETYPEID=PH1.SOURCETYPEID
+									)"A"
+
+								)
+
+								from   kbentityphone PH1
+								JOIN KbSourcetypeMst SourceMst on PH1.SOURCETYPEID=SourceMst.SOURCETYPE_ID
+								where PH1.ENTITY_ID=VEntInstId and PH1.ISactive='1'
+								group by SourceMst.Alias ,PH1.SOURCETYPEID, 	PH1.ENTITY_ID
+							)"table"	
+
+						)
+
+				)iprocesstype	
+			)oprocesstype	
+	);
+
+VKPIS:=(		Select array_to_json(array_agg(row_to_json(oprocesstype)))  as processtype
+			From
+			(
+
+				Select array_to_json(array_agg(row_to_json(iprocesstype)))  as processtype
+				From
+				(
+					select   'structuralupdate' "type",3 as seq
+					,
+						(
+							
+							Select array_to_json(array_agg(row_to_json("table")))  as "table"
+							From
+							(
+								Select 'DBKPIFact_'||SourceMst.Alias "name",'meausres' as "type",'' as scheduletime,'' as uom
+								,
+								(
+									select array_to_json(array_agg(row_to_json("A")))  as "column"
+									from 
+									(
+									
+									select distinct 'EntityID' as "name",'bigint' as datatype,'meausres'	as "type",'seq' as idcolumn
+									,'Fact_'||SourceMst.Alias||'MetricDetails' as inputtable
+									,'EntityID' as inputcolumn,'seq' as inputidcolumn
+									from kbentityphone PH
+									JOIN KbSourcetypeMst SourceMst on PH.SOURCETYPEID=SourceMst.SOURCETYPE_ID
+									where PH.ENTITY_ID=VEntInstId and PH.ISactive='1'	
+									and PH.ENTITY_ID=PH1.ENTITY_ID and PH.SOURCETYPEID=PH1.SOURCETYPEID
+									
+									
+									UNION ALL
+									
+									
+									select distinct 'EntityLocationId' as "name",'bigint' as datatype,'meausres'	as type,'"seq"' as idcolumn
+									,'Fact_'||SourceMst.Alias||'MetricDetails' as inputtable
+									,'EntityLocationId' as inputcolumn,'seq' as inputidcolumn
+									from kbentityphone PH
+									JOIN KbSourcetypeMst SourceMst on PH.SOURCETYPEID=SourceMst.SOURCETYPE_ID
+									where PH.ENTITY_ID=VEntInstId and PH.ISactive='1'
+									and PH.ENTITY_ID=PH1.ENTITY_ID and PH.SOURCETYPEID=PH1.SOURCETYPEID
+									)"A"
+
+								)
+
+								from   kbentityphone PH1
+								JOIN KbSourcetypeMst SourceMst on PH1.SOURCETYPEID=SourceMst.SOURCETYPE_ID
+								where PH1.ENTITY_ID=VEntInstId and PH1.ISactive='1'
+								group by SourceMst.Alias ,PH1.SOURCETYPEID, 	PH1.ENTITY_ID
+							)"table"	
+
+						)
+
+				)iprocesstype	
+			)oprocesstype	
+	);
+
+-- 
+-- /* 
+-- 
+-- VAnalysisupdate:=(	Select array_to_json(array_agg(row_to_json(processtype)))  as processtype
+-- 			From
+-- 			(
+-- 
+-- 				Select array_to_json(array_agg(row_to_json(processtype)))  as processtype
+-- 				From
+-- 				(
+-- 
+-- 					select   'structuralupdate' "type",4 as seq
+-- 					,
+-- 					(select array_to_json(array_agg(row_to_json(atables))) as "table"
+-- 					from
+-- 					(
+-- 						select   '"RPT_'|| ReportConfigurationName||'"' as "name",'collection' as "type",R.ServiceTime as scheduletime,R.ServiceTimeUOM as uom,
+-- 								(Select array_to_json(array_agg(row_to_json(columns)))  as "column"
+-- 								from
+-- 								(
+-- 
+-- 									select A.name as name,A.datatype,A.type,A.idcolumn,A.inputtable,A.inputcolumn,A. inputidcolumn ,A."rule" from 
+-- 													( 
+-- 									  
+-- 														select distinct  MetaData.TABLECOL  as name,MetaData.METRICDATATYPE as datatype,MetaData.ObjectType   as type
+-- 														,case when MetaData.MetricName like '%EntityID_%' then Src.SOURCETYPE_NAME||'_seq' else EntitiyMst.ENTITY_NAME||'_ID' end idcolumn
+-- 														,case when MetaData.MetricName like '%EntityID_%' then 'Fact_'||Src.Alias|'MetricDetails' else '"DIM_Entity_'||EntitiyMst.ENTITY_NAME||'"' end inputtable
+-- 														,case when MetaData.MetricName like '%entity_%' then 'SEQ' else screen.ControlTitle /*MetaData.MetricName*/ end inputcolumn
+-- 														,case when MetaData.MetricName like '%entity_%' then 'EntityId' else 'ID' end inputidcolumn
+-- 														,'entityfilters' as "rule"
+-- 														,recordid as Torder
+-- 														from EntityLocations T
+-- 														  join kbentityphone phone on T.Sourceid=phone.Sourcetypeid
+-- 														  join kbsourcetypeMst src on Src.SOURCETYPE_ID=T.Sourceid
+-- 														  join kbentities e on e.ENTITY_ID=phone.Entity_id
+-- 														  join kbentityMst EntitiyMst on EntitiyMst.ENTITYDEF_ID=e.ENTITYDEF_ID
+-- 														  JOIN kbReportsmetaData MetaData on MetaData.ENTITYDEFID=EntitiyMst.ENTITYDEF_ID
+-- 														Left JOIN kbreportsConfigurationdetails Det on Det.ReportConfigDetailID=MetaData.ReportConfigDetailID
+-- 													   Left JOIN kbentityscreenconfigurationMst screen on screen.EntityDefID=MetaData.ENTITYDEFID and MetaData.MetricName=screen.ServiceLabel
+-- 														where   MetaData.ObjectType = 'Entity'  and phone.Isactive=1 and (screen.ObjectType='EntityDefinition' or screen.ObjectType is null)
+-- 														 and MetaData.ReportConfigurationID=R.ReportConfigurationID
+-- 										
+-- 													UNION ALL
+-- 													
+-- 													select distinct  MetaData.TABLECOL  as name,MetaData.METRICDATATYPE as datatype,MetaData.ObjectType   as type
+-- 													,case when MetaData.MetricName like '%EntityID_%' then Src.SOURCETYPE_NAME||'_seq' else EntitiyMst.ENTITY_NAME||'_ID' end idcolumn
+-- 													,case when MetaData.MetricName like '%EntityID_%' then 'Fact_'||Src.Alias||'MetricDetails' else '"DIM_EnBranch_'||EntitiyMst.ENTITY_NAME||'"' end inputtable
+-- 													,case when MetaData.MetricName like '%entity_%' then 'SEQ' else screen.ControlTitle /*MetaData.MetricName*/ end inputcolumn
+-- 													,case when MetaData.MetricName like '%entity_%' then 'EntityId' else 'ID' end inputidcolumn
+-- 													,'entityfilters' as "rule"
+-- 													,recordid as Torder
+-- 													from EntityLocations T
+-- 													  join kbentityphone phone on T.Sourceid=phone.Sourcetypeid
+-- 													  join kbsourcetypeMst src on Src.SOURCETYPE_ID=T.Sourceid
+-- 													  join kbentities e on e.ENTITY_ID=phone.Entity_id
+-- 													  join kbentityMst EntitiyMst on EntitiyMst.ENTITYDEF_ID=e.ENTITYDEF_ID
+-- 													  JOIN kbReportsmetaData MetaData on MetaData.ENTITYDEFID=EntitiyMst.ENTITYDEF_ID
+-- 													  JOIN kbreportsConfigurationdetails Det on Det.ReportConfigDetailID=MetaData.ReportConfigDetailID
+-- 													  JOIN kbentityscreenconfigurationMst screen on screen.EntityDefID=MetaData.ENTITYDEFID and MetaData.MetricName=screen.ServiceLabel
+-- 													where   MetaData.ObjectType = 'Entity'  and phone.Isactive=1 and screen.ObjectType='Branch'
+-- 													and MetaData.ReportConfigurationID=R.ReportConfigurationID
+-- 										 
+-- 										 
+-- 										
+-- 											)A order by A.Torder desc
+-- 								) as columns
+-- 								)
+-- 								,
+-- 								(
+-- 									select 'entityfilters' as "name"
+-- 									,
+-- 									(select array_to_json(array_agg(row_to_json(b)))  as "filter"
+-- 									from
+-- 										(	
+-- 											select array_to_json(array_agg(row_to_json(a)))  as "and"
+-- 											from
+-- 											(
+-- 											    select A.idcolumn,A.inputidcolumn,A.condition, A.isnull
+-- 											    from
+-- 											    (
+-- 												  select 'RECORDDATEUTC' as idcolumn,'VirtusUTCStartTime' as inputidcolumn,'<=' condition,'' isnull
+-- 												  UNION ALL
+-- 												  select 'RECORDDATEUTC' as idcolumn,'VirtusUTCEndTime' as inputidcolumn,'>=' condition,'true' isnull
+-- 											    )A 
+-- 											)a
+-- 										)b
+-- 									)	
+-- 								)
+-- 
+-- 
+-- 
+-- 								
+-- 							
+-- 							from KBReportsConfigurationMSt R
+-- 							where R.IsActive='1'	
+-- 						)atables
+-- 						)
+-- 						)iprocesstype	
+-- 			)processtype	
+-- 		)					;
+-- 
+-- VEventsupdate:=(	Select array_to_json(array_agg(row_to_json(processtype)))  as processtype
+-- 			From
+-- 			(
+-- 
+-- 				Select array_to_json(array_agg(row_to_json(processtype)))  as processtype
+-- 				From
+-- 				(
+-- 
+-- 					select   'structuralupdate' "type",4 as seq
+-- 					,
+-- 					(select array_to_json(array_agg(row_to_json(atables))) as "table"
+-- 					from
+-- 					(
+-- 						select   '"DMCOLLECTION_'|| EVENT_SD||'"' as name,'events' as type,R.ServiceTime as scheduletime,R.ServiceTimeUOM as uom,
+-- 								(Select array_to_json(array_agg(row_to_json(columns)))  as "column"
+-- 								from
+-- 								(
+-- 
+-- 									select A.name as name,A.datatype,A.type,A.idcolumn,A.inputtable,A.inputcolumn,A. inputidcolumn ,A."rule" from 
+-- 													(
+-- 									  
+-- 														select distinct  MetaData.TABLECOL  as name,MetaData.METRICDATATYPE as datatype,MetaData.ObjectType   as type
+-- 														,case when MetaData.MetricName like '%EntityID_%' then Src.SOURCETYPE_NAME||'_seq' else EntitiyMst.ENTITY_NAME||'_ID' end idcolumn
+-- 														,case when MetaData.MetricName like '%EntityID_%' then 'Fact_'||Src.Alias||'MetricDetails' else '"DIM_Entity_'||EntitiyMst.ENTITY_NAME||'"' end inputtable
+-- 														,case when MetaData.MetricName like '%entity_%' then 'SEQ' else screen.ControlTitle /*MetaData.MetricName*/ end inputcolumn
+-- 														,case when MetaData.MetricName like '%entity_%' then 'EntityId' else 'ID' end inputidcolumn
+-- 														,'entityfilters' as "rule"
+-- 														,recordid as Torder
+-- 														from EntityLocations T
+-- 														  join kbentityphone phone on T.Sourceid=phone.Sourcetypeid
+-- 														  join kbsourcetypeMst src on Src.SOURCETYPE_ID=T.Sourceid
+-- 														  join kbentities e on e.ENTITY_ID=phone.Entity_id
+-- 														  join kbentityMst EntitiyMst on EntitiyMst.ENTITYDEF_ID=e.ENTITYDEF_ID
+-- 														  JOIN kbReportsmetaData MetaData on MetaData.ENTITYDEFID=EntitiyMst.ENTITYDEF_ID
+-- 														Left JOIN kbreportsConfigurationdetails Det on Det.ReportConfigDetailID=MetaData.ReportConfigDetailID
+-- 													   Left JOIN kbentityscreenconfigurationMst screen on screen.EntityDefID=MetaData.ENTITYDEFID and MetaData.MetricName=screen.ServiceLabel
+-- 														where   MetaData.ObjectType = 'Entity'  and phone.Isactive=1 and (screen.ObjectType='EntityDefinition' or screen.ObjectType is null)
+-- 														 and MetaData.eventid=ISNULL(R.OriginalID,R.Event_ID)
+-- 										
+-- 													UNION ALL
+-- 													
+-- 													select distinct  MetaData.TABLECOL  as name,MetaData.METRICDATATYPE as datatype,MetaData.ObjectType   as type
+-- 													,case when MetaData.MetricName like '%EntityID_%' then Src.SOURCETYPE_NAME||'_seq' else EntitiyMst.ENTITY_NAME||'_ID' end idcolumn
+-- 													,case when MetaData.MetricName like '%EntityID_%' then 'Fact_'||Src.Alias||'MetricDetails' else '"DIM_EnBranch_'||EntitiyMst.ENTITY_NAME||'"' end inputtable
+-- 													,case when MetaData.MetricName like '%entity_%' then 'SEQ' else screen.ControlTitle /*MetaData.MetricName*/ end inputcolumn
+-- 													,case when MetaData.MetricName like '%entity_%' then 'EntityId' else 'ID' end inputidcolumn
+-- 													,'entityfilters' as "rule"
+-- 													,recordid as Torder
+-- 													from EntityLocations T
+-- 													  join kbentityphone phone on T.Sourceid=phone.Sourcetypeid
+-- 													  join kbsourcetypeMst src on Src.SOURCETYPE_ID=T.Sourceid
+-- 													  join kbentities e on e.ENTITY_ID=phone.Entity_id
+-- 													  join kbentityMst EntitiyMst on EntitiyMst.ENTITYDEF_ID=e.ENTITYDEF_ID
+-- 													  JOIN kbReportsmetaData MetaData on MetaData.ENTITYDEFID=EntitiyMst.ENTITYDEF_ID
+-- 													  JOIN kbreportsConfigurationdetails Det on Det.ReportConfigDetailID=MetaData.ReportConfigDetailID
+-- 													  JOIN kbentityscreenconfigurationMst screen on screen.EntityDefID=MetaData.ENTITYDEFID and MetaData.MetricName=screen.ServiceLabel
+-- 													where   MetaData.ObjectType = 'Entity'  and phone.Isactive=1 and screen.ObjectType='Branch'
+-- 													and MetaData.eventid=ISNULL(R.OriginalID,R.Event_ID)
+-- 										 
+-- 										 
+-- 										
+-- 											)A order by A.Torder desc
+-- 								) as columns
+-- 								)
+-- 								,
+-- 								(
+-- 									select 'entityfilters' as "name"
+-- 									,
+-- 									(select array_to_json(array_agg(row_to_json(b)))  as "filter"
+-- 									from
+-- 										(	
+-- 											select array_to_json(array_agg(row_to_json(a)))  as "and"
+-- 											from
+-- 											(
+-- 											    select A.idcolumn,A.inputidcolumn,A.condition, A.isnull
+-- 											    from
+-- 											    (
+-- 												  select 'RECORDDATEUTC' as idcolumn,'VirtusUTCStartTime' as inputidcolumn,'<=' condition,'' isnull
+-- 												  UNION ALL
+-- 												  select 'RECORDDATEUTC' as idcolumn,'VirtusUTCEndTime' as inputidcolumn,'>=' condition,'true' isnull
+-- 											    )A 
+-- 											)a
+-- 										)b
+-- 									)	
+-- 								)
+-- 
+-- 
+-- 
+-- 								
+-- 							
+-- 							from kbeventsMst R
+-- 							where R.IsActive=1	
+-- 						)atables
+-- 						)
+-- 						)processtype	
+-- 			)processtype
+-- 		);
+-- 
+-- VFactsInfo:=	(	select array_to_json(array_agg(row_to_json(output)))  as "tables"
+-- 			from
+-- 			(
+-- 				select array_to_json(array_agg(row_to_json(FactsInfo)))  as "table"
+-- 				from
+-- 				(
+-- 					select distinct '"Fact_'||Mst.Alias||'MetricDetails"' "name" 
+-- 					from EntityLocations EL
+-- 					join kbsourcetypeMst Mst on Mst.SOURCETYPE_ID=EL.Sourceid
+-- 				)FactsInfo	
+-- 			) output
+-- 		)	;
+-- 
+-- 
+-- */
+
+VEarlyArrivingFacts:=	(select array_to_json(array_agg(row_to_json(Earlyarrivingfacts)))  as root
+			from
+				(
+					select   '' delaytime,'' uom,VEarlyArrivingFacts,VMeausres,VKPIS,VAnalysisupdate,VEventsupdate
+				) as Earlyarrivingfacts
+			);
+
+			
+
+VFinalResult:=(	select array_to_json(array_agg(row_to_json(ENTITYDETAILS)))  as "ENTITYDETAILS"
+		from
+		(	
+			select array_to_json(array_agg(row_to_json(a)))  as "ENTITYDETAILS"
+			from
+			(
+			select  VResult as "Entity",VEarlyArrivingFacts as "EarlyArrivingFacts",VFactsInfo "FactsInfo"
+			) a
+		)ENTITYDETAILS
+		)
+
+		;
+
+Return(VFinalResult);
+		
+	End;
+	
+
+end;
+
+ElseIf Lower(Vtran)='updateentitydefinition' then
+begin
+
+VEntdefTablename:=(select '"KB_ENTITY_'||VCustomerName||'_'||VEntityName||'"');
+
+VEntityDefId:=(select entitydef_id from kbentitymst entmst where entity_name=VEntityName and isactive='1' and exists(select 1 from users b where entmst.createdby=b.userid ));
+
+-- 
+-- Insert into ScreenConfig(EntityID,MRowIndex,MLabel,ServiceLabel, MDataTypeId, MCtrlType, IsRequired, Identifier, IsSearchable,IsDisplay,DefaultValue
+-- 	,CRowIndex,CValue,svalue, OType,TOrder,groupname,IsNewlyAdded,actualdatatype)
+-- 
+-- 	select  VEntityDefId as Entitydefid
+-- 		,cast(EDScreen->>'RowIndex' as int) as  RowIndex
+-- 		,EDScreen->>'Label' as  VLabel
+-- 		,EDScreen->>'ServiceLabel' as ServiceLabel
+-- 		,EDScreen->>'DataTypeId' as DataTypeId
+-- 		,EDScreen->>'CtrlType' as CtrlType
+-- 
+-- 		,cast(EDScreen->>'IsRequired' as bit) as IsRequired
+-- 		,cast(EDScreen->>'Identifier' as bit) as Isidentifier
+-- 		,cast(EDScreen->>'IsSearchable' as bit) as IsSearchable
+-- 
+-- 		,cast(EDScreen->>'IsDisplay' as bit) as IsDisplay
+-- 		,EDScreen->>'DefaultValue' as DefaultValue
+-- 		,NULL as CRowIndex
+-- 		,NULL as CValue
+-- 		,NULL Svalue
+-- 		,'EntityDefinition' as Objecttype
+-- 		,NULL as TOrder
+-- 		,EDScreen->>'GroupName' as groupname
+-- 		,cast(EDScreen->>'IsNewlyAdded' as smallint) as IsNewlyAdded
+-- 		,replace(lower(EDScreen->>'Actualdatatype'),'nvarchar','varchar') actualdatatype
+-- 	from
+-- 	(
+-- 		Select json_array_elements(EDScreen) as EDScreen
+-- 		From
+-- 		(
+-- 		select ivalue->'ENTITYDETAILS'-> 'EntityScreen'->'Entity'->'Master' as EDScreen
+-- 		from temps limit 1
+-- 		)a
+-- 	)entityscreen
+-- 	 
+-- ;
+
+	Insert into ScreenConfig(EntityID,MRowIndex,MLabel,ServiceLabel, MDataTypeId, MCtrlType, IsRequired, Identifier, IsSearchable,IsDisplay,DefaultValue
+	,CRowIndex,CValue,svalue, OType,TOrder,groupname,IsNewlyAdded,actualdatatype)
+	select Entitydefid
+		,RowIndex
+		,VLabel
+		,ServiceLabel
+		,DataTypeId
+		,CtrlType
+		,IsRequired
+		,Isidentifier
+		,IsSearchable
+		,IsDisplay
+		,DefaultValue
+		,CRowIndex
+		,CValue
+		,SValue
+		,Objecttype
+		,TOrder
+		,groupname
+		,IsNewlyAdded
+		,replace(actualdatatype,'nvarchar','varchar') actualdatatype
+	from
+	(
+
+		select  VEntityDefId as Entitydefid
+			,RowIndex
+			,VLabel
+			,ServiceLabel
+			,DataTypeId
+			,CtrlType
+			,IsRequired
+			,Isidentifier
+			,IsSearchable
+			,IsDisplay  as IsDisplay
+			,DefaultValue
+			,CRowIndex
+			,CValue
+			,SValue
+			,'EntityDefinition' as Objecttype
+			,cast(NULL as smallint) as TOrder
+			,groupname
+			,IsNewlyAdded
+			,Lower(actualdatatype) actualdatatype
+		from
+		(
+			Select  RowIndex
+			,VLabel
+			,ServiceLabel
+			,DataTypeId
+			,CtrlType
+			,IsRequired
+			,Isidentifier
+			,IsSearchable
+			,IsDisplay
+			,DefaultValue
+			,NULL CRowIndex
+			,NULL CValue
+			, NULL SValue
+			,groupname
+			,IsNewlyAdded
+			,actualdatatype
+			from
+			(
+				select 
+				cast(EDScreen->>'RowIndex' as int) as  RowIndex
+				,EDScreen->>'Label' as  VLabel
+				,EDScreen->>'ServiceLabel' as ServiceLabel
+				,EDScreen->>'DataTypeId' as DataTypeId
+				,EDScreen->>'CtrlType' as CtrlType
+				,cast(EDScreen->>'IsRequired' as bit) as IsRequired
+				,cast(EDScreen->>'Identifier' as bit) as Isidentifier
+				,cast(EDScreen->>'IsSearchable' as bit) as IsSearchable
+				,cast(EDScreen->>'IsDisplay' as bit) as IsDisplay
+				,EDScreen->>'DefaultValue' as DefaultValue
+				,EDScreen->>'GroupName' as groupname
+				,EDScreen->>'HasData' as HasData
+				,cast(EDScreen->>'IsNewlyAdded' as smallint) as IsNewlyAdded
+				,EDScreen->>'Actualdatatype' as actualdatatype
+				from
+				(
+					Select json_array_elements(EDScreen) as EDScreen
+					From
+					(
+					select ivalue->'ENTITYDETAILS'-> 'EntityScreen'->'Entity'->'Master' as EDScreen
+					from temps limit 1
+					)a
+				)AA
+			) vals	
+			where HasData='0'
+
+			
+		)entityscreen
+
+		Union
+
+		select distinct VEntityDefId as Entitydefid
+			,RowIndex
+			,VLabel
+			,ServiceLabel
+			,DataTypeId
+			,CtrlType
+			,IsRequired
+			,Isidentifier
+			,IsSearchable
+			,cast(NULL as bit) as IsDisplay
+			,DefaultValue
+			,cast(SData->>'RowIndex' as smallint) as CRowIndex
+			,SData->>'Value' as CValue
+			,SData->>'ServiceValue' as SValue
+			,'EntityDefinition' as Objecttype
+			,cast(NULL as smallint) as TOrder
+			,groupname
+			,IsNewlyAdded
+			,replace(actualdatatype,'nvarchar','varchar') actualdatatype
+		from
+		(
+			Select json_array_elements(CData) as SData,RowIndex
+			,VLabel
+			,ServiceLabel
+			,DataTypeId
+			,CtrlType
+			,IsRequired
+			,Isidentifier
+			,IsSearchable
+			,DefaultValue
+			,groupname
+			,IsNewlyAdded
+			,Lower(actualdatatype) actualdatatype
+			from
+			(
+				select 
+				cast(EDScreen->>'RowIndex' as int) as  RowIndex
+				,EDScreen->>'Label' as  VLabel
+				,EDScreen->>'ServiceLabel' as ServiceLabel
+				,EDScreen->>'DataTypeId' as DataTypeId
+				,EDScreen->>'CtrlType' as CtrlType
+				,cast(EDScreen->>'IsRequired' as bit) as IsRequired
+				,cast(EDScreen->>'Identifier' as bit) as Isidentifier
+				,cast(EDScreen->>'IsSearchable' as bit) as IsSearchable
+				,EDScreen->>'DefaultValue' as DefaultValue
+				,EDScreen->>'GroupName' as groupname
+				,EDScreen->'Data' CData
+				,EDScreen->>'HasData' as HasData
+				,cast(EDScreen->>'IsNewlyAdded' as smallint) as IsNewlyAdded
+				,EDScreen->>'Actualdatatype' as actualdatatype
+				from
+				(
+					Select json_array_elements(EDScreen) as EDScreen
+					From
+					(
+					select ivalue->'ENTITYDETAILS'-> 'EntityScreen'->'Entity'->'Master' as EDScreen
+					from temps limit 1
+					)a
+				)AA
+			) vals	
+			where HasData='1'
+		)entityscreen
+	)inpdata
+	Order by RowIndex;
+
+	Update kbentitymst set screenjson=Ventityscreen where entitydef_id=VEntityDefId;
+
+ 	Insert into KBEntityScreenConfigurationMst(EntityDefID,ControlTitle,ServiceLabel,ControlDataType,ControlType,ObjectType,IsIndentifier
+	,IsSearchable,IsDisplay,IsRequired,CreatedBy,ModifiedBy,RowIndex,DefaultdataValue,GroupName)
+
+	Select EntityID,MLabel,ServiceLabel, MDataTypeId, MCtrlType, OType, Identifier, IsSearchable,IsDisplay , IsRequired,CreatedBy, ModifiedBy
+	,RowIndex,DefaultValue,groupname
+	From
+	(
+		Select Id,EntityID,MLabel,ServiceLabel, MDataTypeId, MCtrlType, OType, Identifier, IsSearchable,IsDisplay 
+		, IsRequired,VCreated_By CreatedBy, VCreated_By ModifiedBy,TOrder,MRowIndex RowIndex,DefaultValue,groupname
+		from ScreenConfig
+		where IsNewlyAdded=1
+	) A
+	where not exists(select 1 from KBEntityScreenConfigurationMst b where A.EntityID=b.EntityDefID and A.ServiceLabel=B.ServiceLabel and B.objecttype='EntityDefinition')
+	Order by ID;
+
+	Insert into KBEntityScreenConfigurationDetails(ScreenID,ControlValues,CreatedBy,createddate,ModifiedBy,modifieddate,RowIndex,servicevalue)
+	Select distinct  C.ScreenID,B.CValue,VCreated_By CreatedBy,VActiondate, VCreated_By ModifiedBy,VActiondate,A.RowIndex,B.Svalue 
+	from (
+		Select Distinct EntityID,MLabel, MDataTypeId, MCtrlType, OType,MRowIndex,CRowIndex RowIndex 
+		From ScreenConfig 
+		where IsNewlyAdded=1
+		) A 
+	join ScreenConfig B on A.OType=b.OType and A.MRowIndex=B.CRowIndex
+	Join KBEntityScreenConfigurationMst C on B.EntityID=C.entityDefid and  B.MLabel=C.ControlTitle and B.OType=C.ObjectType;
+ 
+	Update KBEntityScreenConfigurationMst set GroupName=A.GroupName
+	from
+	Screenconfig A
+	where A.EntityID=KBEntityScreenConfigurationMst.EntityDefID and A.ServiceLabel=KBEntityScreenConfigurationMst.ServiceLabel and KBEntityScreenConfigurationMst.objecttype='EntityDefinition';	
+
+VEntDeftblcols:='';
+
+		Insert into EntityCreation(EntityName,ColumnName,DataType,actualdatatype )
+		select distinct VEntityName,  Case when A.controltype='CheckBox' then B.ControlValues else A.controltitle end ColumnName,
+		Case when A.ControlDataType ='DateTime' then 'timestamp' else 'varchar(500)' END as DataType
+		,Case when actualdatatype ='DateTime' then 'timestamp' else actualdatatype END as actualdatatype 
+		from 
+		KBEntityScreenConfigurationMst  A
+		join (
+			Select distinct EntityID,MLabel,ServiceLabel, MDataTypeId, MCtrlType, OType, Identifier, IsSearchable,IsDisplay 
+			, IsRequired,VCreated_By CreatedBy, VCreated_By ModifiedBy,TOrder,MRowIndex RowIndex,DefaultValue,groupname,actualdatatype
+			from ScreenConfig
+			where IsNewlyAdded=1
+		) C on C.EntityID=A.EntityDefID and C.ServiceLabel=A.ServiceLabel and A.objecttype='EntityDefinition'
+		 LEFT  JOIN  KBEntityScreenConfigurationDetails B on A.ScreenID=B.ScreenID
+		 where A.EntityDefId=VEntityDefId and A.ObjectType='EntityDefinition' ;
+
+		Insert into EntityCreation (EntityName,ColumnName,DataType)
+		select VEntityName as EntityName,ColumnName||'ID','BIGINT' 
+		from EntityCreation 
+		where DataType='DateTime' ;
+ 
+
+		VEntDeftblcols:=(Select string_agg(Ecolumns,',#cols#') as cols
+		From
+		(
+			select '"'||ColumnName||'"'||' '||actualdatatype  as Ecolumns
+			from EntityCreation
+			Order by id
+		)cols	);
+
+		VEntDeftblcols:=' add column '||VEntDeftblcols;
+		VEntDeftblcols:= Replace(VEntDeftblcols,',#cols#',', add column ');
+
+		if VEntDeftblcols is not null and VEntDeftblcols!='' then
+		
+		execute(' Alter Table '||VEntdefTablename || VEntDeftblcols||'');
+		end if;
+return(
+
+	select array_to_json(array_agg(row_to_json(a)))   
+	from
+	(
+		select 1 as "Result", 0 as "ErrorMessage", 0 as "ErrorCode", array_to_json(array_agg(row_to_json(output)))  as "ENTITYDETAILS"
+		from
+		(
+			select VEntityDefId  as "ENTITY"
+			
+		) output
+	)a
+	);
+
+end;
+Elseif Lower(Vtran)='getscreenconfiguration' then
+begin
+
+VEntityDefId:= (select ivalue->'ENTITYDETAILS'->> 'EntityID' from temps limit 1);
+
+	VResult:=(		
+			select array_to_json(array_agg(row_to_json(output)))   "ENTITYDETAILS"
+			from
+			(
+				select array_to_json(array_agg(row_to_json(ED)))   "ENTITYDETAILS"
+				from
+				(
+					select array_to_json(array_agg(row_to_json(aa)))   "ScreenConfig"
+					from
+					(
+						select 
+						array_to_json(array_agg(row_to_json(a)))   as "Entity"
+						from
+						(
+							select array_to_json(array_agg(row_to_json(output)))  as "Master"
+							from
+							(
+								select 
+								rowindex as "RowIndex"
+								,controltitle "Label"
+								,ServiceLabel "ServiceLabel"
+								,controlDataType "DataType"
+								,ControlType "ControlType"
+								,IsRequired "IsRequired"
+								,isIndentifier "IsIndentifier"
+								,issearchable "IsSearchable"
+								,IsDisplay as "IsDisplay"
+								,defaultdatavalue "DefaultValue"
+								, groupname "GroupName"
+								,
+								(
+									Select Row_to_json(contval) "Values"
+									from
+									(
+										select array_to_json(array_agg(row_to_json(cont)))  as "Input"
+										from
+										(
+											Select SDet.ControlValues "Name", servicevalue "ServiceValue"
+											from KBEntityScreenConfigurationDetails SDet 
+											where SMst.ScreenID=SDet.ScreenID
+											--For XML RAW('Input'),ROOT('Values')
+										)cont	
+									)as contval
+								)
+								from 
+								kbentityscreenconfigurationmst smst
+								where entitydefid=VEntityDefId and objecttype='EntityDefinition'
+								order by rowindex
+							) output
+						)a
+					) aa
+				)ED
+			)output	
+		)			
+		;
+
+Return(VResult);		
+end;
+Elseif Lower(Vtran)='getdetails' then
+begin
+
+VEntInstId:=(select ivalue->'ENTITYDETAILS'->> 'EntityId' from temps limit 1);
+
+ 
+VResult:=(
+
+		select array_to_json(array_agg(row_to_json(a)))
+		from
+		(
+			 select array_to_json(array_agg(row_to_json(output))) as "ENTITYDETAILS"
+			 from
+			 (
+				Select ent.entity_id "EntityId", ent.entity_name as "EntityName",entmst.entitydef_id as "EntityDefId", entmst.entity_name as "EntityDefName"
+				, entmst.entity_name as "Name"
+				,entmst.entitytype as "EntityType",users.user_name "CreatedBy"
+				,ent.createddate "CreatedDate",modusers.user_name "ModifiedBy",ent.modifieddate "ModifiedDate"
+				,ent.screenjson as "ScreenConfig"
+				from kbentities ent 
+				join kbentitymst entmst on ent.entitydef_id=entmst.entitydef_id
+				Join kbusermst users on ent.createdby=users.user_id
+				Join kbusermst modusers on ent.modifiedby=modusers.user_id
+				where entity_id=VEntInstId
+			)output
+		)a
+	);
+
+Return(Vresult)	
+
+;
+end;
+Elseif Lower(Vtran)='checkname' then
+Begin
+
+VEntInstName:= (select ivalue->'ENTITYDETAILS'->> 'EntityName' from temps limit 1);
+
+VEntinstid:=(Select count(entity_id) from kbentities where entity_name=VEntInstName and entitydef_id=VEntityDefId);
+
+return(
+	select array_to_json(array_agg(row_to_json(finaloutput))) 
+	from
+	(
+		select  case when coalesce(VEntinstid,0)>0 then 1 else 0 end as "Result",array_to_json(array_agg(row_to_json(output))) as "ENTITYDETAILS"
+		from
+		(
+			select array_to_json(array_agg(row_to_json(a))) as "ENTITY"
+			from
+			(
+			Select case when coalesce(VEntinstid,0)>0 then 1 else 0 end as "CHECKEXIST"
+			)a
+		) output
+	)finaloutput		
+);
+
+end;
+Elseif Lower(Vtran)='createentityrelation' then
+begin
+
+VEntityRelationname:=(select ivalue->'ENTITYDETAILS'->> 'Relationname' from temps limit 1);
+
+Insert into EntityRelations(Relationname, PrimaryEntityId, PrimaryEntityType, SecondaryEntityId, SecondaryEntityType,lookupmetric,relationstype)
+select Relationname,PrimaryEntityid,  PrimaryType,SecondaryEntityID, SecondaryType, lookupmetric,relationstype
+from
+(
+select VEntityRelationname as Relationname
+,cast(Relations->>'PrimaryEntityID' as int) as PrimaryEntityid
+,cast(Relations->>'Primarytype' as int) as PrimaryType
+,cast(Relations->>'SecondaryEntityID' as int) as SecondaryEntityID
+,cast(Relations->>'SecondaryType' as int) as  SecondaryType
+,Relations->>'RelationshipMetric' lookupmetric
+,Relations->>'RelationsType' relationstype
+from 
+	(
+		select json_array_elements(Relation) as Relations
+		from
+		(
+		select ivalue->'ENTITYDETAILS'-> 'Relation' Relation
+		from temps limit 1
+		)a
+	)Rel
+) inputs
+ 
+;
+
+Insert into kbentityrelationsmst(Relationname,Isactive,createdby,modifiedby)
+select distinct Relationname,cast('1' as bit) isactive,VCreated_by,VCreated_by
+from
+EntityRelations A
+where not exists(select 1 from kbentityrelationsmst B where Lower(A.Relationname)=Lower(B.Relationname) and exists(select 1 from users c where B.createdby=userid ) )
+
+;
+
+VRelationid:=( SELECT currval(pg_get_serial_sequence('kbentityrelationsmst','relationid')));
+
+Insert into kbentityrelationEntityDefinitionDetails(Relationid, PrimaryEntityDefinitionid, PrimaryentityType,SecondaryEntityDefinitionid,SecondaryentityType
+,Isactive,createdby,modifiedby,lookupmetric,relationstype)
+select VRelationid, PrimaryEntityId,(select entity_name from kbentitymst where entitydef_id=PrimaryEntityId) PrimaryEntityType, SecondaryEntityId
+	,(select entity_name from kbentitymst where entitydef_id=SecondaryEntityId) SecondaryEntityType,'1' isactive,VCreated_by,VCreated_by,lookupmetric,relationstype
+from
+EntityRelations A
+where not exists (select 1 from kbentityrelationEntityDefinitionDetails b where A.PrimaryEntityId=PrimaryEntityDefinitionid 
+		and A.SecondaryEntityId=B.SecondaryEntityDefinitionid and isactive='1')
+;
+
+ 
+
+return(
+	
+	select row_to_json(aa) 
+	from
+	(
+		select row_to_json(a) as "ENTITYDETAILS"
+		from
+		(
+		select 1 as "Result", 0 as "ErrorMessage", 0 as "ErrorCode", VRelationid  as "RelationID"
+		)a
+	) aa
+);
+end;
+Elseif Lower(VTran)='getentityrelationtooltip' Then
+begin
+
+If VEntityDefId=0 then
+	VEntityDefId:=NULL;
+end if;
+
+Return(
+select row_to_json(output)  
+from
+(
+	select array_to_json(array_agg(row_to_json(a)))  as "ENTITYDETAILS"
+	from
+	(
+	select Rels.relationid "RelationID",  Relationname as "RelationName"
+	,users.user_name as "CreatedBy"
+	,(
+		Select Array_to_json(array_Agg(row_to_json(det))) as "Relation"
+		from
+		(
+			Select 
+			PrimaryEntityDefinitionid as "PrimaryEntityDefinitionID"
+			, PrimaryentityType as "PrimaryEntityType",SecondaryEntityDefinitionid as "SecondaryEntityDefinitionID",SecondaryentityType as "SecondaryEntityType"
+			,Rels.Isactive as "IsActive",users.user_name as "CreatedBy", Rels.CreatedDate as "CreatedDate",musers.user_name  as "ModifiedBy", Rels.ModifiedDate "ModifiedDate"
+			,defs.lookupmetric "RelationshipMetric",relationstype	"RelationsType"
+			from
+			kbentityrelationentitydefinitiondetails defs 
+			where Rels.Relationid=defs.Relationid
+		)det
+	)
+	from kbentityrelationsmst Rels
+	join kbusermst users on Rels.createdby=users.user_id
+	Left join kbusermst musers on Rels.modifiedby=musers.user_id
+	where Rels.isactive='1'   and exists(select 1 from kbentityrelationentitydefinitiondetails indefs where Rels.Relationid=indefs.Relationid 
+		and PrimaryEntityDefinitionid=coalesce(VEntityDefId,PrimaryEntityDefinitionid))
+	)a
+)output
+
+)
+;
+end;
+Elseif Lower(VTran)='getrelationdetails' Then
+Begin
+
+VRelationId:=(select ivalue->'ENTITYDETAILS'->> 'EntityrelationId' from temps limit 1);
+
+Return(
+
+select row_to_json(output) as "ENTITYDETAILS"
+from
+(
+	select array_to_json(array_agg(row_to_json(a)))  as "ENTITYDETAILS"
+	from
+	(
+	select Rels.relationid "RelationID",  Relationname as "RelationName"
+
+	,(
+		Select Array_to_json(array_Agg(row_to_json(det))) as "Relation"
+		from
+		(
+			Select 
+			PrimaryEntityDefinitionid as "PrimaryEntityDefinitionID"
+			, (select entitytype from kbentitymst where entitydef_id=PrimaryEntityDefinitionid)  as "PrimaryEntityType"
+			,SecondaryEntityDefinitionid as "SecondaryEntityDefinitionID",(select entitytype from kbentitymst where entitydef_id=SecondaryEntityDefinitionid)  as "SecondaryEntityType"
+			,Rels.Isactive as "IsActive",users.user_name as "CreatedBy", Rels.CreatedDate as "CreatedDate",musers.user_name  as "ModifiedBy", Rels.ModifiedDate "ModifiedDate"
+			,defs.lookupmetric "RelationshipMetric", relationstype "RelationsType"
+			from
+			kbentityrelationentitydefinitiondetails defs 
+			where Rels.Relationid=defs.Relationid
+		)det
+	)
+	from kbentityrelationsmst Rels
+	join kbusermst users on Rels.createdby=users.user_id
+	Left join kbusermst musers on Rels.modifiedby=musers.user_id
+	where Rels.isactive='1' and Rels.Relationid=VRelationId
+	)a
+)output
+)
+;
+
+End;
+Elseif Lower(VTran)='getentityurl' then
+begin
+
+select ivalue->'ENTITYDETAILS'->> 'EntityDefinationID' 
+,ivalue->'ENTITYDETAILS'->> 'Type' 
+,ivalue->'ENTITYDETAILS'->>'ObjectType'
+into
+VEntityDefId, VServiceType,VObjectType
+from temps 
+limit 1
+;
+
+If VServiceType ='' then
+VServiceType:=NULL;
+End if;
+
+begin
+Return(
+	Select Row_to_json(outs)
+	from
+	(
+		select Row_to_json(ent) "ENTITYDETAILS"
+		from
+		(
+			select VEntityDefId "EntityDefinationID"
+			, Array_to_json(Array_agg(Row_to_json(inp))) "URLS"
+			from
+			(  
+				Select id "Urlid", urlname "Url", src.datasourcename "Type"
+				from kbsourceurlmst url
+				Join kbdatasourcemst src on url.datasourceid=src.datasourceid
+				where lower(objecttype)= lower(VObjectType)
+				and sourceid=VEntityDefId  
+				and lower(src.datasourcename)= Coalesce(lower(VServiceType),lower(src.datasourcename))
+			) inp
+		) ent
+	) outs
+);
+end;
+
+end;
+Elseif Lower(VTran)='getentityurldetails' then
+begin
+
+select ivalue->'ENTITYDETAILS'->> 'UrlID' 
+into
+VUrlid
+from temps 
+limit 1;
+
+VObjectType:=(select objecttype from kbsourceurlmst where id=VUrlid);
+
+If lower(VObjectType)='entity' then
+begin
+
+return
+(
+				 
+					Select Array_to_json(Array_agg(row_to_json(ur))) as "URL"
+					From
+					(	
+					SELECT 
+					ENTITY_NAME "ENTITY_NAME" 
+					, DATASOURCENAME	"DATASOURCENAME"
+					,urlname	"Name"
+					, '&' 		"CONCATS"
+					,urls.ID AS 	"URLID"
+					,Coalesce(createurl,'') "CREATEURL"
+					,URL 			"URL"
+					,Coalesce(dsdetails.DSADetailName,'') "DATABASETYPE"
+					,Coalesce(urls.PortNumber,0) as  "PORTNUMBER"
+					,DATA_RETRIEVAL_TIME as "TIMEINTERVAL"
+					,DATA_RETRIEVAL_UOM	"UOM"
+					,urls.USERNAME			"USERNAME"
+					,urls.PASSWORD			"PASSWORD"
+					,DBAuthType 			"Authentication" 
+					,SERVERNAME			"SERVERNAME" 
+					,DATABASENAME			"DATABASENAME"
+					,DBQUERY			"DBQUERY"
+					,DATABASETYPE			"DATABASETYPE"
+					,Coalesce(PORTNUMBER,0)		"PORTNUMBER"
+					,Coalesce(ORGANISATION,'')	"ORGANISATION"
+					,urls.AttributeMapping		"EntityMapping"
+					,TABLEQUERY 			"METRICQUERY"	
+					,DATA_FETCH_TYPE		"DATA_FETCH_TYPE" 
+					,organisation			"MainSeparator"
+					,"group"			"SubSeparator"
+					,Custom_Authenticationtype		"CustomAuthentication"
+					,wsdlaction "Dataformat"
+					,createurl			"createUrl"
+					,createurltype			"createurltype"
+					,urls.pulltype			"PullType"
+					,urls.Objectname		"Objectname"
+					FROM  
+					kbentitymst Sources
+					Join kbsourceurlmst urls on Sources.ENTITYDEF_ID=urls.SOURCEID
+					Join KBDataSourceMst DataSources on Urls.DataSourceID=DataSources.DataSourceID
+					Inner join KBDataSourceAttributes dsatt on dsatt.DataSourceID=DataSources.DataSourceID   --newlyadded
+					LEft outer join KBDataSourceAttributeDetails dsdetails on dsatt.DSAttributeID=dsdetails.DSAttributeID 
+							and   dsdetails.DSAttributeDetailID=urls.DATABASETYPE  --newlyadded
+					where  Lower(ObjectType)='entity'  and urls.id=Vurlid
+					Group BY 	Sources.ENTITY_NAME,DataSourceName,DATA_RETRIEVAL_TIME,DATA_RETRIEVAL_UOM
+					,urls.SOURCEID,urls.ID,URL,USERNAME,urls.PASSWORD,SERVERNAME,DATABASENAME,DBQUERY,TABLEQUERY
+					,HasPaging ,PagingColumn ,NoofRecords , dsdetails.DSADetailName,urls.PortNumber,Sources.CreatedBy
+					,urls.DBIDColumn,DBIDColumnDataType,DBAuthType,Sources.EntityDef_Id,ORGANISATION,"group",urls.attributemapping,DATA_FETCH_TYPE
+					,createurl,urlname,Custom_Authenticationtype,wsdlaction,createurl,createurltype,DATABASETYPE,pulltype,urls.Objectname
+					--FOR XML RAW('URL')
+					)ur
+				 	
+				);
+End;
+else
+begin
+
+		return
+(
+				 
+					Select Array_to_json(Array_agg(row_to_json(ur))) as "URL"
+					From
+					(	
+					SELECT 
+					'' "ENTITY_NAME" 
+					, DATASOURCENAME	"DATASOURCENAME"
+					,urlname	"Name"
+					, '&' 		"CONCATS"
+					,urls.ID AS 	"URLID"
+					,Coalesce(createurl,'') "CREATEURL"
+					,URL 			"URL"
+					,Coalesce(dsdetails.DSADetailName,'') "DATABASETYPE"
+					,Coalesce(urls.PortNumber,0) as  "PORTNUMBER"
+					,DATA_RETRIEVAL_TIME as "TIMEINTERVAL"
+					,DATA_RETRIEVAL_UOM	"UOM"
+					,urls.USERNAME			"USERNAME"
+					,urls.PASSWORD			"PASSWORD"
+					,DBAuthType 			"Authentication" 
+					,SERVERNAME			"SERVERNAME" 
+					,DATABASENAME			"DATABASENAME"
+					,DBQUERY			"DBQUERY"
+					,DATABASETYPE			"DATABASETYPE"
+					,Coalesce(PORTNUMBER,0)		"PORTNUMBER"
+					,Coalesce(ORGANISATION,'')	"ORGANISATION"
+					,urls.AttributeMapping		"EntityMapping"
+					,TABLEQUERY 			"METRICQUERY"	
+					,DATA_FETCH_TYPE		"DATA_FETCH_TYPE" 
+					,organisation			"MainSeparator"
+					,"group"			"SubSeparator"
+					,Custom_Authenticationtype		"CustomAuthentication"
+					,wsdlaction "Dataformat"
+					,createurl			"createUrl"
+					,createurltype			"createurltype"
+					,urls.pulltype			"PullType"
+					,urls.Objectname		"Objectname"
+					FROM   
+					kbsourceurlmst urls 
+					Join KBDataSourceMst DataSources on Urls.DataSourceID=DataSources.DataSourceID
+					Inner join KBDataSourceAttributes dsatt on dsatt.DataSourceID=DataSources.DataSourceID   --newlyadded
+					LEft outer join KBDataSourceAttributeDetails dsdetails on dsatt.DSAttributeID=dsdetails.DSAttributeID 
+							and   dsdetails.DSAttributeDetailID=urls.DATABASETYPE  --newlyadded
+					where  Lower(ObjectType)='user'  and urls.id=Vurlid
+					Group BY DataSourceName,DATA_RETRIEVAL_TIME,DATA_RETRIEVAL_UOM
+					,urls.SOURCEID,urls.ID,URL,USERNAME,urls.PASSWORD,SERVERNAME,DATABASENAME,DBQUERY,TABLEQUERY
+					,HasPaging ,PagingColumn ,NoofRecords , dsdetails.DSADetailName,urls.PortNumber,Sources.CreatedBy
+					,urls.DBIDColumn,DBIDColumnDataType,DBAuthType,Sources.EntityDef_Id,ORGANISATION,"group",urls.attributemapping,DATA_FETCH_TYPE
+					,createurl,urlname,Custom_Authenticationtype,wsdlaction,createurl,createurltype,DATABASETYPE,urls.Objectname
+					--FOR XML RAW('URL')
+					)ur
+				 	
+				);
+
+end;
+end if;				
+
+End;
+Elseif Lower(VTran)='createentityurl' then
+begin
+Vurlid:=1;
+vtypename:= (select ivalue->'ENTITYDETAILS'->> 'Type' from temps limit 1);
+VEntityDefId:= (select ivalue->'ENTITYDETAILS'->> 'EntityDefinationID' from temps limit 1);
+Vtype=(select datasourceid from kbdatasourcemst where lower(datasourcename)= lower(vtypename)limit 1) ;
+
+  
+	INSERT INTO KBSOURCEURLMST(SOURCEID,Urlname,URL,USERNAME,"password",data_retrieval_time,data_retrieval_uom,ISACTIVE,DataSourceID,organisation,"group",DBAuthType
+	,AttributeMapping,data_fetch_type,custom_authenticationtype,objecttype,Createdby,createddate,modifiedby,modifieddate,wsdlaction,createurl,createurltype
+	,ServerName,DatabaseName,DBQuery,TableQuery,DATABASETYPE,PullType,objectname
+	)
+	SELECT 
+	cast(ivalue->'ENTITYDETAILS'->> 'EntityDefinationID' as int)  entitydefid
+	,ivalue->'ENTITYDETAILS'->> 'Name' 
+	,ivalue->'ENTITYDETAILS'->> 'URL' 
+	,ivalue->'ENTITYDETAILS'->> 'username' 
+	,ivalue->'ENTITYDETAILS'->> 'password' 
+	,cast(ivalue->'ENTITYDETAILS'->> 'timer' as int) timer
+	,ivalue->'ENTITYDETAILS'->> 'UOM'	UOM
+	,'1' isactive
+	--,(select datasourceid from kbdatasourcemst where lower(datasourcename)= lower(ivalue->'ENTITYDETAILS'->> 'Type') )
+	,Vtype
+	,cast(ivalue->'ENTITYDETAILS'->> 'MainSeparator' as smallint) 
+	,cast(ivalue->'ENTITYDETAILS'->> 'SubSeparator' as smallint) 
+	,cast(ivalue->'ENTITYDETAILS'->> 'Authentication' as smallint) 
+	,ivalue->'ENTITYDETAILS'-> 'EntityMapping'
+	,Case when cast(ivalue->'ENTITYDETAILS'->> 'timer' as int)=0 then 'HistoricalData' Else 'CurrentData' end data_fetch_type
+	,cast(ivalue->'ENTITYDETAILS'->> 'CustomAuthentication'  as smallint) CustomAuthentication
+	,ivalue->'ENTITYDETAILS'->> 'objectType' Objecttype
+	,VCreated_By
+	,Vactiondate
+	,VCreated_By
+	,Vactiondate
+	,ivalue->'ENTITYDETAILS'->> 'Dataformat'	Dataformat
+	,ivalue->'ENTITYDETAILS'->> 'createUrl'		createUrl
+	,cast(ivalue->'ENTITYDETAILS'->> 'createurltype' as smallint)	createurltype
+	,ivalue->'ENTITYDETAILS'->> 'DBServerName' 
+	,ivalue->'ENTITYDETAILS'->> 'Database' 	
+	,ivalue->'ENTITYDETAILS'->> 'DBQuery' 	
+	,ivalue->'ENTITYDETAILS'->> 'TableQuery'
+	,cast(ivalue->'ENTITYDETAILS'->> 'SelectedDatabaseType' as smallint)  	
+	,cast(ivalue->'ENTITYDETAILS'->> 'PullType' as smallint)  PullType	
+	,ivalue->'ENTITYDETAILS'->> 'Objectname' 	objectname
+	From
+	temps limit 1;
+
+Vurlid:=(Select Currval(pg_get_serial_sequence('kbsourceurlmst','id')));
+
+INSERT INTO KBSOURCEURLDETAILS(URLID,PARAM_NAME,PARAM_VALUE,PARAM_TYPE,SOURCEID,FORMULA,filteroption,PARAM_VALUETYPE,Operator,EntityDefId
+		,concatenator,parametertype,CREATEDBY,groupname)
+
+				select 
+				Vurlid,
+				 EDScreen->>'NAME' as  VName
+				,EDScreen->>'VALUE' as VValue
+				,EDScreen->>'TYPE' as VType
+				,VEntityDefId
+				,EDScreen->>'FORMULA' as VFormula
+				,EDScreen->>'FilterOption' as VFormula
+				,EDScreen->>'VALUETYPE' as VFormula
+				,EDScreen->>'Operator' as VOperator
+				,VEntityDefId
+				,EDScreen->>'Concater' as Vconcater
+				,null
+				,VCreated_By
+				,EDScreen->>'GroupName' as VGroupName
+				from 
+				(
+					Select json_array_elements(EDScreen) as EDScreen
+					From
+					(
+					select ivalue->'ENTITYDETAILS'-> 'PARAMETER' as EDScreen
+					from temps limit 1
+					)a
+				)AA;
+
+--exception when others then 
+	--			raise notice '% %', SQLERRM, SQLSTATE;
+
+Return(Select Row_to_json(outs) from(select row_to_json(a) "ENTITYDETAILS" from( select Vurlid "Urlid")a)outs);
+end;
+Elseif Lower(VTran)='updateentityurl' then
+begin
+
+select ivalue->'ENTITYDETAILS'->> 'UrlID' 
+into
+Vurlid
+from temps 
+limit 1;
+
+  
+	Update 
+		KBSOURCEURLMST
+	set URL=inp.url
+	,USERNAME=inp.username
+	,"password"=inp.passw
+	,data_retrieval_time=inp.timer
+	,data_retrieval_uom=inp.UOM
+	,DataSourceID=inp.datasourceid
+	,organisation=inp.mainseperator
+	,"group"=inp.subseperator
+	,DBAuthType=inp.authen
+	,AttributeMapping=inp.atrmapping
+	,data_fetch_type=inp.data_fetch_type
+	,custom_authenticationtype=inp.CustomAuthentication
+	,modifiedby=inp.modifiedby
+	,modifieddate=inp.modifieddate
+	,wsdlaction=inp.Dataformat
+	,createurl=inp.createUrl
+	,createurltype=inp.createurltype
+	,ServerName=inp.servername
+	,DatabaseName=databas
+	,DBQuery=inp.dbquery
+	,TableQuery=inp.tablequery
+	,DATABASETYPE=inp.databasetype
+	,PullType=inp.PullType
+	,objectname=inp.objectname
+	From
+	(	
+	SELECT 
+	ivalue->'ENTITYDETAILS'->> 'URL' url
+	,ivalue->'ENTITYDETAILS'->> 'username'  username
+	,ivalue->'ENTITYDETAILS'->> 'password' passw
+	,cast(ivalue->'ENTITYDETAILS'->> 'timer' as int) timer
+	,ivalue->'ENTITYDETAILS'->> 'UOM'	UOM
+	,(select datasourceid from kbdatasourcemst where lower(datasourcename)= lower(ivalue->'ENTITYDETAILS'->> 'Type') ) datasourceid
+	,cast(ivalue->'ENTITYDETAILS'->> 'MainSeparator' as smallint) 	mainseperator
+	,cast(ivalue->'ENTITYDETAILS'->> 'SubSeparator' as smallint) subseperator
+	,cast(ivalue->'ENTITYDETAILS'->> 'Authentication' as smallint) 	authen
+	,ivalue->'ENTITYDETAILS'-> 'EntityMapping'	atrmapping
+	,Case when cast(ivalue->'ENTITYDETAILS'->> 'timer' as int)=0 then 'HistoricalData' Else 'CurrentData' end data_fetch_type
+	,cast(ivalue->'ENTITYDETAILS'->> 'CustomAuthentication'  as smallint) CustomAuthentication
+	,VCreated_By	modifiedby
+	,Vactiondate	modifieddate
+	,ivalue->'ENTITYDETAILS'->> 'Dataformat'	Dataformat
+	,ivalue->'ENTITYDETAILS'->> 'createUrl'		createUrl
+	,cast(ivalue->'ENTITYDETAILS'->> 'createurltype' as smallint)	createurltype
+	,ivalue->'ENTITYDETAILS'->'SourceURL'->> 'DBServerName'  servername
+	,ivalue->'ENTITYDETAILS'->> 'Database' 	databas	
+	,ivalue->'ENTITYDETAILS'->> 'DBQuery' 	dbquery	
+	,ivalue->'ENTITYDETAILS'->> 'TableQuery'	tablequery
+	,cast(ivalue->'ENTITYDETAILS'->> 'SelectedDatabaseType' as smallint) databasetype
+	,cast(ivalue->'ENTITYDETAILS'->> 'PullType' as smallint) PullType
+	,ivalue->'ENTITYDETAILS'->> 'Objectname' as objectname
+	From
+	temps limit 1
+	) inp 
+	where KBSOURCEURLMST.id=VUrlid
+	;
+
+Return(Select Row_to_json(outs) from(select row_to_json(a) "ENTITYDETAILS" from( select Vurlid "Urlid")a)outs);
+end;
+Elseif lower(Vtran)='getentitymetric' then
+Begin
+	
+	Return(
+		Select Row_to_json(outs)
+		from
+		(
+			Select Row_to_json(ents) "Output"
+			From
+			(
+				Select Array_to_json(Array_Agg(Row_to_json(ent)))  "ENTITYDEFINITION"
+				from
+				(
+					Select entitydef_id "entitydefid", entity_name entitydefname,entitytype,screenjson screenconfig  
+					from kbentitymst A 
+					where exists(select 1 from users b where A.createdby=B.userid) and entitydef_id!=1
+				) ent	
+			) ents	
+		) outs	
+	);	
+
+End;
+Elseif lower(Vtran)='getentityinstance' then
+Begin
+
+select ivalue->'ENTITYDETAILS'->> 'PageNo' 
+,ivalue->'ENTITYDETAILS'->> 'Searchmetric' 
+,ivalue->'ENTITYDETAILS'->> 'Searchtext' 
+into
+VPageNo,Vsearchmetric, Vsearchtext
+from temps 
+limit 1;
+
+if Vsearchtext='' then
+Vsearchtext:=NULL;
+end if;
+
+if Vsearchmetric='' then
+Vsearchmetric:=NULL;
+end if;
+
+If Vsearchmetric is not null then
+begin
+
+	Vsearchmetricdatatype:=(select controldatatype from kbentityscreenconfigurationmst where entitydefid=VEntityDefId and controltitle=Vsearchmetric);
+
+	Vsearchmetricdatatype:=(select datatypename From kbmasterdatatypes where lower(datatypealias)=lower(Vsearchmetricdatatype));
+
+end;
+end if;
+
+VPagesize:=100;
+
+VFromrecord:=((VPageNo*VPagesize)-VPagesize)+1;
+
+VTorecord:=(VPageNo*VPagesize);
+
+VEntdefTablename:=(select entitytablename from kbentitymst where entitydef_id=VEntityDefId and isactive='1');
+
+	Insert into Entitymetrics(columnname)
+	select controltitle 
+	from kbentityscreenconfigurationmst 
+	where entitydefid=VEntityDefId 
+	order by screenid asc limit 5 ;
+
+	VEntDeftblcols:='';
+	VEntDeftblcols:=(Select string_agg(Ecolumns,'||') as cols
+			From
+			(
+				select 'coalesce(cast("'||ColumnName||'" as varchar(500)),'''')||''#sep0#''||'''||ColumnName ||'''||''#sep1#''' as Ecolumns
+				from Entitymetrics
+				Order by id
+			)cols	); 
+
+	If VEntDeftblcols is not null then
+	begin
+		Vsql:=
+			'Insert into EntitiesCreation(EntityName,ColumnName,ColumnValue) select eid,substring(outputdata,position(''#sep0#'' in outputdata)+6, char_length( outputdata)) as labels ' 
+			||', substring(outputdata,0,position(''#sep0#'' in outputdata)) as datas '
+			||' from	( '
+			||' select eid,regexp_split_to_table(edata,''#sep1#'') as outputdata,serials ' 
+			||' from ( select row_number() over(order by modifieddate desc) serials,eid,edata from ('
+			||' select distinct "ID" eid,"ModifiedDate" modifieddate, ' || VEntDeftblcols||' as edata from '||VEntdefTablename||' where '
+			|| 	case when Vsearchmetric is not null then 
+					case when lower(Vsearchmetricdatatype) like '%char%' then 'Lower("'||Vsearchmetric||'")' 
+						when lower(Vsearchmetricdatatype) like '%int%' then 'cast("'||Vsearchmetric||'" as varchar(255))'
+						when lower(Vsearchmetricdatatype)='bool' then 'cast("'||Vsearchmetric||'" as varchar(10))'
+						when lower(Vsearchmetricdatatype)='bit' then 'cast("'||Vsearchmetric||'" as varchar(10))'
+					else '"'||Vsearchmetric||'"' end
+				else '''1''' end ||' like ' ||
+				case when Vsearchtext is not null then 
+					case when lower(Vsearchmetricdatatype) like '%char%' then 'Lower('||'''%'||Vsearchtext ||'%'''||')'  else '''%'||Vsearchtext ||'%''' end
+				else '''1''' end
+			||' and "ISACTIVE"=''1'') inps) inps1 where serials between ' || Vfromrecord || ' and ' || Vtorecord || ' order by serials) a ' ;
+		--return(select row_to_json(a) from ( select Vsql) a);
+		Execute(Vsql);
+		execute('select count(distinct "ID") from '||VEntdefTablename||' where '
+			||	case when Vsearchmetric is not null then 
+					case when lower(Vsearchmetricdatatype) like '%char%' then 'Lower("'||Vsearchmetric||'")' 
+						when lower(Vsearchmetricdatatype) like '%int%' then 'cast("'||Vsearchmetric||'" as varchar(255))'
+						when lower(Vsearchmetricdatatype)='bool' then 'cast("'||Vsearchmetric||'" as varchar(10))'
+						when lower(Vsearchmetricdatatype)='bit' then 'cast("'||Vsearchmetric||'" as varchar(10))'
+					else '"'||Vsearchmetric||'"' end
+				else '''1''' end ||' like ' ||
+				case when Vsearchtext is not null then 
+					case when lower(Vsearchmetricdatatype) like '%char%' then 'Lower('||'''%'||Vsearchtext ||'%'''||')'  else '''%'||Vsearchtext ||'%''' end
+				else '''1''' end
+			||' and "ISACTIVE"=''1''') into Vtotalrows;
+		VTotalpages:=(select round(ceiling((Vtotalrows)/100.00)));
+		
+	end;
+	end if;
+
+	delete from EntitiesCreation where ColumnName is null or ColumnName='';
+	--return(select array_to_json(array_Agg(row_to_json(a))) from ( select * from EntitiesCreation) a);
+
+	-- Insert into EntitiesCreation(EntityName,ColumnName,ColumnValue)
+-- 	select entity_id, entscr.controltitle ilabel, ival
+-- 	from
+-- 	(select controltitle from kbentityscreenconfigurationmst where entitydefid=VEntityDefId order by screenid asc limit 5) entscr
+-- 	left join 
+-- 	(
+-- 		select entity_id
+-- 		,ilabel, ival
+-- 		from
+-- 		(
+-- 			select  
+-- 			row_number() over(order by entity_id) iserial
+-- 			,entity_id
+-- 			,EDScreen->>'Label' ilabel
+-- 			,EDScreen->>'InputValue' ival
+-- 			from
+-- 			(
+-- 				Select entity_id,json_array_elements(EDScreen) as EDScreen
+-- 				,row_number() over(order by entity_id) iserial
+-- 				From
+-- 				(
+-- 					select entity_id,entity_name, ivalue->'Entity'->'Master' as EDScreen
+-- 					from
+-- 					(
+-- 						select   entity_id, entity_name,screenjson ivalue
+-- 						from kbentities ents 
+-- 						where ents.entitydef_id=VEntityDefId and ents.isactive='1'
+-- 					) entity
+-- 				)a
+-- 			)entityscreen
+-- 			 where EDScreen->>'Label'= case when Vsearchmetric is not null then Vsearchmetric else EDScreen->>'Label' end 
+--  			and EDScreen->>'InputValue' like  case when Vsearchtext is not null then '%'||Vsearchtext ||'%' else EDScreen->>'InputValue' end
+--  			and iserial between 	Vfromrecord and Vtorecord 
+-- 		)ent
+-- 			
+-- 	) escr	
+-- 	  on escr.ilabel=entscr.controltitle
+-- 	Order by entity_id,ilabel 
+-- 	;
+
+	
+
+	-- VFirstmetric:=(select columnname from Entitymetrics where id=1)	;
+-- 	Vsecondmetric	:=(select columnname from Entitymetrics where id=2)	;
+-- 	VThirdmetric	:=(select columnname from Entitymetrics where id=3)	;
+-- 	VFourthmetric	:=(select columnname from Entitymetrics where id=4)	;
+-- 	VFifthmetric	:=(select columnname from Entitymetrics where id=5)	;
+
+-- 
+-- 	execute(
+-- 		' select row_to_json(outs) from ( '||
+-- 		' select array_to_json(array_agg(row_to_json(ent))) "Entity" '||
+-- 		'	from '||
+-- 		'	(  '||	
+-- 		'		SELECT c.entity_id,     first.columnvalue "'|| VFirstmetric || '" ,  isecond.columnvalue "'|| Vsecondmetric ||'",  ithird.columnvalue "'||  VThirdmetric || '"'
+-- 		',  		ifourth.columnvalue "'|| VFourthmetric || '"'
+-- 		'		,  ififth.columnvalue "'|| VFifthmetric || '"'
+-- 		'		FROM (SELECT entityname entity_id
+-- 				      FROM EntitiesCreation
+-- 				      GROUP BY entityname) c
+-- 				JOIN EntitiesCreation first ON c.entity_id = first.entityname AND first.columnname ='''|| VFirstmetric || '''
+-- 				JOIN EntitiesCreation isecond ON c.entity_id = isecond.entityname AND isecond.columnname = '''||Vsecondmetric|| '''
+-- 				JOIN EntitiesCreation ithird ON c.entity_id = ithird.entityname AND ithird.columnname = '''||VThirdmetric|| '''
+-- 				JOIN EntitiesCreation ifourth ON c.entity_id = ifourth.entityname AND ifourth.columnname = '''||VFourthmetric|| '''
+-- 				JOIN EntitiesCreation ififth ON c.entity_id = ififth.entityname AND ififth.columnname = '''||VFifthmetric|| '''
+-- 			) ent	
+-- 		) outs	' 
+-- 	)into Ventitydata	
+-- 	;
+-- 
+-- 	return(select row_to_json(a) from (select Ventitydata)a);
+--  
+ 
+	Return(
+		Select Row_to_json(outs)
+		from
+		(
+			Select Row_to_json(ents) "Output"
+			From
+			(
+				Select Array_to_json(Array_Agg(Row_to_json(ent)))  "ENTITYDEFINITION"
+				from
+				(
+					Select entitydef_id "entitydefid", entity_name entitydefname,entitytype,screenjson screenconfig  
+					,Vtotalpages totalpages,VPageNo pageno
+					,(
+						Select array_to_json(array_agg(row_to_json(einst)))	"EntityMetrics"
+						from
+						(
+							select  columnname metricname
+							from Entitymetrics ents 
+						)einst	
+					)
+					,(
+						Select array_to_json(array_agg(row_to_json(einst)))	"Entity"
+						from
+						(
+							select entityname entity_id
+							, (select array_to_json(array_agg(row_to_json(eval))) "Entityvalues"
+								from 
+								(
+									select  columnvalue as "metricname"
+									from EntitiesCreation b 
+									where ents.entityname=b.entityname
+								) eval
+								) 
+							from EntitiesCreation ents 
+							join kbentities entity on cast(ents.entityname as int)=entity.entity_id
+							group by entityname,entity.modifieddate
+							Order by entity.modifieddate desc
+						)einst	
+					)
+					
+					from kbentitymst A 
+					where entitydef_id=VEntityDefId and exists(select 1 from users b where A.createdby=B.userid) and entitydef_id!=1
+				) ent	
+			) ents	
+		) outs	
+	);	
+
+End;
+
+end if; 
+
+/*exception when others then 
+		Return(
+
+				Select row_to_json(a) 
+				from
+				(select 500 "code", 'error' "message")a
+
+		);*/
+		
+
+ 
+End
+
+$function$;
+
+ALTER FUNCTION public.usp_kbentity(json)
+    OWNER TO postgres;
+
+

@@ -1,0 +1,555 @@
+-- FUNCTION: public.usp_kbusersjson
+
+-- DROP FUNCTION public.usp_kbusersjson;
+
+CREATE OR REPLACE FUNCTION public.usp_kbusers(
+	input json)
+RETURNS json
+    LANGUAGE 'plpgsql'
+    COST 100.0
+    VOLATILE 
+AS $function$
+
+DECLARE 
+	VUser_ID 	bigint;
+	VUserName 	VARCHAR(1000);
+	VTRAN		VARCHAR(30);
+	VCreated_By	int;
+	VPassword 	VARCHAR(50);
+	VEmailId	VARCHAR(255);
+	VUserType	int;
+	VRole		VARCHAR(1000);	
+	VUserAlias	VARCHAR(255);	
+	VActiondate	timestamp default(current_timestamp at time zone 'utc')	;
+	VRoles		json;
+	VCustomers	json;
+	VCustomerId	int;
+	VID		int;
+	Vuserlevel	smallint;
+	VToken		varchar(255);
+	
+Begin
+
+drop table if exists temps;
+drop table if exists TEMPTABLE;
+drop table if exists users;
+
+create temp table temps(id serial,ivalue json);
+create temp table TEMPTABLE (id serial,RoleId bigint);
+create temp table users (id serial,userid int);
+
+insert into temps(ivalue)
+select input;
+
+VTRAN:= (select ivalue->'User'->> 'TransType' from temps limit 1);
+VCreated_By:= (select ivalue->'User'->> 'LoginId' from temps limit 1);
+VUserName:= (select ivalue->'User'->> 'UserName' from temps limit 1);
+VPassword:= (select ivalue->'User'->> 'Password' from temps limit 1);
+VRole:=(select ivalue->'User'->> 'Role' from temps limit 1);
+VUserType:=(select ivalue->'User'->> 'UserType' from temps limit 1);
+VEmailId:=(select ivalue->'User'->> 'EmailId' from temps limit 1);
+VUserAlias:=(select ivalue->'User'->> 'UserAlias' from temps limit 1);
+VUser_ID:=(select ivalue->'User'->> 'UserId' from temps limit 1);
+VCustomerId:=(select ivalue->'User'->> 'CustomerId' from temps limit 1);
+VID:=(select ivalue->'User'->> 'VID' from temps limit 1);
+Vuserlevel=(select ivalue->'User'->> 'HierarchyLevel' from temps limit 1);
+
+If VCreated_By =1 then
+begin
+
+	insert into users(userid)
+	select userid
+	From
+	KBUserCustomerMapping A
+	Inner join
+	(
+		Select customerid 
+		from KBUserCustomerMapping
+		where userid=VCreated_By
+	) B  on A.customerid=B.customerid
+	;
+
+end;
+else 
+begin
+
+	insert into users(userid)
+	select userid
+	From
+	KBUserCustomerMapping A
+	Inner join
+	(
+		Select customerid 
+		from KBUserCustomerMapping
+		where userid=VCreated_By
+	) B  on A.customerid=B.customerid
+	where a.userid!=1
+	;
+
+end;
+end if;
+
+IF Lower(VTRAN)='checkname' then 
+Begin
+
+	if exists (select 1 from kbusermst where lower(user_name)=lower(VUserName)) then
+	begin
+		Return(
+			Select row_to_json(a) 
+			from
+			(select row_to_json(ou) "User" from (select 1 "code") ou)a
+		);
+	
+	end;
+	else
+	begin
+		Return(
+			Select row_to_json(a) 
+			from
+			(select row_to_json(ou) "User" from (select -1 "code") ou)a
+		);
+
+	end;
+	end if;
+
+End;
+ElseIF Lower(VTRAN)='getlogin' then 
+Begin
+
+Return(	
+
+ SELECT row_to_json(OUTPUT)
+		FROM
+ 		(	
+			SELECT ROW_TO_JSON(A) AS "data"
+			FROM
+			(
+				SELECT 1 as "Result",USER_ID AS "LoginId", USER_NAME "UserName", EMAILID AS "EmailId", USERALIAS AS "UserAlias", USERTYPE   AS "USERTYPE"
+				,2 "max_hierarchylevel"
+				,hierarchy_level "HierarchyLevel"
+				, case when USER_ID=1 then 1 else 
+				(SELECT DISTINCT LICENSEKEYID FROM KBUSERCUSTOMERMAPPING B JOIN KBLICENSEDETAILS LICENSE ON B.CUSTOMERID= LICENSE.CUSTOMERID WHERE USERS.USER_ID=B.USERID LIMIT 1) end AS "VID"
+				,CreatedBy as "CreatedBy"
+				,FirstName as "FirstName"
+				,LastName as "LastName"
+				,CreatedBy as "Role"
+				,CreatedDate as "CreatedDate"
+				,CreatedBy as "ImageUrl"
+				,CreatedBy as  "Age"
+				,CreatedBy as "UserDescription"
+				,CreatedBy as "NoOfChildren"
+				,CreatedBy as  "Address"
+				,CreatedBy as  "City"
+				,CreatedBy as "State"
+				,CreatedBy as "Country"
+				,CreatedBy as "Pincode"
+				,CreatedBy as "Latitude"
+				,CreatedBy as "Longitude"
+				,CreatedBy as  "Phoneno"
+				,
+				(
+				 
+						select Array_to_json(array_Agg(row_to_json(rols))) "roles"
+						from
+						(
+							select urole.role_id roleid, rolmst.role_name "name"
+							,
+							(
+								select Array_to_json(array_Agg(row_to_json(scrs))) "roledetails"
+								from
+								(
+									select scrmst.screen_id,scrmst.screen_name, rolfeat.create "cancreate",rolfeat.update "canupdate",rolfeat.delete "candelete",rolfeat.read_only "canread"
+									from
+									kbrolefeatures rolfeat 
+									Join kbscreensmst scrmst on rolfeat.screen_id=scrmst.screen_id
+									where urole.role_id=rolfeat.role_id
+								) scrs	
+							)
+							,
+						(
+							Select Row_to_json(entdet) as "EntityDetails"
+							From
+							(
+								Select Array_to_json(Array_Agg(Row_to_json(ents))) "Entity"
+								from
+								(
+									select    ENT.ENTITYDEF_ID as "DefID",ENT.ENTITY_NAME as "DefName"
+									,
+										(
+											select Array_to_json(Array_Agg(Row_to_json(ent))) "Entity"
+											from
+											(
+												select     RD2.entity_id as "ID",ENTITY.ENTITY_NAME "NAME"
+												-- ,
+-- 												(
+-- 													Select Row_to_json(locs) "Locations"
+-- 													from
+-- 													(
+-- 														Select Array_to_json(Array_Agg(Row_to_json(loc))) "Location"
+-- 														from
+-- 														(
+-- 															select distinct RD3.entity_locationid as "ID"
+-- 															--,Loc.LOCATION_NAME as "NAME"
+-- 															from kbroledetails RD3 
+-- 															where RD3.Entity_id=RD2.Entity_id and RD3.role_id=RD2.role_id 
+-- 															and RD3.is_event_report is null
+-- 															--for xml raw('Location'),root('Locations')
+-- 														)as loc
+-- 													)locs
+-- 												)					
+												from kbentities ENTITY
+												join kbroledetails RD2 on RD2.entity_id=ENTITY.ENTITY_ID  
+												where RD2.role_id=RD1.role_id  and RD2.entitydef_id=RD1.entitydef_id  
+													--and  RD2.is_event_report is null
+												group by RD2.role_id  ,RD2.entitydef_id,ENTITY.ENTITY_NAME ,RD2.entity_id 
+												--for xml raw('Entity')
+											) as ent
+										)	
+								from kbroledetails RD1 
+								join kbentityMst ENT on ent.ENTITYDEF_ID=RD1.entitydef_id 
+								where  RD1.role_id= rolmst.Role_id  
+								group by ENT.ENTITY_NAME,ENT.ENTITYDEF_ID ,RD1.role_id,RD1.entitydef_id 
+								--for xml raw('Entity'),root('EntityDetails') 
+								)as ents
+							) entdet	
+						)
+							from 
+							kbuserrole urole
+							Join kbrolemst rolmst on urole.role_id=rolmst.role_id
+							where urole.user_id=users.user_id
+							group by  urole.role_id, rolmst.role_name,rolmst.Role_id  
+						) rols
+					 
+				)	
+				FROM 
+				KBUSERMST USERS 
+				WHERE USER_NAME=VUSERNAME AND PASSWORD=VPASSWORD 
+				--AND STATUS='1'
+				ORDER BY USER_ID
+			)A
+		)OUTPUT
+	)
+;
+
+End;
+ElseIf Lower(VTRAN)='create'
+then
+begin
+
+INSERT INTO KBUSERMST (USER_NAME ,EMAILID ,PASSWORD,USERALIAS,USERTYPE,createdby,MODIFIEDBY ,createddate,modifieddate,isactive,hierarchy_level )
+SELECT VUserName as USER_NAME , VEmailId as EMAILID ,VPassword as "PASSWORD",VUserAlias as USERALIAS,VUserType as USERTYPE,  VCreated_By 
+, VCreated_By ,VActiondate,VActiondate,1 as isactive,Vuserlevel
+where not exists(select 1 from kbusermst users where users.user_name=VUserName and isactive=1 )
+ ;
+VUser_ID:=(select user_id from kbusermst where user_name=VUserName and isactive=1 );
+
+Insert into KBUserCustomerMapping(UserID,CustomerID,CreatedBy,CreatedDate,ModifiedDate,ModifiedBy,IsActive)
+Values (VUser_ID, VCustomerid,VCreated_By,  VActiondate, VActiondate, VCreated_By,'1');
+
+insert into TEMPTABLE(RoleId)
+ SELECT cast(regexp_split_to_table(roles,',') as int) as roleid 
+ from
+ (
+ select replace(replace(replace(roles,'[',''),']',''),'"','') as roles
+ from
+ (
+select (ivalue->'User'->> 'Role') as roles 
+from temps 
+) a
+)b 
+;
+
+Insert into kbuserrole(user_id, role_id,isactive,createddate,createdby,modifieddate,modifiedby)
+select VUser_ID, RoleId,'1', Vactiondate,VCreated_By, Vactiondate,VCreated_By
+from
+TEMPTABLE a
+where not exists(select 1 from kbuserrole roles where roles.user_Id=VUser_ID and roles.role_id = a.roleid
+and isactive=1 )
+;
+
+Return(select array_to_json(array_agg(row_to_json(output)))
+from
+(
+SELECT 	VUserName as "UserName" 
+	, VPassword as "Password"
+	, VUserAlias as "UserAlias"
+	, VEmailId as "EmailId" 
+	, VUserType as "UserType"
+	, VRole as "Role"
+)output);
+end;
+
+ElseIf Lower(VTRAN)='metadata' Then
+begin
+
+Vroles:=(select array_to_json(array_agg(row_to_json(a))) as "Role"
+from
+(
+select role_id "Id", role_name as "Name" 
+from kbrolemst a
+where isactive=1 and exists(select 1 from users b where a.createdby=b.userid)
+--limit 10
+) a
+)
+;
+
+If VID=1 then
+VID:=NULL;
+end if;
+
+Vcustomers:=
+(select array_to_json(array_agg(row_to_json(a))) as "Customer"
+from
+(
+ 
+select cust.customerid as "Id", cust.customername as "Name" 
+from kbcustomersmst cust
+Join kblicensedetails lic on cust.customerid=lic.customerid
+where cust.customerid!=1 and isactive='1' and (lic.licensekeyid=coalesce(VID,lic.licensekeyid) or cust.createdby=VCreated_By)
+--limit 10
+) a
+)
+
+;
+
+Return(select array_to_json(array_agg(row_to_json(output))) as "User"
+from
+(
+Select VRoles, Vcustomers
+) output
+);
+end;
+ElseIf Lower(VTRAN)='viewall' Then
+Begin
+ 
+Return(
+Select array_to_json(array_agg(row_to_json(main))) as "UserDetails"
+from
+(
+	Select array_to_json(array_agg(row_to_json(output))) as "User"
+	From
+	(
+	Select A.user_id "UserId",A.user_name as "UserName", A.emailid as "EmailId", A.isactive as "Active" , B.user_name "CreatedBy"
+	, case when A.user_id=1 then 0 else A.hierarchy_level end "User_Level"
+	, case when B.user_id=1 then 0 else B.hierarchy_level end "CreatedByUser_Level"
+	,A.usertype "UserType"
+	,B.usertype "CreatedBy_UserType"
+	from kbusermst A
+	join kbusermst B on A.createdby=B.user_id
+	where exists (Select 1 from users B where A.user_id=B.userid)
+	Order by A.user_id
+	)output
+) main)
+;
+ 
+End;
+ElseIf Lower(VTRAN)='view' Then
+begin
+
+Return(select array_to_json(array_agg(row_to_json(output))) as "User"
+from
+(
+Select user_id "UserId",user_name as "UserName",Password "Password", emailid as "EmailId", usertype as "UserType", users.isactive as "Active" , UserAlias as "UserAlias" 
+, custsmap.customerid as "CustomerId"
+,(
+	 select string_to_array(id,',') as "Role"
+		from(
+			select string_agg(cast(role_id as varchar(10)),',') as id
+			from kbuserrole roles 
+			where roles.user_id=users.user_id
+			and isactive=1
+			group by roles.user_id
+		)arrays	
+)
+from 
+kbusermst users
+Join kbusercustomermapping custsmap on users.user_id=custsmap.userid
+where user_id=VUser_Id
+) output
+)
+; 
+End;
+Elseif Lower(VTRAN)='assignroletouser' Then
+begin
+
+insert into TEMPTABLE(RoleId)
+SELECT cast(regexp_split_to_table(roles,',') as int) as roleid 
+from
+(
+select replace(replace(roles,'[',''),']','') as roles
+from
+(
+select (ivalue->'User'->> 'Role') as roles 
+from temps 
+) a
+)b ;
+
+ Update kbuserrole set isactive=0
+ where user_id=VUser_ID and not exists (select 1 from TEMPTABLE b where kbuserrole.role_id=b.roleid);
+
+Insert into kbuserrole(user_id, role_id,isactive,createddate,createdby,modifieddate,modifiedby)
+select VUser_ID, RoleId,'1', Vactiondate,VCreated_By, Vactiondate,VCreated_By
+from
+TEMPTABLE a
+where not exists(select 1 from kbuserrole roles where roles.user_Id=VUser_ID and roles.role_id = a.roleid
+and isactive=1 )
+;
+
+Return(select array_to_json(array_agg(row_to_json(output))) as "Result"
+from
+(
+select '1' as "Result"
+)output
+);
+End;
+ElseIf Lower(VTRAN)='update' Then
+begin
+ 
+Update kbusermst set password=Vpassword,  useralias=VUserAlias, usertype=Vusertype,emailid= VEmailId
+where user_id=VUser_ID;
+
+insert into TEMPTABLE(RoleId)
+SELECT cast(regexp_split_to_table(roles,',') as int) as roleid 
+from
+(
+select replace(replace(replace(roles,'[',''),']',''),'"','') as roles
+from
+(
+select (ivalue->'User'->> 'Role') as roles 
+from temps 
+) a
+)b ;
+
+ Update kbuserrole set isactive=0
+ where user_id=VUser_ID and not exists (select 1 from TEMPTABLE b where kbuserrole.role_id=b.roleid);
+
+Insert into kbuserrole(user_id, role_id,isactive,createddate,createdby,modifieddate,modifiedby)
+select VUser_ID, RoleId,'1', Vactiondate,VCreated_By, Vactiondate,VCreated_By
+from
+TEMPTABLE a
+where not exists(select 1 from kbuserrole roles where roles.user_Id=VUser_ID and roles.role_id = a.roleid
+and isactive=1 )
+;
+
+Return(select array_to_json(array_agg(row_to_json(output))) as "User"
+from
+(
+Select user_id "UserId",user_name as "UserName",Password "Password", emailid as "EmailId", usertype as "UserType", isactive as "Active" , 
+(
+	 select string_to_array(id,',') as "Role"
+		from(
+			select string_agg(cast(role_id as varchar(10)),',') as id
+			from kbuserrole roles 
+			where roles.user_id=users.user_id
+			and isactive=1
+			group by roles.user_id
+		)arrays	
+)
+from 
+kbusermst users
+where user_id=VUser_Id
+) output
+)
+; 
+
+end;
+
+Elseif Lower(VTRAN)='delete' Then
+Begin
+
+update kbuserrole set isactive=2 where user_id=VUser_id;
+
+update kbusermst set isactive=2, isdeleted='1' where user_id=VUser_id;
+
+ 
+Return(select array_to_json(array_agg(row_to_json(output))) as "Result"
+from
+(
+select '1' as "Result"
+)output
+);
+
+End;
+Elseif  Lower(VTRAN)='forgotpassword' Then
+Begin
+
+	select ivalue->'User'->> 'Token' ,
+	ivalue->'User'->> 'Emailid' 
+	into VToken, VEmailId
+	from temps 
+	limit 1;
+	 
+	If Exists(select 1 from kbusermst where emailid=VEmailId) then
+	begin
+		insert into kbuser_passwordtokens(token,userid,createddate,createdby,modifieddate,modifiedby,isactive)
+		select VToken, (select user_id from kbusermst where emailid=VEmailId), Vactiondate,VCreated_By, Vactiondate,VCreated_By,'1';
+
+		Return(
+
+			Select row_to_json(a) 
+			from
+			(select 200 "code", 'success' "message",(select row_to_json(usr) as "User" from (select VToken "Token",VEmailId "Emailid") usr))a
+		);
+	end;
+	else
+	begin
+		Return(
+
+			Select row_to_json(a) 
+			from
+			(select 500 "code", 'error' "message")a
+
+			);
+
+	end;
+
+	end if;
+
+end;
+Elseif  Lower(VTRAN)='resetpassword' Then
+Begin
+
+	select ivalue->'User'->> 'Token' ,
+	ivalue->'User'->> 'password' 
+	into VToken, VPassword
+	from temps 
+	limit 1;
+	 
+	If Exists(select 1 from kbuser_passwordtokens where token=VToken and isactive='1') then
+	begin
+
+		Update kbusermst set password=VPassword ,modifieddate=VActiondate,Modifiedby=Vcreated_by
+		where user_id=(select userid from kbuser_passwordtokens where token=VToken and isactive='1');
+
+		Update kbuser_passwordtokens set isactive='0' where token=VToken and isactive='1';
+		
+		Return(
+
+			Select row_to_json(a) 
+			from
+			(select 200 "code", 'success' "message")a
+		);
+	end;
+	else
+	begin
+		Return(
+
+			Select row_to_json(a) 
+			from
+			(select 500 "code", 'error' "message")a
+
+			);
+
+	end;
+	end if;
+end;
+End if;
+
+End
+
+$function$;
+
+ALTER FUNCTION public.usp_kbusers(json)
+    OWNER TO postgres;
+
+

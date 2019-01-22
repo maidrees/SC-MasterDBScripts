@@ -1,0 +1,45 @@
+-- FUNCTION: public.usp_kbgetrules_c2json
+
+-- DROP FUNCTION public.usp_kbgetrules_c2json;
+
+CREATE OR REPLACE FUNCTION public.usp_kbgetrules_c2(
+	input json DEFAULT NULL::json)
+RETURNS json
+    LANGUAGE 'plpgsql'
+    COST 100.0
+    VOLATILE 
+AS $function$
+
+begin
+
+Return(select row_to_json(outs) 
+from
+(
+select Array_agg(id) "id"
+from
+(
+select coalesce(originalid,kpi_id) id 
+from kbkpimst where isactive='1'
+order by id
+)A
+)outs
+);
+
+exception when others then 
+		Return(
+
+				Select row_to_json(a) 
+				from
+				(select 500 "code", 'error' "message")a
+
+		);
+
+end
+
+$function$;
+
+ALTER FUNCTION public.usp_kbgetrules_c2(json)
+    OWNER TO postgres;
+
+
+

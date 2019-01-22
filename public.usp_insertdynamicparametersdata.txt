@@ -1,0 +1,150 @@
+-- FUNCTION: public.usp_insertdynamicparametersdatajson
+
+-- DROP FUNCTION public.usp_insertdynamicparametersdatajson;
+
+CREATE OR REPLACE FUNCTION public.usp_insertdynamicparametersdata(
+	input json)
+RETURNS json
+    LANGUAGE 'plpgsql'
+    COST 100.0
+    VOLATILE 
+AS $function$
+
+Declare 
+	VLocationID bigint;
+	VLatLong Text ; 
+	VName varchar(255);
+	iValue varchar(255);
+	VActiondate		timestamp default(current_timestamp at time zone 'utc')	;	
+Begin
+
+drop table if exists temps;
+drop table if exists Parameters;
+drop table if exists DynamicParams;
+drop table if exists DynamicString;
+
+create temp table temps(id serial,inpvalue json);
+
+create temp table Parameters(id serial, "Name" varchar(512),Locationid int, Latitude varchar(512), Lonigtude varchar(512), Pincode varchar(512),
+StreetName varchar(512),CityName varchar(512), StateName varchar(512), CountryName varchar(512), "Value" varchar(512));
+
+create temp table DynamicParams(Id serial,DetailsID Int,UrlID int,sourceid int,PARAMVALUETYPE varchar(255),PARAMVALUE varchar(255),ParamName varchar(255),LocationDimId bigint);
+
+create temp table DynamicString (Id serial,UrlID INT,sourceID int,"Name" varchar(512),"Value" varchar(512),ParamName varchar(255));
+		
+
+	insert into temps(inpvalue)
+	select input;
+
+	Insert into Parameters("Name","Value")
+	SELECT
+	cols->>'name' "name"
+	,cols->>'value' "value"
+	from 
+	(
+		Select json_Array_elements(col) cols
+		from
+		(
+			select inpvalue->'ROOT'->'ROW'-> 'COLUMN' col 
+			from temps limit 1
+		) inp
+	) vals
+	;
+
+	VLocationID:=(Select "Value" from Parameters where lower("Name")='locationid') ;
+
+	if(select count(1) from Parameters where "Name" ='Latitude')>0 then
+	Begin
+		
+		VLatLong:= 				
+				(
+					Select String_Agg(val,' ')
+					from
+					(
+						select "Value" val 
+						FROM Parameters 
+						where lower("Name") in ('latitude','longitude')
+					) vals	
+				);
+
+		Insert into Parameters("Name","Value")
+		select 'Latitude,Longitude',VLatLong;
+	END;
+	end if;
+
+	Insert into DynamicParams(DetailsID,UrlID,sourceid,PARAMVALUETYPE,PARAMVALUE,ParamName,LocationDimId)
+	select distinct iValue.URLDETAILSID,iValue.URLID,iValue.sourceid,iType.PARAMVALUE_Type,iValue.PARAMVALUE  ,iValue.Param_Name,LocationDimID
+	from 
+	(
+		select Main.URLDETAILSID,Main.URLID,Main.SOURCEID, Item PARAMVALUE
+		,row_number() over (partition by Main.URLDETAILSID order by Main.URLDETAILSID )irow ,Main.Param_Name,LocationDimID
+	
+		from   
+		(
+			select URLDETAILSID, URLID, SOURCEID,Param_Name,LocationDimID 
+			,Regexp_split_to_table(Param_Value,',')  Item 
+			from kbsourceurldetails 
+			where Param_Valuetype is not null
+		) Main
+		--cross apply dbo.fnsplit(Main.Param_Value,',') Value
+	) iValue
+	inner join 
+	(
+			select Main.URLDETAILSID,Main.URLID,Main.sourceid, Item PARAMVALUE_TYPE
+			,row_number() over (partition by Main.URLDETAILSID order by Main.URLDETAILSID )irow 
+			from   
+			(
+				select URLDETAILSID, URLID, SOURCEID,Param_Name,LocationDimID 
+				,Regexp_split_to_table(Param_Valuetype,',')  Item 
+				from kbsourceurldetails 
+				where Param_Valuetype is not null
+			) Main
+	) iType on iValue.URLDETAILSID=iType.URLDETAILSID  and iValue.irow=iType.irow
+	JOIN KbDynamicParameterListMst MST On MST.sourceid=iValue.sourceid and MST.urlid=iValue.URLID  ;
+
+	Insert into DynamicString(UrlID,sourceID, "Name","Value",ParamName )
+	select DP.URLID,DP.sourceID,P."Name",P."Value",DP.PARAMNAME
+	from DynamicParams DP
+	JOIN Parameters P on lower(P."Name")=lower(DP.PARAMVALUETYPE)
+	where NOT Exists(select 1 from DynamicParams BB where lower(DP.PARAMVALUE)=lower(BB.PARAMVALUE) 
+					and lower(DP.ParamName)=lower(BB.ParamName) and Coalesce(DP.LocationDimId,0)=VLocationID)
+					and lower(DP.ParamName)!=lower(P."Name")
+	Group by P.ID,P."Name",P."Value",DP.PARAMNAME/*DP.PARAMVALUETYPE*/,DP.URLID,DP.sourceID
+	Order by P.ID;
+
+-- 	VName:='' ;
+-- 
+-- 	VName:=		
+-- 		(
+-- 			Select String_Agg(nam,',')
+-- 			from
+-- 			(
+-- 				select "Name" Nam 
+-- 				FROM DynamicString 
+-- 			) vals	
+-- 		);
+-- 
+-- 	iValue:=(
+-- 			Select String_Agg(val,' ')
+-- 			from
+-- 			(
+-- 				select "value" val 
+-- 				FROM DynamicString 
+-- 			) vals	
+-- 		);
+
+Insert into kbsourceurldetails(URLID,SOURCEID,PARAM_VALUE,PARAM_VALUETYPE,FilterOption,PARAM_TYPE,Param_Name,LocationDimID,createddate,modifieddate)
+select distinct UrlID,sourceID,"Value","Name",'Location','Dynamic',ParamName ,VLocationID,Vactiondate,Vactiondate
+from DynamicString;
+
+Return(select 100 );
+
+End
+
+$function$;
+
+ALTER FUNCTION public.usp_insertdynamicparametersdata(json)
+    OWNER TO postgres;
+
+
+

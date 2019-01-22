@@ -1,0 +1,75 @@
+-- FUNCTION: public.usp_validationqueryjson
+
+-- DROP FUNCTION public.usp_validationqueryjson;
+
+CREATE OR REPLACE FUNCTION public.usp_validationquery(
+	input json)
+RETURNS json
+    LANGUAGE 'plpgsql'
+    COST 100.0
+    VOLATILE 
+AS $function$
+
+DECLARE
+		vfromdate timestamp without time zone;
+        vtodate timestamp without time zone;
+        vdate timestamp without time zone;
+        vresult varchar(10);
+begin
+drop table if exists temps;
+
+create temp table temps(id serial,ivalue json);
+
+insert into temps(ivalue)
+select input;
+
+select ivalue->'root'->> 'date'
+into
+vresult from temps limit 1;
+
+vdate=(select now():: date - INTERVAL '1 DAY');
+vtodate=(vdate::date || ' 23:59:59'); 
+vfromdate:=(now():: date - INTERVAL '1 DAY' );
+
+return (
+	Select Row_to_json(outs)
+	from
+	(
+		Select Array_to_json(Array_agg(Row_to_json(spk))) "SPOKENAME"
+		from
+		(
+			SELECT 
+    sourcetype_name,sourcetype_id
+            ,				(
+							
+  ( Select Array_to_json(Array_agg(row_to_json(pull))) "pull"
+   From 
+   (
+	Select pull.createddate,callstatus from kbenginewisedatafetchinginformation pull
+    where engineinstanceid='p493ed206-e2eb-4837-acc5-1f70308227c544-1'
+    and callstatus = mst.sourcetype_id
+    and pull.createddate>=vfromdate and pull.createddate<=vtodate
+    order by callstatus
+    ) pull 
+     ) ,
+    (Select Array_to_json(Array_agg(row_to_json(errors))) "errors" 
+     From 
+     (
+        Select sourceid,spname as engineinstanceid,errormesssage,sinput as error from nmsspperformancelogger err
+         where sourceid=mst.sourcetype_id and 
+         err.createddate>=vfromdate and err.createddate<=vtodate
+         ) errors
+       )
+	) validation
+            
+ FROM KBsourcetypemst mst
+       ) spk
+	) outs		
+	);
+
+End;
+
+$function$;
+
+ALTER FUNCTION public.usp_validationquery(json)
+    OWNER TO postgres;

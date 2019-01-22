@@ -1,0 +1,70 @@
+-- FUNCTION: public.usp_kbsetkpiexpirystatusjson
+
+-- DROP FUNCTION public.usp_kbsetkpiexpirystatusjson;
+
+CREATE OR REPLACE FUNCTION public.usp_kbsetkpiexpirystatus(
+	input json)
+RETURNS json
+    LANGUAGE 'plpgsql'
+    COST 100.0
+    VOLATILE 
+AS $function$
+
+DECLARE
+	VCreated_By		int;
+	VKPI_ID			int;
+	VActiondate		timestamp default(current_timestamp at time zone 'utc')	;	
+Begin
+
+drop table if exists temps;
+
+create temp table temps(id serial,ivalue json);
+
+insert into temps(ivalue)
+select input;
+
+select 
+	ivalue->'kpi'->> 'kpiid'
+	into 
+	VKPI_ID			
+from temps limit 1;
+
+If not exists(select 1 from kbkpimst  where coalesce(originalid,kpi_id)=VKPI_ID and isactive=1) then
+Return(
+
+	Select row_to_json(a) 
+	from
+	(select 500 "code", 'invalid kpi id' "message")a
+
+);
+end if;
+
+VCreated_By:=(select createdby from kbkpimst where coalesce(originalid, kpi_id)=VKPI_ID and isactive=1);
+ 
+Update kbkpischedules set isdeleted='1' , isactive='0',dateofexpiry=Vactiondate,modifieddate=Vactiondate where kpi_id=VKPI_ID and isactive='1';
+
+Update kbkpimst set isdeleted='1' , isactive=0,modifieddate=Vactiondate where coalesce(originalid,kpi_id)=VKPI_ID and isactive=1;
+
+	Return(
+
+		Select row_to_json(a) 
+		from
+		(select 'success' "message")a
+	);
+
+exception when others then 
+		Return(
+
+				Select row_to_json(a) 
+				from
+				(select 500 "code", 'error' "message")a
+
+		);
+
+End
+
+$function$;
+
+ALTER FUNCTION public.usp_kbsetkpiexpirystatus(json)
+    OWNER TO postgres;
+

@@ -1,0 +1,98 @@
+-- FUNCTION: public.usp_servgetspokebusinessrulesjson
+
+-- DROP FUNCTION public.usp_servgetspokebusinessrulesjson;
+
+CREATE OR REPLACE FUNCTION public.usp_servgetspokebusinessrules(
+	input json DEFAULT NULL::json)
+RETURNS json
+    LANGUAGE 'plpgsql'
+    COST 100.0
+    VOLATILE 
+AS $function$
+
+begin
+
+Return
+(	
+
+	Select Row_to_json(output) 
+	from
+	(
+		Select Row_to_json(business) "BUSINESSRULES"
+		From
+		(
+			select Array_to_json(Array_agg(row_to_json(SPK))) as "SPOKE"
+			From
+			(
+				Select SOURCETYPE_ID "ID"
+				,Upper(Alias) "NAME"
+				,PrimaryKeyColumns  "PRIMARYKEY"
+				,Coalesce(CALLTIMEMETRICS,'') "CALLTIMEMETRICS"
+				,Coalesce(CALLSTARTTIME,'')	"CALLSTARTTIME"
+				,Coalesce(HasNlegsNMachine,'') "HASNLEGS"
+				,'' 				"PROCESSTYPE"
+				,Coalesce(ENTITYIDENTIFIER ,'')	"CUSTOMERIDENTIFIER"
+				,Coalesce(ENTITYIDENTIFIER_service,'') "ENTITYIDENTIFIER_SERVICE"
+				,'' 				"PHONENUMBER"
+				,Coalesce(kstm.Input,'')		"DIRECTION"
+				,Coalesce(CallEndIdentitifer,'') "CALLENDIDENTITIFER"
+				,'' 				"DEVICEDATA"
+				,'' 				"USERALIASDATA"
+				,'UNIX' 			"CONVERSION"
+				,
+					(
+						Select Row_to_json(dimatt) as "DIMENSIONS"
+						from	
+						(
+							Select Array_to_json(Array_agg(row_to_json(dims))) as "DIMENSION"
+							From
+							(
+							SELECT METRICNAME "METRICNAME",ID as "DIMENSIONID"
+							, 'METRICNAME,DIMENSIONID' as "Attribute_list"
+							from KB_DIM_SOURCELINK KDS 
+							where KDS.SOURCEID=KSTM.SOURCETYPE_ID 
+							--for xml raw('DIMENSION'),ROOT('DIMENSIONS')
+							)as dims
+						) dimatt	
+					)  
+					,
+					(
+						Select Row_to_json(geomet) as "GEOFENCEMETRICS"
+						From
+						(
+							Select Array_to_json(Array_agg(row_to_json(geo))) as "GEOFENCEMETRIC"
+							From
+							(
+							SELECT distinct KMM.METRICNAME "METRICNAME",KSMI.MetricDataType "MetricDataType",'METRICNAME,MetricDataType' "Attribute_list"
+							from KBSpokewiseMetricsInformation KSMI 
+							Inner join KBMetricMst KMM on KSMI.SourceTypeId=KMM.SOURCE_ID and KSMI.MetricID=KMM.METRIC_ID
+							where KSMI.SourceTypeId=KSTM.SOURCETYPE_ID and lower(KSMI.MetricDataType) in ('latitude','longitude','latitudelongitude')
+							--for xml raw('GEOFENCEMETRIC'),ROOT('GEOFENCEMETRICS')
+							) geo  
+						) as geomet 
+					)  
+				,(
+					Select B.LicenseKeyId 
+					from KBUserCustomerMapping A Join KBLicenseDetails B on A.CustomerID=B.CustomerId
+					where kstm.createdby=A.UserID
+					Limit 1
+				)	"VID"
+				,MasterSpokeid	"MASTERSPOKEID"
+				,'ID,NAME,PRIMARYKEY,CALLTIMEMETRICS,CALLSTARTTIME,HASNLEGS,PROCESSTYPE,CUSTOMERIDENTIFIER,ENTITYIDENTIFIER_SERVICE,PHONENUMBER,DIRECTION,CALLENDIDENTITIFER'
+				|| ',DEVICEDATA,USERALIASDATA,CONVERSION,MASTERSPOKEID' "Attribute_list"
+				from KBSourceTypeMst KSTM
+				where IsActive='1' and coalesce(masterspokeid,0)=0
+				--FOR XML RAW('SPOKE'),ROOT('BUSINESSRULES')
+			)spk	
+		) Business	
+	)output	
+);
+
+End
+
+$function$;
+
+ALTER FUNCTION public.usp_servgetspokebusinessrules(json)
+    OWNER TO postgres;
+
+

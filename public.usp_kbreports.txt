@@ -1,0 +1,4565 @@
+-- FUNCTION: public.usp_kbreportsjson
+
+-- DROP FUNCTION public.usp_kbreportsjson;
+
+CREATE OR REPLACE FUNCTION public.usp_kbreports(
+	input json)
+RETURNS json
+    LANGUAGE 'plpgsql'
+    COST 100.0
+    VOLATILE 
+AS $function$
+
+DECLARE
+	VTRAN		VARCHAR(30);
+	VReportConfigurationid	int;
+	VResult		json;
+	VCorrelations 	Json;
+	VDimensions 	Json;
+	VEntities	Json;
+	VFNAME		json;
+	VCreated_By	int;
+	VID		int;
+	VDATARETENTIONPERIOD smallint;
+	VUOM		Varchar(50);
+	VACTIONONHISTORICALDATA	Varchar(50);
+	VDATABACKUPPATH	Varchar(255);
+	VCorrelationId	int;
+	VSNAPSHOTFROMDATE	Varchar(50);
+	VSNAPSHOTTODATE	Varchar(50);
+	VSTORAGETYPE	smallint;
+	VREGULARFROMDATE varchar(50);
+	VDimensionId	int;
+	VDimensionName	varchar(255);
+	VReportOn 	smallint;
+	VPage		smallint;
+	VRecsPerPage	smallint;
+	VReportConfigurationName Varchar(255);
+	VReportConfigurationDescription Varchar(1000);
+	VIsPivote	smallint;
+	VReportType	varchar(100);
+	VPastDataFrom	smallint;
+	VPastDataFromUOM	smallint;
+	VDataFetchFrequency	smallint;
+	VDataFetchFrequencyUOM	smallint;
+	VDatasources	Varchar(100);
+	VNullUpdateTime	smallint;
+	VNullUpdateTimeUOM	smallint;
+	VSelectedDataSources varchar(100);
+	VSourceTypeID	bigint;
+	VJoinquery	Text;
+	VcorrelationName	varchar(255);
+	VCount 		int;
+	VCounter	int;
+	VReportcols	text;
+	VReportsql	text;
+	VSrccols	text;
+	VInsertquery	text;
+	VRes		text;
+	VReportcols1	text;
+	VReportsql1	text;
+	VSrccols1	text;
+	VInsertquery1	text;
+	VRes1		text;
+	VsrcName	varchar(255);
+	VSName		varchar(255);
+	Vsrctable	varchar(255);
+	VVerticastring  Text;
+	VVerticaupdate  text;
+	VrecordedtaeUtc text;
+	VPlaceholders	text;
+	VDateString	text;
+	VSelectedDataSources_output	json;
+	VLocDimensions	Json;
+	VtimeDimensions	Json;
+	VServiceTime	smallint;
+	VServiceTimeUOM	varchar(50);
+	VDetid		int;
+	VDataid		int;
+	VActiondate	timestamp default(current_timestamp at time zone 'utc')	;
+    Vuserquery varchar(8000);
+
+begin
+
+drop table if exists temps;
+drop table if exists users ;
+drop table if exists Tempdata;
+drop table if exists KPI;
+drop table if exists Dimension;
+drop table if exists EntitiesTable;
+drop table if exists selectedkpi;
+drop table if exists selectedevents;
+drop table if exists InputMetrics;
+drop table if exists SourceTable;
+
+create temp table temps(id serial,ivalue json);
+create temp table users (id serial,userid int);
+
+create temp table Tempdata(ReportConfigurationID bIgint,IsEnviDataSrc int,SourceTypeID int,MetricID Bigint,MetricName varchar(1000),CreatedBy Bigint,ModifiedBy Bigint
+,ENTITYDEFID Bigint,TblColumnName varchar(500),Type varchar(100),DIMENSIONID Bigint,DIMENSION_ATTRIBUTE varchar(500),MetricColumnAlias varchar(1000)
+,DimensionColumnAlias varchar(1000),columntype varchar(100));
+
+create temp table KPI
+(RecordId Serial,ReportConfigurationID INT,IsEnviDataSrc	INT,SourceTypeID INT
+,MetricID INT,MetricName VARCHAR(255),CreatedBy INT,ModifiedBy INT,ENTITYDEFID INT,TblColumnName VARCHAR(255),DIMENSIONID INT,DIMENSION_ATTRIBUTE VARCHAR(255)
+,iType varchar(50),NewlyAdded INT,MetricColumnAlias varchar(1000),DimensionColumnAlias varchar(1000));
+
+create temp table Dimension(ID serial,DimensionID INT,DimensionName VARCHAR(255),MetricID INT,MetricName VARCHAR(100),NewlyAdded INT);
+
+create temp table EntitiesTable
+(ID Serial,EntityID INT,EntityDefName	VARCHAR(200),EntityAttributeName VARCHAR(100),MetricId BIGINT,NewlyAdded INT,MetricColumnAlias varchar(1000)
+,SourceId bigint,ReportConfigurationid	bigint);
+
+create temp table selectedkpi(recordID Serial,REPORTCONFIGURATIONID int,kpiid int,kpiname varchar(500),ColumnName varchar(500),sourceid int);
+
+create temp table selectedevents(recordID Serial,REPORTCONFIGURATIONID int,Eventid int,EventName varchar(500),ColumnName varchar(500));
+
+create temp table InputMetrics(RecordID Serial,SourceTypeId INT,MetricID INT,MetricName VARCHAR(100),IsDimension smallINT,NewlyAdded INT);
+
+create temp table SourceTable(ID serial,SourceTablecolumn varchar(100),correlationtablecolumn varchar(100),Sourcetablename varchar(255));
+
+insert into temps(ivalue)
+select input;
+
+select ivalue->'REPORTDETAILS'->> 'TRANSTYPE' ,ivalue->'REPORTDETAILS'->> 'LoginId'
+,ivalue->'REPORTDETAILS'->> 'VID'
+,ivalue->'REPORTDETAILS'->>'ReportOn'
+,cast(ivalue->'REPORTDETAILS'->>'PAGENO' as smallint)
+,cast(ivalue->'REPORTDETAILS'->>'LIMIT' as smallint)
+,ivalue->'REPORTDETAILS'->>'NAME'
+,ivalue->'REPORTDETAILS'->>'DESCRIPTION'
+,cast(ivalue->'REPORTDETAILS'->>'IsPivote' as smallint)
+,ivalue->'REPORTDETAILS'->>'ReportType'
+,cast(ivalue->'REPORTDETAILS'->>'PastDataFrom' as smallint)
+,cast(ivalue->'REPORTDETAILS'->>'PastDataFromUOM' as smallint)
+,cast(ivalue->'REPORTDETAILS'->>'DataFetchFrequency' as smallint)
+,cast(ivalue->'REPORTDETAILS'->>'DataFetchFrequencyUOM' as smallint)
+,ivalue->'REPORTDETAILS'->>'DatasourceId'
+,cast(ivalue->'REPORTDETAILS'->>'NullUpdateTime' as smallint)
+,cast(ivalue->'REPORTDETAILS'->>'NullUpdateTimeUOM' as smallint)
+,ivalue->'REPORTDETAILS'->>'SelectedDatasources'
+,ivalue->'REPORTDETAILS'->>'userquery'
+into
+VTRAN,VCreated_By,VID, VReportOn
+,VPage,VRecsPerPage,VReportConfigurationName,VReportConfigurationDescription,VIsPivote,VReportType,VPastDataFrom,VPastDataFromUOM,VDataFetchFrequency,VDataFetchFrequencyUOM
+,VDatasources,VNullUpdateTime,VNullUpdateTimeUOM,VSelectedDataSources,Vuserquery
+from temps limit 1;
+
+insert into users(userid)
+select userid
+From
+KBUserCustomerMapping A
+Inner join
+(
+	Select customerid 
+	from KBUserCustomerMapping
+	where userid=VCreated_by
+) B  on A.customerid=B.customerid
+;
+
+If Lower(VTran)='getspokes' then
+begin
+
+VResult:= (	
+		select row_to_json(ispoke) as "lstSources"
+		from
+		(
+			Select Array_to_json(Array_agg(row_to_json(spk))) as "lstSources"
+			from
+			(
+				SELECT SOURCETYPE_ID as "SPOKEID"
+				,SPOKETYPE "SPOKETYPE",SOURCETYPE_NAME "SPOKENAME"
+				,HASNLEGSNMACHINE "HASNLEGSNMACHINE"
+				,STM.INPUT "INPUT"
+				,ISMETRICADDED "ISMETRICADDED"
+				,DESCRIPTION  "DESCRIPTION "
+				,CreatedDate "CREATEDDATE"
+				,
+				(	
+					select Row_to_json(imetrics) as "Metrics"
+					from
+						( 
+							Select Array_to_json(Array_agg(row_to_json(met))) as "Metric"
+							from
+							(			
+								select A.* 
+								from
+								(
+										SELECT METRIC_ID "ID"
+										,Case when METRICALIAS='' or METRICALIAS IS NULL Then METRICNAME Else MetricAlias End "Name"
+										,METRICNAME as "METRICNAME" 
+										,metrics.METRICDATATYPE "DATATYPE"
+										,Metrics.IsPrimaryKey as "ISPRIMARY"
+										,Datatypes.MetricDataType "TABLECOL"
+										,'Metric' as "TYPE"
+										,Metrics.source_id as "SOURCEID"
+										,KSM.sourcetype_name as "SOURCENAME"
+								FROM 
+										KBMetricMst Metrics 
+										left join Kbsourcetypemst KSM on Metrics.source_id=KSM.sourcetype_id
+										join KBSpokewiseMetricsInformation Datatypes on Datatypes.MetricID=Metrics.METRIC_ID
+								WHERE 
+										stm.SOURCETYPE_ID=Metrics.SOURCE_ID and Metrics.TEMPLATE_ID=1 
+								union all
+										select MEASURE_ID "ID",MEASURE_NAME  "Name"
+										,MEASURE_NAME as "METRICNAME"
+										,Datatypes.Datatypename as "DATATYPE" 
+										,'' as "ISPRIMARY"
+										,DataTypeAlias "TABLECOL"
+										,'Measure' as "TYPE"
+										,Measure.source_id as "SOURCEID"
+										,KSM.sourcetype_name as "SOURCENAME"
+								from 
+										kbMeasureMst Measure
+										left join Kbsourcetypemst KSM on Measure.source_id=KSM.sourcetype_id
+										join kbmasterDatatypes Datatypes on Datatypes.DaTaTypeID=Measure.MEASUREUNIT_ID
+										where Measure.SOURCE_ID=stm.SOURCETYPE_ID and Measure.FORMULA_CHK=1 and Measure.Isactive='1'
+								)A
+							) Met
+									
+							--FOR XML Raw('Metric'),Root('Metrics')
+						) AS imetrics
+				)
+				 
+				,(
+						Select Row_to_json(ikpi) as "KPIS"
+						from
+						(
+						select Array_to_json(Array_agg(row_to_json(kpis))) as "KPI"
+						from
+						( 
+							SELECT coalesce(originalid,kpi_id) "kpi_id",source_id "source_id",kpi_name "kpi_name"
+							FROM kbkpimst Kpis
+							INNER JOIN kbsourcetypemst Sources on kpis.source_id = Sources.SOURCETYPE_ID
+							where kpis.isactive='1'  and Sources.SOURCETYPE_ID = STM.SOURCETYPE_ID
+							--For XML RAW('KPI'),ROOT('KPIS')
+						) AS kpis
+						)ikpi
+					)
+				FROM KBSourceTypeMst  STM
+				WHERE IsActive='1' and coalesce(masterspokeid,0)=0
+				and exists (Select 1 from users B where STM.CreatedBy=b.userid)
+			) spk		
+		)ispoke
+	  )
+;
+
+vCorrelations:= (
+
+				Select Row_to_json(iCorrelations) as "lstCorrelation"
+				from
+				(
+					Select Array_to_json(array_agg(row_to_json(corr))) as "CORRELATION"
+					from
+					(
+						Select Cmst.CORRELATIONID "CORRELATIONID", CORRELATIONNAME "CORRELATIONNAME" ,TypeID  "TypeID", users.user_name "CREATEDBY"
+						,
+						(
+							Select String_agg(sources,'#CWT01#') 
+							from
+							( 
+								Select cast(CDetails.SourceID as varchar(50))||';'|| SOURCETYPE_NAME Sources
+								From
+								CBCorrelationDetails CDetails 
+								Join KBSourceTypeMst Sources on CDetails.SourceID=Sources.SOURCETYPE_ID
+								where CMst.CorrelationID=CDetails.CorrelationID  
+							)aa
+						) SELECTEDDATASOURCES
+						
+						,(
+							Select Row_to_json(ievents) as "EVENTS"
+							from
+							(
+								Select Array_to_json(array_agg(row_to_json(eves))) "EVENT"
+								from
+								( 
+									SELECT EVENT_ID ID,EVENT_SD as Name
+									FROM KbEventsMst Kpis
+									where kpis.isactive='1'	and Kpis.CORRELATION_ID=CMst.CorrelationID
+									--For XML RAW('EVENT'),ROOT('EVENTS')
+								) AS eves
+							) ievents
+						)		
+
+						,
+						(
+						Select Row_to_json(ikpi) as "KPIS"
+						from	
+						(
+							select Array_to_json(Array_agg(row_to_json(kpis))) as "KPI"
+							from
+							( 
+								SELECT coalesce(originalid,kpi_id) "kpi_id",kpi_name "kpi_name"
+								FROM kbkpimst Kpis
+								where kpis.isactive='1' and Kpis.CORRELATIONID=CMst.CorrelationID
+							) AS kpis
+							)ikpi
+						)
+						from CBCorrelationMst  CMst
+						Join kbusermst users on cmst.createdby=users.user_id
+					--	join cbcorrelationtypeMst typ on typ.TypeID=CMst.TypeID
+						where cmst.IsActive='1' and exists (Select 1 from users B where CMst.CreatedBy=b.userid)
+						ORder by CORRELATIONNAME
+						--FOR XML RAW('CORRELATION'),ROOT('CORRELATIONS')	
+					)Corr
+				)icorrelations
+			);
+
+VDimensions:=	(
+				Select Array_to_json(Array_agg(row_to_json(dims))) as "DIMENSION"
+				From
+				(
+					SELECT     Mst.ID  "ID",Mst.DIMENSIONNAME  as "NAME"
+					,(
+						select Row_to_json(dimatt) as "ATTRIBUTES"
+						from
+						(
+						Select Array_to_json(array_agg(row_to_json(attrbs))) as "ATTRIBUTE"
+						From
+						(
+							SELECT    
+							AttributeName "ATTRIBUTENAME"
+							,0 "SOURCEID"
+							,DataType as "DATATYPE"
+							,IsPrimary "ISPRIMARY"
+							
+							,(
+								Select Row_to_json(mets) "METRICS"
+								from
+								(
+									Select Array_to_json(array_agg(row_to_json(src))) as "METRIC"
+									from
+									(
+										select A.* 
+										from
+										(
+											Select SOURCEID "SOURCEID",METRICID "METRICID",METRICNAME "METRICNAME"
+											from kb_dim_sourcelink Dimlink 
+											Where dimlink.ID=Link.DimensionID and coalesce(Dimlink.AttributeName,Dimlink.METRICNAME)=Link.AttributeName
+										)A
+										--For XML RAW('METRIC'),ROOT('METRICS')
+									)src
+								)mets
+							  )
+						from DIM_DIMENSIONATTRIBUTES LINK  
+						where Link.DimensionID=B.id and Link.Datatype is not null
+						group by Attributename, DataType ,Link.DimensionID,LINK.IsPrimary
+						--FOR XML RAW('ATTRIBUTE'),ROOT('ATTRIBUTES')
+						) attrbs 
+						)dimatt 
+					)					
+				FROM KB_DIM_SOURCELINK B 
+				join KB_DIM_DIMENSIONMST Mst on B.ID=Mst.Id
+				where mst.id not in (1,2) and IsActive=1 and exists (Select 1 from (	Select userid from users Union Select 1	) B where coalesce(Mst.CreatedBy,1)=b.userid)
+				group by Mst.ID,Mst.DIMENSIONNAME,b.id
+				Order by Dimensionname  
+				)dims
+				--	for xml RAW('DIMENSION'),ROOT('DIMENSIONS') 
+			)
+;
+
+VLocDimensions:=	(
+				Select Array_to_json(Array_agg(row_to_json(dims))) as "DIMENSION"
+				From
+				(
+					SELECT     Mst.ID  "ID",Mst.DIMENSIONNAME  as "NAME"
+					,(
+						select Row_to_json(dimatt) as "ATTRIBUTES"
+						from
+						(
+						Select Array_to_json(array_agg(row_to_json(attrbs))) as "ATTRIBUTE"
+						From
+						(
+							SELECT    
+							AttributeName "ATTRIBUTENAME"
+							,0 "SOURCEID"
+							,DataType as "DATATYPE"
+							,IsPrimary "ISPRIMARY"
+							
+							,(
+								Select Row_to_json(mets) "METRICS"
+								from
+								(
+									Select Array_to_json(array_agg(row_to_json(src))) as "METRIC"
+									from
+									(
+										select A.* 
+										from
+										(
+											Select SOURCEID "SOURCEID",METRICID "METRICID",METRICNAME "METRICNAME"
+											from kb_dim_sourcelink Dimlink 
+											Where dimlink.ID=Link.DimensionID and coalesce(Dimlink.AttributeName,Dimlink.METRICNAME)=Link.AttributeName
+										)A
+										--For XML RAW('METRIC'),ROOT('METRICS')
+									)src
+								)mets
+							  )
+						from DIM_DIMENSIONATTRIBUTES LINK  
+						where Link.DimensionID=B.id and Link.Datatype is not null
+						group by Attributename, DataType ,Link.DimensionID,LINK.IsPrimary
+						--FOR XML RAW('ATTRIBUTE'),ROOT('ATTRIBUTES')
+						) attrbs 
+						)dimatt 
+					)					
+				FROM KB_DIM_SOURCELINK B 
+				join KB_DIM_DIMENSIONMST Mst on B.ID=Mst.Id
+				where mst.id =2 and IsActive=1 and exists (Select 1 from (	Select userid from users Union Select 1	) B where coalesce(Mst.CreatedBy,1)=b.userid)
+				group by Mst.ID,Mst.DIMENSIONNAME,b.id
+				Order by Dimensionname  
+				)dims
+				--	for xml RAW('DIMENSION'),ROOT('DIMENSIONS') 
+			)
+;
+ 
+
+VtimeDimensions:=	(
+				Select Array_to_json(Array_agg(row_to_json(dims))) as "DIMENSION"
+				From
+				(
+					SELECT     Mst.ID  "ID",Mst.DIMENSIONNAME  as "NAME"
+					,(
+						select Row_to_json(dimatt) as "ATTRIBUTES"
+						from
+						(
+						Select Array_to_json(array_agg(row_to_json(attrbs))) as "ATTRIBUTE"
+						From
+						(
+							SELECT    
+							AttributeName "ATTRIBUTENAME"
+							,0 "SOURCEID"
+							,DataType as "DATATYPE"
+							,IsPrimary "ISPRIMARY"
+							
+							,(
+								Select Row_to_json(mets) "METRICS"
+								from
+								(
+									Select Array_to_json(array_agg(row_to_json(src))) as "METRIC"
+									from
+									(
+										select A.* 
+										from
+										(
+											Select SOURCEID "SOURCEID",METRICID "METRICID",METRICNAME "METRICNAME"
+											from kb_dim_sourcelink Dimlink 
+											Where dimlink.ID=Link.DimensionID and coalesce(Dimlink.AttributeName,Dimlink.METRICNAME)=Link.AttributeName
+										)A
+										--For XML RAW('METRIC'),ROOT('METRICS')
+									)src
+								)mets
+							  )
+						from DIM_DIMENSIONATTRIBUTES LINK  
+						where Link.DimensionID=B.id and Link.Datatype is not null
+						group by Attributename, DataType ,Link.DimensionID,LINK.IsPrimary
+						--FOR XML RAW('ATTRIBUTE'),ROOT('ATTRIBUTES')
+						) attrbs 
+						)dimatt 
+					)					
+				FROM KB_DIM_SOURCELINK B 
+				join KB_DIM_DIMENSIONMST Mst on B.ID=Mst.Id
+				where mst.id =1 and IsActive=1 and exists (Select 1 from (	Select userid from users Union Select 1	) B where coalesce(Mst.CreatedBy,1)=b.userid)
+				group by Mst.ID,Mst.DIMENSIONNAME,b.id
+				Order by Dimensionname  
+				)dims
+				--	for xml RAW('DIMENSION'),ROOT('DIMENSIONS') 
+			)
+;
+
+ 
+
+VEntities:=(
+		Select Array_to_json(Array_agg(row_to_json(ientity)))  as "lstEntityDefinitions"
+		from
+		(
+		-- Select Array_to_json(Array_agg(row_to_json(ent))) as "Entity"
+-- 		from
+-- 		(
+			select B.ENTITY_NAME "EntityDefinationNAME",B.ENTITYDEF_ID "EntityDefinitionID",  
+				
+				(
+				-- Select Row_to_json(EntAttribs) as "EntityAttributeDetails"
+-- 				from
+ 				--(
+					Select Array_to_json(Array_agg(row_to_json(attrbs))) as "lstEntityMetrics"
+					From
+					(	
+						select distinct A.* 
+						from
+						(
+							select distinct conf.ControlTitle "MetricNAME"
+							,Case when conf.ControlDataType ='DateTime' Then 'Timestamp' else 'varchar(255)' End "DataType"
+							,MD.DataTypeAlias "DDBataType"
+							,EntityMst.entitydef_id as EntityDefinitionID
+							,EntityMst.entity_name as EntityDefinationNAME
+							from kbentityscreenconfigurationMst conf
+							Join KBEntityMst EntityMst on  conf.EntityDefID=EntityMst.ENTITYDEF_ID
+							Left JOIN kbMasterDataTypes MD on MD.DataTypeAlias=conf.ControlDataType
+							where  EntityMst.ENTITYDEF_ID=B.ENTITYDEF_ID and conf.ObjectType='EntityDefinition'
+							
+							union all
+							select distinct conf.ControlTitle "MetricNAME"
+							,Case when conf.ControlDataType ='DateTime' Then 'Timestamp' else 'varchar(255)' End "DataType"
+							,MD.DataTypeAlias "DDBataType"
+							,EntityMst.entitydef_id as EntityDefinitionID
+							,EntityMst.entity_name as EntityDefinationNAME
+							from kbentityscreenconfigurationMst conf
+							Join KBEntityMst EntityMst on  conf.EntityDefID=EntityMst.ENTITYDEF_ID
+							 Left JOIN kbMasterDataTypes MD on MD.DataTypeAlias=conf.ControlDataType
+							where  EntityMst.ENTITYDEF_ID=B.ENTITYDEF_ID and conf.ObjectType='Branch'
+						)A
+					)attrbs	
+					--) as EntAttribs
+				)
+				,	
+--(	
+						--Select Row_to_json(imetrics)  as "lstEntityDatasourceMetrics"
+						--from
+						(	
+							Select Array_to_json(Array_Agg(row_to_json(mets))) as "lstEntityDatasourceMetrics"	
+							from
+							(
+							select distinct SOURCETYPEID as "SOURCEID",met.metric_id as "METRICID", phone.METRICNAME as "METRICNAME" 
+							from KBSpokeConfigurations phone 
+							join kbmetricMst met on met.METRICNAME=phone.METRICNAME and met.SOURCE_ID=phone.SOURCETYPEID
+							where met.template_id=1
+							and phone.EntitydefID=B.ENTITYDEF_ID and phone.Isactive='1'  
+							) mets
+						--)imetrics	
+						)
+					from 
+					kbentitymst B  
+					where IsAcTive='1' and exists (Select 1 from users BB where B.CreatedBy=BB.userid)
+					Order by Entity_name
+		--)ent
+		)ientity		
+	);
+
+VFNAME = (
+		-- Select Row_to_json(output) as "FIELDS"
+-- 		From
+-- 		(
+			Select Array_to_json(Array_agg(row_to_json(ifield)))  "FIELD"
+			from
+			(
+			SELECT DISTINCT fieldid as "ID",fieldname as "NAME",DataType "DATATYPE" 
+			FROM 
+			CBCorrelationFieldsMst
+			)ifield
+		--)output
+		--FOR XML RAW('FIELD'),ROOT('FIELDS')
+	);
+
+Return(
+	Select Row_to_json(a)
+	from
+	(
+		Select Row_to_json(output) as "REPORTDETAILS"
+		From
+		(
+		Select 1 as Result,	VResult as "lstSources", VCorrelations as "lstCorrelation", VDimensions as "DIMENSIONS",VtimeDimensions as "lstTimeDimensions"
+			,VLocDimensions as "lstLocationDimensions", VEntities as "lstEntityDefinitions", VFNAME  as "FIELDS"
+		)output
+	)a
+);
+
+ 
+end;
+Elseif Lower(VTran)='create' then
+
+begin
+	select 
+	ivalue->'REPORTDETAILS'->'CONFIGDETAILS'->> 'DATARETENTIONPERIOD' 
+	,ivalue->'REPORTDETAILS'->'CONFIGDETAILS'->> 'UOM'
+	,ivalue->'REPORTDETAILS'->'CONFIGDETAILS'->> 'ACTIONONHISTORICALDATA'
+	,ivalue->'REPORTDETAILS'->'CONFIGDETAILS'->> 'DATABACKUPPATH'
+	,cast(ivalue->'REPORTDETAILS'->'CONFIGDETAILS'->> 'CORRELATIONID' as smallint)
+	,ivalue->'REPORTDETAILS'->'CONFIGDETAILS'->> 'SNAPSHOTFROMDATE'
+	,ivalue->'REPORTDETAILS'->'CONFIGDETAILS'->> 'SNAPSHOTTODATE'
+	,cast(ivalue->'REPORTDETAILS'->'CONFIGDETAILS'->> 'STORAGETYPE' as smallint)
+	,ivalue->'REPORTDETAILS'->'CONFIGDETAILS'->> 'REGULARFROMDATE'
+	into
+	VDATARETENTIONPERIOD,VUOM,VACTIONONHISTORICALDATA,VDATABACKUPPATH,VCORRELATIONID,VSNAPSHOTFROMDATE,VSNAPSHOTTODATE,VSTORAGETYPE, VREGULARFROMDATE
+	from temps limit 1;	
+
+	select 
+	Cast(ivalue->'REPORTDETAILS'->'DIMENSIONS'->'DIMENSIONS'->> 'ID' as int)
+	,ivalue->'REPORTDETAILS'->'DIMENSIONS'->'DIMENSIONS'->> 'NAME'
+	into VDimensionId, VDimensionName 
+	from temps 
+	limit 1;	
+
+	/* Inserting into the Analysis Collection master table  */
+	
+	/*
+	(this can 0-Correlation,1-Multiple Datasource,2-Single Datasource)
+	(If ReportOn-0,expect CorrelationId )
+	*/
+
+	if(VReportOn=0) Then
+	Begin
+		INSERT INTO 
+				KBReportsConfigurationMSt
+				(ReportConfigurationName,DataRetentionPeriod,DRPUOM,ActionOnHistoricalData,DataBackupPath,CreatedBy,ModifiedBy,ConfigDescription,CorrelationId
+				,SNAPSHOTFROMDATE,SNAPSHOTTODATE,STORAGETYPE,REGULARFROMDATE,CreatedDate,ModifiedDate,IsPivote
+				,PastDataFrom,PastDataFromUOM,DataFetchFrequency,DataFetchFrequencyUOM,ReportType,ReportOn,isactive)
+		SELECT 
+				VReportConfigurationName,VDATARETENTIONPERIOD, VUOM,VACTIONONHISTORICALDATA,VDATABACKUPPATH,VCreated_by,VCreated_by,VReportConfigurationDescription
+				,cast(VDatasources as int) CorrelationId,VSNAPSHOTFROMDATE,VSNAPSHOTTODATE,VSTORAGETYPE,VREGULARFROMDATE,VActiondate,VActiondate,VIsPivote
+				,VPastDataFrom,VPastDataFromUOM,VDataFetchFrequency,VDataFetchFrequencyUOM,VReportType,VReportOn,1;
+	end;
+    elseif 
+    (VReportOn=3) Then
+	Begin
+		INSERT INTO 
+				KBReportsConfigurationMSt
+				(ReportConfigurationName,DataRetentionPeriod,DRPUOM,ActionOnHistoricalData,DataBackupPath,CreatedBy,ModifiedBy,ConfigDescription,CorrelationId
+				,SNAPSHOTFROMDATE,SNAPSHOTTODATE,STORAGETYPE,REGULARFROMDATE,CreatedDate,ModifiedDate,IsPivote
+				,PastDataFrom,PastDataFromUOM,DataFetchFrequency,DataFetchFrequencyUOM,ReportType,ReportOn,isactive,userquery)
+		SELECT 
+				VReportConfigurationName,VDATARETENTIONPERIOD, VUOM,VACTIONONHISTORICALDATA,VDATABACKUPPATH,VCreated_by,VCreated_by,VReportConfigurationDescription
+				,cast(VDatasources as int) CorrelationId,VSNAPSHOTFROMDATE,VSNAPSHOTTODATE,VSTORAGETYPE,VREGULARFROMDATE,VActiondate,VActiondate,VIsPivote
+				,VPastDataFrom,VPastDataFromUOM,VDataFetchFrequency,VDataFetchFrequencyUOM,VReportType,VReportOn,1,Vuserquery;
+	end;
+	else
+	Begin
+		INSERT INTO 
+				KBReportsConfigurationMSt
+				(ReportConfigurationName,DataRetentionPeriod,DRPUOM,ActionOnHistoricalData,DataBackupPath,CreatedBy,ModifiedBy,ConfigDescription,CorrelationId,SNAPSHOTFROMDATE,SNAPSHOTTODATE,STORAGETYPE,REGULARFROMDATE,CreatedDate,ModifiedDate,IsPivote
+				,PastDataFrom,PastDataFromUOM,DataFetchFrequency,DataFetchFrequencyUOM,ReportType,ReportOn,DatasourceId,isactive)
+		SELECT 
+				VReportConfigurationName,VDATARETENTIONPERIOD, VUOM,VACTIONONHISTORICALDATA,VDATABACKUPPATH,VCreated_by,VCreated_by,VReportConfigurationDescription,VCorrelationId CorrelationId,VSNAPSHOTFROMDATE,VSNAPSHOTTODATE,VSTORAGETYPE,VREGULARFROMDATE,VActiondate,VActiondate,VIsPivote
+				,VPastDataFrom,VPastDataFromUOM,VDataFetchFrequency,VDataFetchFrequencyUOM,VReportType,VReportOn,VDatasources,1;
+	end;
+	End if;
+
+	VReportConfigurationid:=(SELECT currval(pg_get_serial_sequence('KBReportsConfigurationMSt','reportconfigurationid')));
+
+	
+	insert into Tempdata(ReportConfigurationID,IsEnviDataSrc,SourceTypeID,MetricID,MetricName,CreatedBy,ModifiedBy,ENTITYDEFID,TblColumnName,Type,DIMENSIONID
+	,DIMENSION_ATTRIBUTE,MetricColumnAlias,DimensionColumnAlias,columntype)
+	SELECT 
+	ReportId,cast(IsEnviDataSrc as smallint),SPOKEID,METRICID,METRICNAME,VCreated_by CreatedBy,VCreated_by ModifiedBy,ENTITYDEFID
+	,'"'||Sources.Alias||'_'||METRICNAME||'"'
+	,iType,cast( DImensionID as int),"Name" ,MetricColumnAlias
+
+	,DimensionColumnAlias,columnType
+	FROM
+	(
+		SELECT 
+		VReportConfigurationid					ReportId
+		,IsEnviDataSrc  
+		,SPOKEID  
+		,METRICID  
+		,METRICNAME
+		,1 							CreatedBy									
+		,1 							ModifiedBy 
+		,ENTITYDEFID  
+		,cast(NULL as int)					AS DImensionID 
+		,NULL							AS "Name"
+		,NewlyAdded  
+		,iType  
+		,case when ColumnName is null or ColumnName ='' then NULL else ColumnName END  AS MetricColumnAlias
+		,NULL DimensionColumnAlias
+		,NULL columnType--NewlyAdded columnType
+		from 
+		(
+			Select IsEnviDataSrc
+			,Cast(metrics->>'SPOKEID' as int) as SPOKEID
+			,Cast(metrics->>'METRICID' as int) as METRICID
+			,metrics->>'METRICNAME' as METRICNAME
+			,Cast(metrics->>'ENTITYDEFID' as int) as ENTITYDEFID
+			,cast(metrics->>'NewlyAdded' as smallint) as NewlyAdded
+			,metrics->>'Type' as iType
+			,metrics->>'ColumnName' as ColumnName
+			from
+			(
+				Select IsEnviDataSrc, json_array_elements(Mets) as metrics
+				from
+				(
+				Select spokes->>'IsEnviDataSrc' as IsEnviDataSrc
+				,spokes->'Metric' as Mets
+				from
+				(
+					select json_array_elements(spoke) spokes
+					from
+					(
+						Select ivalue->'REPORTDETAILS'->'CONFIGDETAILS'->'SPOKE' spoke
+						from
+						Temps
+						Limit 1
+					) itemp	
+				)spks
+				)aa
+			)outp	
+		)spokemets		
+	) Inputs
+	INNER JOIN 
+	kbsourceTypemst Sources ON Inputs.SPOKEID = Sources.SOURCETYPE_ID AND SpokeType = '0' AND NewlyAdded = 1
+
+	UNION 
+		
+		
+	SELECT 
+		ReportId,cast(Input.IsEnviDataSrc as smallint),SPOKEID,METRICID,METRICNAME
+		,VCreated_By, VCreated_By ModifiedBy,ENTITYDEFID
+		,'"'||Sources.Alias||'_'||METRICNAME||'"',iType,Cast(DIMENSIONID as int),"Name"
+		,case when Columntype='envidatasource' then NULL Else MetricColumnAlias End MetricColumnAlias,DimensionColumnAlias,columntype
+	FROM
+	(
+			select
+			VReportConfigurationid				ReportId
+			,IsEnviDataSrc  
+			,SPOKEID  
+			,METRICID  
+			,METRICNAME
+			,1 CreatedBy
+			,1 ModifiedBy 
+			,ENTITYDEFID  
+			,cast(dimatt->'Attribute'->>'DimensionId' as int)	AS DimensionId  
+			,dimatt->'Attribute'->>'Name'			AS "Name"
+			,iType  
+			,dimatt->'Attribute'->>'NewlyAdded'		AS NewlyAdded  
+			,case when ColumnName is null or ColumnName ='' then NULL
+				else ColumnName END  AS MetricColumnAlias
+				
+			,case when  coalesce(dimatt->'Attribute'->>'ColumnName','') ='' then NULL
+				else dimatt->'Attribute'->>'ColumnName' END AS DimensionColumnAlias
+			,dimatt->'Attribute'->>'type'			AS columntype  
+			
+			from 
+			(
+			Select IsEnviDataSrc,SPOKEID,METRICID,METRICNAME,ENTITYDEFID,NewlyAdded,iType,ColumnName
+			,json_array_elements(dims) dimatt
+			from
+			(
+				Select IsEnviDataSrc
+				,Cast(metrics->>'SPOKEID' as int) as SPOKEID
+				,Cast(metrics->>'METRICID' as int) as METRICID
+				,metrics->>'METRICNAME' as METRICNAME
+				,Cast(metrics->>'ENTITYDEFID' as int) as ENTITYDEFID
+				,cast(metrics->>'NewlyAdded' as smallint) as NewlyAdded
+				,metrics->>'Type' as iType
+				,metrics->>'ColumnName' as ColumnName
+				,metrics->'DimAttributes' as dims
+				from
+				(
+				Select IsEnviDataSrc, json_array_elements(Mets) as metrics
+				from
+				(
+					Select spokes->>'IsEnviDataSrc' as IsEnviDataSrc
+					,spokes->'Metric' as Mets
+					from
+					(
+						select json_array_elements(spoke) spokes
+						from
+						(
+							Select ivalue->'REPORTDETAILS'->'CONFIGDETAILS'->'SPOKE' spoke
+							from
+							Temps
+							Limit 1
+						) itemp	
+					)spks
+				)aa
+				)outp
+			)dimsmets
+			)atts	
+
+	) Input
+	INNER JOIN 
+		kbsourceTypemst Sources ON Input.SPOKEID = Sources.SOURCETYPE_ID
+	
+	WHERE 
+	SPOKETYPE = '0' AND Input.NewlyAdded = '1' 
+
+	UNION
+		
+		
+		SELECT 
+		Input.ReportId,cast(Input.IsEnviDataSrc as smallint),input.SPOKEID,Input.METRICID,Input.METRICNAME
+		,Input.CreatedBy,Input.ModifiedBy,Input.ENTITYDEFID
+		,'"'||Sources.Alias||'_'||EntityDef.ENTITY_NAME||'_'||METRICNAME||'"',iType,Cast(DIMENSIONID as int),"Name",MetricColumnAlias ,DimensionColumnAlias,columntype
+		FROM
+		(
+		Select
+		VReportConfigurationid  ReportId
+		,IsEnviDataSrc
+		,Cast(metrics->>'SPOKEID' as int) as SPOKEID
+		,Cast(metrics->>'METRICID' as int) as METRICID
+		,metrics->>'METRICNAME' as METRICNAME
+		,1 CreatedBy
+		,1 ModifiedBy 
+		,Cast(metrics->>'ENTITYDEFID' as int) as ENTITYDEFID
+		,cast(NULL as int)	DimensionId
+		,NULL  "Name"
+		,metrics->>'Type' as iType
+		,cast(metrics->>'NewlyAdded' as smallint) as NewlyAdded
+		,case when Coalesce(metrics->>'ColumnName','')='' then NULL Else metrics->>'ColumnName' End as MetricColumnAlias 
+		,NULL as DimensionColumnAlias 
+		,NULL AS columntype 
+		from
+		(
+		Select IsEnviDataSrc, json_array_elements(Mets) as metrics
+		from
+		(
+			Select spokes->>'IsEnviDataSrc' as IsEnviDataSrc
+			,spokes->'Metric' as Mets
+			from
+			(
+				select json_array_elements(spoke) spokes
+				from
+				(
+					Select ivalue->'REPORTDETAILS'->'CONFIGDETAILS'->'SPOKE' spoke
+					from
+					Temps
+					Limit 1
+				) itemp	
+			)spks
+		)aa
+		)outp
+		) Input
+		INNER JOIN 
+			kbsourceTypemst Sources ON Input.SPOKEID = Sources.SOURCETYPE_ID
+		INNER JOIN 
+			kbEntityMst EntityDef	ON Input.ENTITYDEFID = EntityDef.ENTITYDEF_ID
+		WHERE 
+		SPOKETYPE = '1' AND Input.NewlyAdded = '1' and input.iType !='KPI'
+
+	UNION
+
+		SELECT 
+		Input.ReportId,cast(Input.IsEnviDataSrc as smallint),input.SPOKEID,Input.METRICID,Input.METRICNAME
+		,Input.CreatedBy,Input.ModifiedBy,Input.ENTITYDEFID
+		,'"'||Sources.Alias||'_'||EntityDef.ENTITY_NAME||'_'||METRICNAME||'"',iType ,Cast(DIMENSIONID as int),"Name"
+		,case when Columntype='envidatasource' then NULL Else MetricColumnAlias End MetricColumnAlias,DimensionColumnAlias ,columntype
+		FROM
+		(
+			select
+			VReportConfigurationid		ReportId
+			,IsEnviDataSrc  
+			,SPOKEID  
+			,METRICID  
+			,METRICNAME
+			,1 CreatedBy
+			,1 ModifiedBy 
+			,ENTITYDEFID  
+			,cast(dimatt->'Attribute'->>'DimensionId' as int)	AS DimensionId  
+			,dimatt->'Attribute'->>'Name'			AS "Name"
+			,iType  
+			,dimatt->'Attribute'->>'NewlyAdded'		AS NewlyAdded  
+			,case when ColumnName is null or ColumnName ='' then NULL
+				else ColumnName END  AS MetricColumnAlias
+			,case when coalesce(dimatt->'Attribute'->>'ColumnName','') ='' then NULL
+				else dimatt->'Attribute'->>'ColumnName' END AS DimensionColumnAlias
+			,dimatt->'Attribute'->>'type'			AS columntype  
+			
+			from 
+			(
+			Select IsEnviDataSrc,SPOKEID,METRICID,METRICNAME,ENTITYDEFID,NewlyAdded,iType,ColumnName
+			,json_array_elements(dims) dimatt
+			from
+			(
+				Select IsEnviDataSrc
+				,Cast(metrics->>'SPOKEID' as int) as SPOKEID
+				,Cast(metrics->>'METRICID' as int) as METRICID
+				,metrics->>'METRICNAME' as METRICNAME
+				,Cast(metrics->>'ENTITYDEFID' as int) as ENTITYDEFID
+				,cast(metrics->>'NewlyAdded' as smallint) as NewlyAdded
+				,metrics->>'Type' as iType
+				,metrics->>'ColumnName' as ColumnName
+				,metrics->'DimAttributes' as dims
+				from
+				(
+				Select IsEnviDataSrc, json_array_elements(Mets) as metrics
+				from
+				(
+					Select spokes->>'IsEnviDataSrc' as IsEnviDataSrc
+					,spokes->'Metric' as Mets
+					from
+					(
+						select json_array_elements(spoke) spokes
+						from
+						(
+							Select ivalue->'REPORTDETAILS'->'CONFIGDETAILS'->'SPOKE' spoke
+							from
+							Temps
+							Limit 1
+						) itemp	
+					)spks
+				)aa
+				)outp
+			)dimsmets
+			)atts	
+		) Input
+		INNER JOIN 
+				kbsourceTypemst Sources ON Input.SPOKEID = Sources.SOURCETYPE_ID
+		INNER JOIN 
+				kbEntityMst EntityDef	ON Input.ENTITYDEFID = EntityDef.ENTITYDEF_ID
+		WHERE 
+		SPOKETYPE = '1' AND Input.NewlyAdded = '1'
+		;
+
+--return(Select Array_to_json(Array_Agg(row_to_json(a))) from(Select * from Tempdata)a);
+
+	
+	INSERT INTO 
+		KBReportsConfigurationDetails
+	(  
+	ReportConfigurationID,IsEnviDataSrc,SourceTypeID,MetricID,MetricName
+	 , CreatedBy,ModifiedBy,ENTITYDEFID,TblColumnName,DIMENSIONID,DIMENSION_ATTRIBUTE,Type,MetricColumnAlias,DimensionColumnAlias,CReatedDate,ModifiedDate,subtype
+	) 
+	Select ReportConfigurationID,IsEnviDataSrc  ,SourceTypeID  ,MetricID  ,MetricName  ,CreatedBy  
+	 ,ModifiedBy  ,ENTITYDEFID  ,TblColumnName  ,DIMENSIONID  ,DIMENSION_ATTRIBUTE ,Type ,MetricColumnAlias  ,DimensionColumnAlias  
+	 ,VActionDate,VActionDate,columntype 
+	 from Tempdata 
+;
+
+		if(VReportOn=0/*Report on 0 then correlationID*/) then
+		Begin
+
+			INSERT INTO 
+			KBReportsConfigurationDetails
+			(  
+			ReportConfigurationID,IsEnviDataSrc,SourceTypeID,MetricID,MetricName
+			, CreatedBy,ModifiedBy,ENTITYDEFID,TblColumnName,DIMENSIONID,DIMENSION_ATTRIBUTE,Type,MetricColumnAlias,DimensionColumnAlias,CReatedDate,ModifiedDate
+			) 
+			Select distinct ReportConfigurationID,cast(src.SPOKETYPE as smallint)  IsEnviDataSrc,SOURCETYPE_ID, 0 MetricID,'seq' MetricName
+			 , VCreated_by,VCreated_by, cast(null as int) ENTITYDEFID,SOURCETYPE_NAME||'_SEQ' TblColumnName,cast(null as int) DIMENSIONID,null DIMENSION_ATTRIBUTE,NUll "Type"
+			 ,NULL,NULL,VActionDate,VActionDate
+			 from KBReportsConfigurationMSt Mst
+			 JOin cbcorrelationMst corrMst on corrMst.CorrelationID=Mst.CorrelationID
+			 JOIN cbcorrelationdetails details on details.CorrelationID=corrMst.CorrelationID
+			 JOIN kbsourcetypeMst src on src.SOURCETYPE_ID=Details.SourceID
+			 where Mst.ReportConfigurationID=VReportConfigurationID and src.spoketype='0'
+			 and corrMst.Isactive='1'
+			 UNION ALL
+			 Select distinct VReportConfigurationID,cast(SPOKETYPE as smallint)  IsEnviDataSrc,SOURCETYPE_ID, 0 MetricID,'seq' MetricName
+			 , VCreated_by,VCreated_by, cast(null as int) ENTITYDEFID,SOURCETYPE_NAME||'_SEQ' TblColumnName,cast(null as int) DIMENSIONID,null DIMENSION_ATTRIBUTE,NUll "Type",NULL,NULL,VActionDate,VActionDate
+			 from kbsourcetypeMst src
+			 where SPOKETYPE='1'  and Isactive='1' and exists (select 1 from users usr where src.createdby=usr.userid )
+
+			 ;
+		END;
+		Else
+		Begin
+		 
+		INSERT INTO 
+		KBReportsConfigurationDetails
+		(  
+		ReportConfigurationID,IsEnviDataSrc,SourceTypeID,MetricID,MetricName
+		, CreatedBy,ModifiedBy,ENTITYDEFID,TblColumnName,DIMENSIONID,DIMENSION_ATTRIBUTE,Type,MetricColumnAlias,DimensionColumnAlias,CReatedDate,ModifiedDate
+		) 
+		 Select distinct ReportConfigurationID,IsEnviDataSrc,SourceTypeID, 0 MetricID,'seq' MetricName
+		, RDetails.CreatedBy,RDetails.ModifiedBy,  ENTITYDEFID,SOURCETYPE_NAME||'_SEQ' TblColumnName,cast(null as int) DIMENSIONID,null DIMENSION_ATTRIBUTE,NUll "Type"
+		,NULL,NULL,VActionDate,VActionDate
+		from Tempdata RDetails		
+		JOIN KbsourcetypeMst Mst   on RDetails.SourceTypeID=Mst.SOURCETYPE_ID	 
+		 Where  IsEnviDataSrc='0' and spoketype='0' and  Mst.Isactive='1' --Order by SourceTypeID,MetricID
+		union  
+		Select distinct VReportConfigurationID,cast(SPOKETYPE as smallint) IsEnviDataSrc,SOURCETYPE_ID, 0 MetricID,'seq' MetricName
+		, VCreated_by,VCreated_by, cast(null as int) ENTITYDEFID,SOURCETYPE_NAME||'_SEQ' TblColumnName,cast(null as int) DIMENSIONID,null DIMENSION_ATTRIBUTE,NUll "Type",NULL,NULL,VActionDate,VActionDate
+		from kbsourcetypeMst src
+		where SPOKETYPE='1'  and Isactive='1' and exists (select 1 from users usr where src.createdby=usr.userid )
+
+		;
+	 END;
+	 End if;
+
+	INSERT INTO  KPI
+			(
+			
+			 ReportConfigurationID,IsEnviDataSrc,SourceTypeID,MetricID,MetricName
+			, CreatedBy,ModifiedBy,ENTITYDEFID,TblColumnName,DIMENSIONID,DIMENSION_ATTRIBUTE,iType,MetricColumnAlias,DimensionColumnAlias
+			)
+	SELECT 
+		Input.ReportId,cast(Input.IsEnviDataSrc as smallint),input.SPOKEID,Input.METRICID,Input.METRICNAME
+		,VCreated_by CreatedBy,VCreated_by ModifiedBy,Input.ENTITYDEFID
+		,'',DimensionId,"Name",iType,MetricAlias,dimensioncolumnAlias
+	FROM
+	(
+		select
+		VReportConfigurationid		ReportId
+		,IsEnviDataSrc  
+		,SPOKEID  
+		,METRICID  
+		,METRICNAME
+		,1 CreatedBy
+		,1 ModifiedBy 
+		,ENTITYDEFID  
+		,iType  
+		,cast(dimatt->'Attribute'->>'DimensionId' as int)	AS DimensionId  
+		,dimatt->'Attribute'->>'Name'			AS "Name"
+		,case when ColumnName is null or ColumnName ='' then NULL
+			else ColumnName END  AS MetricAlias
+		,case when coalesce(dimatt->'Attribute'->>'ColumnName','') ='' then NULL
+			else dimatt->'Attribute'->>'ColumnName' END AS DimensionColumnAlias
+		from 
+		(
+		Select IsEnviDataSrc,SPOKEID,METRICID,METRICNAME,ENTITYDEFID,NewlyAdded,iType,ColumnName
+		,json_array_elements(dims) dimatt
+		from
+		(
+			Select IsEnviDataSrc
+			,Cast(metrics->>'SPOKEID' as int) as SPOKEID
+			,Cast(metrics->>'METRICID' as int) as METRICID
+			,metrics->>'METRICNAME' as METRICNAME
+			,Cast(metrics->>'ENTITYDEFID' as int) as ENTITYDEFID
+			,cast(metrics->>'NewlyAdded' as smallint) as NewlyAdded
+			,metrics->>'Type' as iType
+			,metrics->>'ColumnName' as ColumnName
+			,metrics->'DimAttributes' as dims
+			from
+			(
+			Select IsEnviDataSrc, json_array_elements(Mets) as metrics
+			from
+			(
+				Select spokes->>'IsEnviDataSrc' as IsEnviDataSrc
+				,spokes->'Metric' as Mets
+				from
+				(
+					select json_array_elements(spoke) spokes
+					from
+					(
+						Select ivalue->'REPORTDETAILS'->'CONFIGDETAILS'->'SPOKE' spoke
+						from
+						Temps
+						Limit 1
+					) itemp	
+				)spks
+			)aa
+			)outp
+		)dimsmets
+		)atts	
+
+	) Input
+	JOIN 
+		kbsourceTypemst Sources ON 	Input.SPOKEID=Sources.SOURCETYPE_ID
+	WHERE 
+	SPOKETYPE='1' and itype='KPI';
+
+	INSERT INTO 
+	KBReportsConfigurationDetails
+	(  
+		ReportConfigurationID,IsEnviDataSrc,SourceTypeID,MetricID,MetricName
+	 , CreatedBy,ModifiedBy,ENTITYDEFID,TblColumnName,DIMENSIONID,DIMENSION_ATTRIBUTE,type,CreatedDate,ModifiedDate,MetricColumnAlias,DimensionColumnAlias
+	  
+	)
+	SELECT 
+	 distinct Kpi.ReportConfigurationID,Kpi.IsEnviDataSrc,Kpi.SourceTypeID,Kpi.METRICID,Kpi.METRICNAME
+	,Kpi.CreatedBy,Kpi.ModifiedBy,Kpi.ENTITYDEFID
+	,'"'||Sources.SOURCETYPE_NAME||'_'||EntityDef.ENTITY_NAME||'_'||METRICNAME ||'"',DIMENSIONID,DIMENSION_ATTRIBUTE ,itype,VActionDate,VActionDate
+	,MetricColumnAlias,DimensionColumnAlias
+	from KPI Kpi
+	JOIN 
+		kbsourceTypemst Sources ON 	Kpi.SourceTypeID=Sources.SOURCETYPE_ID
+	JOIN 
+		kbEntityMst EntityDef ON 	Kpi.ENTITYDEFID=EntityDef.ENTITYDEF_ID
+	;
+
+	Insert into KBReportsConfigurationRules(ReportConfigurationId,SelectedDataSource,SelectedMetricID,TargetDataSource,TargetMetricID,
+	BufferTime,BufferTimeUOM,CreatedBy, ModifiedBy  )
+	select 
+	VReportConfigurationID
+	, Cast(ivalue->'REPORTDETAILS'->'Rules'->'Rule'->> 'Datasource' as bigint)
+	,Cast(ivalue->'REPORTDETAILS'->'Rules'->'Rule'->> 'SelectedMetric' as bigint)
+	,Cast(ivalue->'REPORTDETAILS'->'Rules'->'Rule'->> 'TargetDatasource' as bigint)
+	,Cast(ivalue->'REPORTDETAILS'->'Rules'->'Rule'->> 'SelectedTargetMetric' as bigint)
+	,Cast(ivalue->'REPORTDETAILS'->'Rules'->'Rule'->> 'BufferTime' as int)
+	,ivalue->'REPORTDETAILS'->'Rules'->'Rule'->> 'BufferTimeUOM'
+	,VCreated_by
+	,VCreated_by
+	from temps limit 1;
+
+	VSourceTypeID:=(SELECT SourceTypeID FROM KBReportsConfigurationDetails WHERE ReportConfigurationID=VReportConfigurationid Limit 1);
+
+	INSERT INTO 
+	Dimension(DimensionID,DimensionName,MetricID,MetricName)
+	SELECT DimensionID,DimensionName,cast(metrics->>'METRICID' as int) AS METRICID,metrics->>'METRICNAME' AS METRICNAME  
+	from
+	(
+	Select DimensionID, DimensionName, json_array_elements(Mets) as metrics
+	from
+	(
+		Select 
+		cast(dimesion->>'ID' as int) as DimensionID
+		,dimesion->>'NAME' DimensionName
+		,dimesion->'METRIC' Mets
+		From
+		(
+			Select json_array_elements(dimes) as dimesion
+			from
+			(
+			Select ivalue->'REPORTDETAILS'->'DIMENSIONS'->'DIMENSION' dimes
+			from
+			Temps
+			Limit 1
+			)a
+		)dims
+	)aa
+	)outp;
+	 
+	IF(SELECT COUNT(1) FROM Dimension)>0 Then
+	BEGIN
+		INSERT INTO 
+		KBReportsConfigurationDetails
+		(ReportConfigurationID,SourceTypeID,MetricID,MetricName,CreatedBy,ModifiedBy,ISDIMENSION,TblColumnName,CreatedDate,ModifiedDate)
+		SELECT 
+			VReportConfigurationid,DimensionID,MetricID,MetricName,VCreated_by,VCreated_by,1 ,'"'||DIMENSIONNAME||'_'||MetricName||'"',VActionDate,VActionDate
+		FROM 
+		Dimension Dims;
+	END;
+	End if;
+
+	INSERT INTO 
+	EntitiesTable
+	(EntityID,EntityDefName,EntityAttributeName,MetricId,MetricColumnAlias,SourceId,ReportConfigurationid)
+	SELECT 
+	 EntityID  
+	,EntityDefName 
+	,EntAtt->>'Name' EntityAttributeName  
+	,cast(EntAtt->>'MetricId' as int) MetricId  
+	,case when Coalesce(EntAtt->>'ColumnName','')='' then NULL
+	 else EntAtt->>'ColumnName' END	AS ColumnName 
+	,cast(EntAtt->>'SourceId' as int)SourceId  
+	,VReportConfigurationid
+	From
+	(
+	 select EntityID,EntityDefName, json_array_elements(mets) as EntAtt
+	 from
+	 ( 
+		Select 
+		cast(dimes->>'ID' as int) as EntityID
+		,dimes->>'NAME' EntityDefName
+		,dimes->'EntityAttribute' Mets
+		From
+		(
+			Select json_array_elements(dimes) dimes
+			from
+			(
+			Select ivalue->'REPORTDETAILS'->'ENTITIES'->'Entity' dimes
+			from
+			Temps
+			Limit 1
+			)a
+		)dims
+	)attb	
+	)ents;
+
+		 IF(SELECT COUNT(1) FROM EntitiesTable)>0 then
+		 BEGIN
+				 
+				/* Inserting the selected Entity related data */
+		INSERT INTO
+			KBReportsConfigurationDetails
+			(ReportConfigurationID,SourceTypeID,MetricID,MetricName,ServiceLabel,CreatedBy,ModifiedBy,ISDIMENSION,TblColumnName,CreatedDate,ModifiedDate,MetricColumnAlias,DIMENSIONID)
+		SELECT 
+			VReportConfigurationid,EntityID,MetricID,EntityAttributeName,EntityConfig.ServiceLabel,VCreated_by,VCreated_by,2 
+			,EntityDefName||'_'||Sources.alias||'_'||EntityAttributeName,VActionDate,VActionDate,MetricColumnAlias,SourceId
+		FROM 
+		EntitiesTable Entity
+		Join 
+		KBEntityScreenConfigurationMst EntityConfig ON Entity.EntityID=EntityConfig.EntityDefID and Entity.EntityAttributeName=EntityConfig.ControlTitle  
+		Join KBSourceTypeMst Sources on Entity.sourceid=Sources.SourceType_Id;
+		END;
+		End if;
+
+	-- INSERT INTO 
+-- 	KBANALYSISCOLLECTIONRULES(ReportConfigurationid,ENTITYDEFID,FIELDLABEL,CONDITIONID,VALUE1,ENTITYID,LOCATIONNAME,ISENTITY,VALUE2,OPERATOR,TORDER
+-- 	,CreatedBy, ModifiedBy, ModifiedDate
+-- 	)
+-- 	Select 
+-- 	VReportConfigurationid
+-- 	, cast(Ruledata->>'ENTITYDEFID'as int) as ENTITYDEFID
+-- 	,Ruledata->>'FIELDLABEL' as FIELDLABEL
+-- 	,Ruledata->>'CONDITIONID' as CONDITIONID
+-- 	,Ruledata->>'VALUE1' as VALUE1
+-- 	,Ruledata->>'ENTITYID' as ENTITYID
+-- 	,Ruledata->>'LOCATIONNAME' as LOCATIONNAME
+-- 	,Cast(Ruledata->>'ISENTITY' as smallint) as ISENTITY
+-- 	,Ruledata->>'VALUE2' as VALUE2
+-- 	,Ruledata->>'OPERATOR' as OPERATOR
+-- 	,Ruledata->>'TORDER' as TORDER
+-- 	From
+-- 	(
+-- 		Select json_array_elements(iRules) Ruledata
+-- 		from
+-- 		(
+-- 		Select ivalue->'REPORTDETAILS'->'RULES'->'RULE' iRules
+-- 		from
+-- 		Temps
+-- 		Limit 1
+-- 		)a
+-- 	)RD;
+
+	--VEVENTIDS:=xmlList.rows.query('EVENTS').value('.','varchar(max)') FROM  @Trans_xml.nodes('REPORTDETAILS') xmlList(rows) ;
+	--VKPIIDS:=xmlList.rows.query('KPIS').value('.','varchar(max)') FROM  @Trans_xml.nodes('REPORTDETAILS') xmlList(rows) ;
+
+	insert into selectedkpi(REPORTCONFIGURATIONID,kpiid,kpiname,ColumnName,sourceid)
+	select input.ReportConfigurationid,input.kpiid,input.kpiname,input.ColumnName,Mst.source_ID
+	from
+	(
+	select distinct
+	VReportConfigurationid as ReportConfigurationid
+	,cast(kpidata->>'ID'as INT)  kpiid
+	,kpidata->>'Name'kpiname
+	,case when kpidata->>'ColumnName' ='' then null else kpidata->>'ColumnName' end as ColumnName
+	from
+	(
+		Select json_array_elements(Kpis) kpidata
+		from
+		(
+		Select ivalue->'REPORTDETAILS'->'KPIS'->'KPI' Kpis
+		from
+		Temps
+		Limit 1
+		)a
+		)kpisdata
+	)input
+	join kbkpiMst Mst on Coalesce(Mst.OriginalID,Mst.kpi_id)=input.kpiid
+	where Mst.Isactive='1' ;
+	
+	insert into selectedevents(REPORTCONFIGURATIONID,Eventid,EventName,ColumnName)
+	select 
+	VReportConfigurationid
+	,cast(evtdata->>'ID' as INT)  eventid
+	,evtdata->>'Name' Eventname
+	,case when evtdata->>'ColumnName' ='' then null else evtdata->>'ColumnName'  end Colname
+	from
+	(
+		Select json_array_elements(events) evtdata
+		from
+		(
+		Select ivalue->'REPORTDETAILS'->'EVENTS'->'EVENT' events
+		from
+		Temps
+		Limit 1
+		)a
+	)eventsdata
+
+	;
+
+	if(VIsPivote=1) Then
+	Begin
+
+	Insert into kbreportsconfigurationdetails(ReportConfigurationID,SourceTypeID,MetricName,CreatedBy,CreatedDate,ModifiedBy,ModifiedDate,TblColumnName,Type,MetricColumnAlias)
+	select VReportConfigurationid,kpiid,kpiname,VCreated_by,VActiondate,VCreated_by,VActiondate,kpiname,'KPI',ColumnName 
+	from 
+	selectedkpi;
+
+	/*Inserting Events*/
+	Insert into kbreportsconfigurationdetails(ReportConfigurationID,SourceTypeID,MetricName,CreatedBy,CreatedDate,ModifiedBy,ModifiedDate,TblColumnName,Type,MetricColumnAlias)
+	select VReportConfigurationid,EventID,EventName,VCreated_by,VActiondate,VCreated_by,VActiondate,EventName,'Event',ColumnName 
+	from 
+	selectedevents;
+	
+	END;
+	End if; 
+
+	
+	INSERT INTO 
+	KBANALYSISCOLLECTIONRULESEVENTKPIS
+	(REPORTCONFIGURATIONID,EVENTIDS,KPIIDS,columnalias,createddate,createdby,modifiedby,modifieddate)
+	select REPORTCONFIGURATIONID,NULL,kpiid,ColumnName,VActiondate,VCreated_by,VCreated_by,VActiondate 
+	from selectedkpi;
+
+	INSERT INTO 
+	KBANALYSISCOLLECTIONRULESEVENTKPIS
+	(REPORTCONFIGURATIONID,EVENTIDS,KPIIDS,columnalias,createddate,createdby,modifiedby,modifieddate)
+	select REPORTCONFIGURATIONID,Eventid,NULL,ColumnName,VActiondate,VCreated_by,VCreated_by,VActiondate  
+	from selectedevents ;
+
+	INSERT INTO 
+	InputMetrics(SourceTypeId,MetricID,MetricName,IsDimension)
+	Select distinct SourceTypeID,MetricID,MetricName,cast(NULL   as smallint)
+	from KPI
+
+	UNION ALL
+
+	select DimensionID,NULL,MetricName,1 
+	FROM 
+	Dimension
+
+	UNION ALL
+
+	SELECT  
+	EntityID
+	,NULL
+	,EntityDefName
+	,2
+	FROM 
+	EntitiesTable;
+
+	if(VIspivote=2) then
+	Begin  
+	Insert into kbreportsmetadata(ReportConfigurationID,SourceTypeID,OBJECTTYPE,MetricID,MetricName,TABLECOL,METRICDATATYPE,SPOKETYPE,ENTITYDEFID,Createdby,ModifiedBy,CreatedDate,ModifiedDate)
+	Select distinct  VReportConfigurationID,SpokeId,'DefaultColumns' ObjectType, MetricID, MetricName, TableCol,METRICDATATYPE, SpokeType,ENTITYDEFID
+	,VCreated_by,VCreated_by,VActiondate,VActiondate
+	From
+	(
+	/*default columns*/
+		select distinct 0 as SPOKEID,0 as METRICID
+		,Case columnName when 'Condition Name' then 'KPINAME'
+		when 'Condition Range' then 'KPISTATUS'
+		when 'Condition KPI' then 'groupingname'
+		when 'Seq' then 'correlationguid'
+		else columnName end as METRICNAME
+		,DM.ColumnName as TABLECOL
+		,Case DM.ColumnName when 'EVENTID' then 'bigint'
+		when 'CorrelationID' then 'bigint'
+		when 'CreatedBy' then 'bigint'
+		else 'varchar(255)' end as METRICDATATYPE
+		,0 as 	SPOKETYPE
+		,0 as ENTITYDEFID 
+		,ID
+		from KB_DynamicTable_MetaData  DM
+		where lower(DM.SubType)='analysiscollection'   
+	) A 
+
+;
+
+	END;
+	else
+	Begin
+
+	Insert into kbreportsmetadata(ReportConfigurationID,SourceTypeID,OBJECTTYPE,MetricID,MetricName,TABLECOL,METRICDATATYPE,Createdby,modifiedby,createddate,modifieddate)
+	select VReportConfigurationID,0 as SPOKEID,'DefaultColumns' as OBJECTTYPE,0 as METRICID,'correlationguid' as MetricName,'Seq' as TABLECOL,'varchar(255)' METRICDATATYPE
+	,VCreated_by,VCreated_by,VActiondate,VActiondate
+	UNION
+	select VReportConfigurationID,0 as SPOKEID,'DefaultColumns' as OBJECTTYPE,0 as METRICID,'CorrelationID' as MetricName,'CorrelationID' as TABLECOL,'bigint' METRICDATATYPE
+	,VCreated_by,VCreated_by,VActiondate,VActiondate;
+
+	END;
+	End if;
+
+	if(VReportOn=0) Then
+	Begin 		 
+
+	Insert into kbreportsmetadata(ReportConfigurationID,SourceTypeID,OBJECTTYPE,MetricID,MetricName,TABLECOL,METRICDATATYPE,SPOKETYPE,ENTITYDEFID
+	,Createdby,modifiedby,createddate,modifieddate)
+	Select distinct ReportConfigurationID,SOURCETYPE_ID,'Source' as  ObjectType,0 as MetricID,'seq' as METRICNAME
+	,SOURCETYPE_NAME||'_SEQ' TblColumnName,'Varchar(255)' as METRICDATATYPE,0 SPOKETYPE, 0 ENTITYDEFID,VCreated_by,VCreated_by,VActiondate,VActiondate
+	from KBReportsConfigurationMSt Mst
+	JOin cbcorrelationMst corrMst on corrMst.CorrelationID=Mst.CorrelationID
+	JOIN cbcorrelationdetails details on details.CorrelationID=corrMst.CorrelationID
+	JOIN kbsourcetypeMst src on src.SOURCETYPE_ID=Details.SourceID
+	where Mst.ReportConfigurationID=VReportConfigurationID
+	and corrMst.Isactive='1' and src.Isactive='1'
+
+	UNION
+
+	select distinct VReportConfigurationID  ,SOURCETYPE_ID,'Source' as  ObjectType,0 as METRICID,'seq' as METRICNAME
+	,SOURCETYPE_NAME||'_SEQ' as TABLECOL,
+	'varchar(255)' as METRICDATATYPE, cast(SPOKETYPE as smallint), 0 ENTITYDEFID,VCreated_by,VCreated_by,VActiondate,VActiondate
+	from KbsourcetypeMst   src
+	where SPOKETYPE='1'  and Isactive='1' and exists (select 1 from users usr where src.createdby=usr.userid )
+
+	;
+
+	END;	
+	Else
+	Begin			 
+	Insert into kbreportsmetadata(ReportConfigurationID,SourceTypeID,OBJECTTYPE,MetricID,MetricName,TABLECOL,METRICDATATYPE,SPOKETYPE,ENTITYDEFID
+	,Createdby,modifiedby,createddate,modifieddate)
+	select distinct VReportConfigurationID, SourceTypeID SpokeId,'Source' as  ObjectType,0 as MetricID,'seq' as METRICNAME,SOURCETYPE_NAME||'_SEQ' as TABLECOL,
+	'varchar(255)' as METRICDATATYPE,0 SPOKETYPE,  ENTITYDEFID,VCreated_by,VCreated_by,VActiondate,VActiondate
+	from KBReportsConfigurationDetails RDetails
+	JOIN KbsourcetypeMst Mst   on RDetails.SourceTypeID=Mst.SOURCETYPE_ID
+	JOIN KBReportsConfigurationMSt RptMst  on   RptMst.ReportConfigurationID=RDetails.ReportConfigurationID
+	where RDetails.ReportConfigurationID=RptMst.ReportConfigurationID and RDetails.ISDIMENSION IS NULL
+	/*and Mst.SPOKETYPE=0*/ and RDetails.TYPE IS NULL and RptMst.ReportConfigurationID=VReportConfigurationID and Mst.Isactive='1'; 
+	END;
+	End if;
+
+	/* Inserting into the Reportsmetadata*/
+
+	Insert into kbreportsmetadata(ReportConfigurationID,SourceTypeID,OBJECTTYPE,MetricID,MetricName,TABLECOL,METRICDATATYPE,SPOKETYPE,ENTITYDEFID,ReportConfigDetailID
+	,Createdby,modifiedby,createddate,modifieddate
+	)
+	select AA.ReportConfigurationID,AA.SPOKEID,AA.ObjectType,AA.METRICID,AA.METRICNAME,Replace(AA.TABLECOL,'__','_') as TABLECOL 
+	,AA.METRICDATATYPE,AA.SPOKETYPE,AA.ENTITYDEFID ,AA.ReportConfigDetailID 
+	,VCreated_by,VCreated_by,VactionDate,VactionDate
+	from
+	(
+	/*Normal source  columns*/
+	
+		Select   distinct  VReportConfigurationID ReportConfigurationID,RDetails.SourceTypeID SPOKEID
+		,'Source' ObjectType, Coalesce(RDetails.MetricID,0) METRICID, METRICS.MetricName  METRICNAME
+		,Coalesce(RDetails.MetricColumnAlias,Sources.sourcetype_name||'_'||RDetails.METRICNAME)	TABLECOL
+		,METRICS.METRICDATATYPE
+		,Sources.SOURCETYPE SPOKETYPE
+		,Coalesce(RDetails.ENTITYDEFID,0) ENTITYDEFID
+		 ,RDetails.ReportConfigDetailID ReportConfigDetailID
+		from 
+		KBReportsConfigurationDetails RDetails 
+		JOIN KbMETRICMST METRICS ON METRICS.METRIC_ID=RDetails.MetricID
+		Join KBSourceTypeMst Sources on RDetails.SourceTypeID=Sources.SOURCETYPE_ID
+		JOIN KBReportsConfigurationMSt RptMst  on   RptMst.ReportConfigurationID=RDetails.ReportConfigurationID
+		where Rptmst.ReportConfigurationID=VReportConfigurationID and RDetails.ISDIMENSION Is Null 
+		and Isenvidatasrc=0 and TYPE='Metric' and RDetails.DIMENSIONID IS NULL
+		and RDetails.subtype is null--!='envidatasource'
+		UNION ALL
+		/*Normal source  measure columns*/
+		Select   distinct  VReportConfigurationID ReportConfigurationID,RDetails.SourceTypeID SPOKEID
+		,'Measure' ObjectType, Coalesce(RDetails.MetricID,0) METRICID, Measures.MEASURE_NAME  METRICNAME
+		,Coalesce(RDetails.MetricColumnAlias,Sources.sourcetype_name||'_'||RDetails.METRICNAME)	TABLECOL
+		,DataTypes.DataTypeName METRICDATATYPE
+		,Sources.SOURCETYPE SPOKETYPE
+		,Coalesce(RDetails.ENTITYDEFID,0) ENTITYDEFID
+		,RDetails.ReportConfigDetailID ReportConfigDetailID
+		from 
+		KBReportsConfigurationDetails RDetails 
+		JOIN KbMeasureMst Measures ON Measures.MEASURE_ID=RDetails.MetricID
+		Join KBSourceTypeMst Sources on RDetails.SourceTypeID=Sources.SOURCETYPE_ID
+		JOIN KBReportsConfigurationMSt RptMst  on   RptMst.ReportConfigurationID=RDetails.ReportConfigurationID
+		JOIN kbMasterDataTypes DataTypes on DataTypes.DaTaTypeID=Measures.MEASUREUNIT_ID
+		where Rptmst.ReportConfigurationID=VReportConfigurationID and RDetails.ISDIMENSION Is Null 
+		and RDetails.Type='Measure' and Isenvidatasrc=0 and RDetails.DIMENSIONID IS NULL
+		and RDetails.subtype is null--!='envidatasource'
+		Union All
+		/*envi source  columns*/
+		Select distinct  VReportConfigurationID,RDetails.SourceTypeID SPOKEID
+		,'Source' ObjectType, Coalesce(RDetails.MetricID,0) METRICID,METRICS.MetricName METRICNAME-- RDetails.MetricName METRICNAME
+		,Coalesce(Rdetails.MetricColumnAlias,Sources.sourcetype_name||'_'||	Entitydef.ENTITY_NAME||'_'||RDetails.METRICNAME)	TABLECOL
+		,METRICS.METRICDATATYPE
+		,Sources.SOURCETYPE SPOKETYPE
+		,Coalesce(RDetails.ENTITYDEFID,0) ENTITYDEFID
+		,RDetails.ReportConfigDetailID ReportConfigDetailID 
+		from 
+		KBReportsConfigurationDetails RDetails 
+		JOIN KbMETRICMST METRICS ON METRICS.METRIC_ID=RDetails.MetricID
+		Join KBSourceTypeMst Sources on RDetails.SourceTypeID=Sources.SOURCETYPE_ID
+		JOIN KBEntityMst Entitydef on Entitydef.ENTITYDEF_ID=RDetails.ENTITYDEFID
+		JOIN KBReportsConfigurationMSt RptMst  on   RptMst.ReportConfigurationID=RDetails.ReportConfigurationID
+		where Rptmst.ReportConfigurationID=VReportConfigurationID and RDetails.ISDIMENSION Is Null 
+		and Isenvidatasrc=1 and RDetails.DIMENSIONID IS NULL--and RDetails.type is null 
+		and  TYPE='Metric' and RDetails.subtype is null--!='envidatasource'
+		UNION ALL
+		/* Envi Measure columns*/
+		Select   distinct  VReportConfigurationID ReportConfigurationID,RDetails.SourceTypeID SPOKEID
+		,'Measure' ObjectType, Coalesce(RDetails.MetricID,0) METRICID, Measures.MEASURE_NAME  METRICNAME
+		,Coalesce(Rdetails.MetricColumnAlias,Sources.sourcetype_name||'_'||	Entitydef.ENTITY_NAME||'_'||RDetails.METRICNAME)	TABLECOL
+		,DataTypes.DataTypeName METRICDATATYPE
+		,Sources.SOURCETYPE SPOKETYPE
+		,Coalesce(RDetails.ENTITYDEFID,0) ENTITYDEFID
+		,RDetails.ReportConfigDetailID ReportConfigDetailID
+		from 
+		KBReportsConfigurationDetails RDetails 
+		JOIN KbMeasureMst Measures ON Measures.MEASURE_ID=RDetails.MetricID
+		Join KBSourceTypeMst Sources on RDetails.SourceTypeID=Sources.SOURCETYPE_ID
+		JOIN KBEntityMst Entitydef on Entitydef.ENTITYDEF_ID=RDetails.ENTITYDEFID
+		JOIN KBReportsConfigurationMSt RptMst  on   RptMst.ReportConfigurationID=RDetails.ReportConfigurationID
+		JOIN kbMasterDataTypes DataTypes on DataTypes.DaTaTypeID=Measures.MEASUREUNIT_ID
+		where Rptmst.ReportConfigurationID=VReportConfigurationID and RDetails.ISDIMENSION Is Null 
+		and RDetails.Type='Measure' and   Isenvidatasrc=1  and RDetails.DIMENSIONID IS NULL and RDetails.subtype is null--!='envidatasource'
+		UNION ALL
+		/*envi source KPI columns*/
+		Select distinct RptMst. ReportConfigurationID,RDetails.SourceTypeID SPOKEID
+		,'KPI' ObjectType, Coalesce(RDetails.MetricID,0) METRICID
+		,RDetails.MetricName 
+		,Coalesce(RDetails.MetricColumnAlias,TblColumnName) as TABLECOL
+		,'varchar(255)' METRICDATATYPE
+		,Sources.SOURCETYPE SPOKETYPE
+		,Coalesce(RDetails.ENTITYDEFID,0) ENTITYDEFID
+		,RDetails.ReportConfigDetailID ReportConfigDetailID
+		from 
+		KBReportsConfigurationDetails RDetails 
+		JOIN KBReportsConfigurationMSt RptMst  on   RptMst.ReportConfigurationID=RDetails.ReportConfigurationID
+		Join KBSourceTypeMst Sources on RDetails.SourceTypeID=Sources.SOURCETYPE_ID
+		where RptMst.ReportConfigurationID=VReportConfigurationID and RDetails.ISDIMENSION Is Null and Rdetails.Isenvidatasrc=1
+		and RDetails.type='KPI' --and RDetails.subtype!='envidatasource'
+		Union All
+		/*dimension    columns*/
+		Select distinct  VReportConfigurationID,RDetails.SourceTypeID SPOKEID,'Dimension' ObjectType
+		,Coalesce(RDetails.MetricID,0) METRICID
+		,case 
+		when 
+		LINK.ID =1  then Sources.Alias||'_'|| RDetails.METRICNAME||'_'|| Attrib.AttributeName||'ID'  
+		when LINK.ID =2 then  Sources.Alias||'_'|| Attrib.AttributeName||'ID'   end as METRICNAME
+		--Sources.Alias||'_'||MST.DIMENSIONNAME||'_'||RDetails.DIMENSION_ATTRIBUTE ||'ID' end AS METRICNAME --Initally Rdetails.MetricName||'ID'
+		,Case  
+		when	Attrib.ISPrimary=1 
+		then Coalesce(Rdetails.DimensionColumnAlias,Sources.SOURCETYPE_NAME||'_'||Coalesce(EM.ENTITY_NAME,'')||'_'|| MST.DIMENSIONNAME||'_'||Attrib.AttributeName||'_'||RDetails.METRICNAME||'_id')
+		ELSE
+		Coalesce(Rdetails.DimensionColumnAlias,Sources.SOURCETYPE_NAME||'_'||Coalesce(EM.ENTITY_NAME,'')||'_'|| MST.DIMENSIONNAME||'_'||Attrib.AttributeName||'_'||RDetails.METRICNAME )
+		--Sources.SOURCETYPE_NAME||'_'|| MST.DIMENSIONNAME||'_'||Attrib.AttributeName||'_'||RDetails.METRICNAME 
+		END as TABLECOL
+
+		,Case when Attrib.ISPrimary=1  then 'BIGINT' else Attrib.DataType END as METRICDATATYPE
+		,Sources.SOURCETYPE SPOKETYPE
+		,Coalesce(RDetails.ENTITYDEFID,0) as ENTITYDEF_ID
+		,RDetails.ReportConfigDetailID ReportConfigDetailID
+		from 
+		KBReportsConfigurationDetails RDetails
+		JOIN kb_dim_sourcelink LINK on LINK.SOURCEID=RDetails.SourceTypeID and Link.id=RDetails.Dimensionid 
+
+		Join KBSourceTypeMst Sources on RDetails.SourceTypeID=Sources.SOURCETYPE_ID
+
+		JOIN dim_dimensionAttributes Attrib on RDetails.DIMENSIONID=Attrib.DimensionID 
+		and RDetails.DIMENSION_ATTRIBUTE=Attrib.AttributeName
+
+		JOIN kb_dim_dimensionMst  MST  on Mst.ID=RDetails.DIMENSIONID
+		Left JOIN KbentityMst EM on EM.ENTITYDEF_ID=Rdetails.ENTITYDEFID
+		JOIN KBReportsConfigurationMSt RptMst  on   RptMst.ReportConfigurationID=RDetails.ReportConfigurationID
+		Where RDetails.ISDIMENSION Is Null and RptMst.ReportConfigurationID=VReportConfigurationID and RDetails.DIMENSION_ATTRIBUTE!='AlternateDate'
+		and Mst.id in(1,2) and RDetails.subtype ='Dimension'
+		UNION ALL
+		Select distinct   VReportConfigurationID,RDetails.SourceTypeID SPOKEID,'Dimension' ObjectType
+		,Coalesce(RDetails.MetricID,0) METRICID
+		,  case when Attrib.AttributeName is null then MST.DIMENSIONNAME||'_'||RDetails.METRICNAME||'_'||'id'
+		else --RDetails.MetricName||'ID'   end as METRICNAME
+		link.MetricName||'id' END as  METRICNAME  /*changed ID to id*/
+		,Case  
+			when	Attrib.ISPrimary=1 
+					then Coalesce(RDetails.DimensionColumnAlias,Sources.SOURCETYPE_NAME||'_'||Coalesce(EM.ENTITY_NAME,'')||'_'|| MST.DIMENSIONNAME||'_'|| Attrib.AttributeName||'_'||RDetails.METRICNAME||'_id')
+		ELSE
+			Coalesce(RDetails.DimensionColumnAlias,Sources.SOURCETYPE_NAME||'_'||Coalesce(EM.ENTITY_NAME,'')||'_'|| MST.DIMENSIONNAME||'_'||Coalesce(Attrib.AttributeName,'ID')||'_'||RDetails.METRICNAME )
+			 --Sources.SOURCETYPE_NAME||'_'|| MST.DIMENSIONNAME||'_'||Attrib.AttributeName||'_'||RDetails.METRICNAME 
+		END as TABLECOL
+
+		,Coalesce( Attrib.DataType  ,'BIGINT' )   METRICDATATYPE
+		--,Coalesce(Case when Attrib.ISPrimary=1  then 'BIGINT' else Attrib.DataType END,'BIGINT' )   METRICDATATYPE
+		,Sources.SOURCETYPE SPOKETYPE
+		,Coalesce(RDetails.ENTITYDEFID,0) as ENTITYDEF_ID
+		,RDetails.ReportConfigDetailID ReportConfigDetailID
+		from 
+		KBReportsConfigurationDetails RDetails
+		Left  JOIN kb_dim_sourcelink LINK on LINK.SOURCEID=RDetails.SourceTypeID and Link.id=RDetails.Dimensionid and Link.AttributeName=RDetails.DIMENSION_ATTRIBUTE
+		--and Rdetails.MetricName=LINK.MetricName
+
+		Join KBSourceTypeMst Sources on RDetails.SourceTypeID=Sources.SOURCETYPE_ID
+
+		Left JOIN dim_dimensionAttributes Attrib on RDetails.DIMENSIONID=Attrib.DimensionID 
+		and RDetails.DIMENSION_ATTRIBUTE=Attrib.AttributeName
+
+		JOIN kb_dim_dimensionMst  MST  on Mst.ID=RDetails.DIMENSIONID
+		Left JOIN KbentityMst EM on EM.ENTITYDEF_ID=Rdetails.ENTITYDEFID
+		JOIN KBReportsConfigurationMSt RptMst  on   RptMst.ReportConfigurationID=RDetails.ReportConfigurationID
+		Where RDetails.ISDIMENSION Is Null and RptMst.ReportConfigurationID=VReportConfigurationID and RDetails.DIMENSION_ATTRIBUTE!='AlternateDate'
+		and Mst.id not in(1,2) and RDetails.subtype ='Dimension'
+		UNION ALL
+
+		/*Entities columns*/
+		Select distinct  VReportConfigurationID,0 SpokeId,'Entity' ObjectType,0 MetricId
+		, B.ServiceLabel  "NAME"
+		--,Coalesce(B.MetricColumnAlias,EntityDef.ENTITY_NAME||'_'||B.MetricName)
+		,Coalesce(B.MetricColumnAlias,tblcolumnname)
+		,Case when lower(METRICS.ControlDataType) like '%latitude%' OR lower(METRICS.ControlDataType) like '%longitude%' 
+		OR lower(METRICS.ControlDataType) like '%zip code%'
+		OR lower(METRICS.ControlDataType) like '%post code%'
+		OR lower(METRICS.ControlDataType) like '%city%' 
+		OR lower(METRICS.ControlDataType) like '%state%' OR lower(METRICS.ControlDataType) like '%country%' 
+		OR lower(METRICS.ControlDataType) like '%string%' 
+		Then 'varchar(255)' 
+
+		when lower(METRICS.ControlDataType) like  '%integer%' then 'BIGINT'
+
+		Else METRICS.ControlDataType End METRICDATATYPE
+		,0,Coalesce(B.SourceTypeID,0) as ENTITYDEFID
+		,B.ReportConfigDetailID ReportConfigDetailID
+
+		from KBReportsConfigurationDetails B 
+		Join KBEntityMst EntityDef on B.SourceTypeID=EntityDef.ENTITYDEF_ID
+		JOIN KBEntityScreenConfigurationMst METRICS ON EntityDef.ENTITYDEF_ID=Metrics.EntityDefID and B.METRICNAME=Metrics.ControlTitle
+		and B.SourceTypeID=Metrics.EntityDefID and B.ServiceLabel=Metrics.ServiceLabel	
+
+		JOIN KBReportsConfigurationMSt RptMst  on   RptMst.ReportConfigurationID=B.ReportConfigurationID			
+		Where B.ISDIMENSION=2 and Rptmst.ReportConfigurationID=VReportConfigurationID
+		Union All
+
+		/*dimension ID  columns*/
+		Select  distinct VReportConfigurationID,0 SpokeId,'Dimension' ObjectType,0 MetricId
+		,case 
+		when 
+			LINK.ID =1 then Mst.SOURCETYPE_NAME||'_'|| B.MetricName||'_'|| LINK.METRICNAME||'ID'  
+		when 	
+			LINK.ID =2 then Mst.SOURCETYPE_NAME||'_'|| B.MetricName||'ID'  
+		else B.MetricName||'ID'  end AS NAME
+		,DIMENSIONNAME||'_'||B.MetricName
+		,Attrs.DataType METRICDATATYPE
+		,0
+		,Coalesce(B. ENTITYDEFID,0) as ENTITYDEFID
+		,B.ReportConfigDetailID ReportConfigDetailID
+		from KBReportsConfigurationDetails B 
+		JOIN kb_dim_sourcelink LINK on LINK.ID=B.SourceTypeID
+		Join KB_DIM_DIMENSIONMST Dims on B.SourceTypeID=dims.ID
+		join KbsourcetypeMst Mst on Mst.SOURCETYPE_ID=LINK.SOURCEID
+		join dim_dimensionAttributes Attrs on Attrs.AttributeName=B.MetricName and Attrs.DimensionID=B.SourceTypeID
+		JOIN KBReportsConfigurationMSt RptMst  on   RptMst.ReportConfigurationID=B.ReportConfigurationID
+		Where B.ISDIMENSION=1 and Rptmst.ReportConfigurationID=VReportConfigurationID and B.subtype is null--!='envidatasource'
+		union all
+		/*Unknown*/
+		Select distinct VReportConfigurationID,0 SPOKEID
+		,'Dimension' ObjectType
+		,0 METRICID
+		,Dims.DIMENSIONNAME||'ID' METRICNAME
+		,Dims.DIMENSIONNAME||'ID' as  TABLECOL
+		,'Bigint' METRICDATATYPE
+		,0 SPOKETYPE
+		,0 ENTITYDEFID
+		,B.ReportConfigDetailID ReportConfigDetailID
+		from 
+		KBReportsConfigurationDetails B 
+		Join KB_DIM_DIMENSIONMST Dims on B.SourceTypeID=Dims.ID
+		JOIN KBMETRICMST Metrics on Metrics.METRIC_ID=B.MetricID
+		JOIN KBReportsConfigurationMSt RptMst  on   RptMst.ReportConfigurationID=B.ReportConfigurationID
+		Where B.ISDIMENSION=1 and RptMst.ReportConfigurationID=VReportConfigurationID --and B.subtype!='envidatasource'
+		union all
+		Select distinct   VReportConfigurationID,RDetails.DIMENSIONID SPOKEID,'envidatasource' ObjectType
+		,Coalesce(Mets.METRIC_ID,0) METRICID
+		,   Rdetails.DIMENSION_ATTRIBUTE as  METRICNAME  
+		,Coalesce(Rdetails.MetricColumnAlias,Sources1.SOURCETYPE_NAME||'_'||Sources.sourcetype_name||'_'||	RDetails.DIMENSION_ATTRIBUTE)	TABLECOL 
+		,Coalesce( Mets.METRICDATATYPE  ,'BIGINT' )   METRICDATATYPE
+		,1 SPOKETYPE
+		,Coalesce(RDetails.ENTITYDEFID,0) as ENTITYDEF_ID
+		,RDetails.ReportConfigDetailID ReportConfigDetailID
+		from 
+		KBReportsConfigurationDetails RDetails
+		JOIN KBMetricMst Mets on Coalesce(Mets.METRICALIAS,Mets.Metricname)=RDetails.DIMENSION_ATTRIBUTE and rdetails.DIMENSIONID=Mets.SOURCE_ID
+		Join KBSourceTypeMst Sources on RDetails.DIMENSIONID=Sources.SOURCETYPE_ID
+		join KBSourceTypeMst Sources1 on Sources1.SOURCETYPE_ID=RDetails.SourceTypeID
+		Where  RDetails.ReportConfigurationID=VReportConfigurationID and RDetails.subtype='envidatasource' and Mets.TEMPLATE_ID=1
+	)AA;
+
+	Insert into kbreportsmetadata(ReportConfigurationID,SourceTypeID,OBJECTTYPE,MetricID,MetricName,TABLECOL,METRICDATATYPE,SPOKETYPE,ENTITYDEFID
+	,Createdby,modifiedby,createddate,modifieddate
+	)
+	SELECT 
+	distinct Kpi.ReportConfigurationID,Kpi.SourceTypeID,'KPI' OBJECTTYPE,Kpi.METRICID,Kpi.METRICNAME
+	,Coalesce(MetricColumnAlias ,Sources.SOURCETYPE_NAME||'_'||EntityDef.ENTITY_NAME||'_'||METRICNAME)||'_Condition Name','Varchar(255)' METRICDATATYPE
+	,Kpi.IsEnviDataSrc,Kpi.ENTITYDEFID
+	,VCreated_by Createdby,VCreated_by ModifiedBy,VActiondate CreatedDate,VActiondate Modifieddate
+	from KPI Kpi
+	JOIN 
+	kbsourceTypemst Sources ON 	Kpi.SourceTypeID=Sources.SOURCETYPE_ID
+	JOIN 
+	kbEntityMst EntityDef ON 	Kpi.ENTITYDEFID=EntityDef.ENTITYDEF_ID
+
+	Union  
+
+	SELECT 
+	distinct Kpi.ReportConfigurationID,Kpi.SourceTypeID,'KPI' OBJECTTYPE,Kpi.METRICID,Kpi.METRICNAME
+	,Coalesce(MetricColumnAlias ,Sources.SOURCETYPE_NAME||'_'||EntityDef.ENTITY_NAME||'_'||METRICNAME)||'_Condition Range','Varchar(255)' METRICDATATYPE
+	,Kpi.IsEnviDataSrc,Kpi.ENTITYDEFID
+	,VCreated_by,VCreated_by,VActiondate,VActiondate
+	from KPI Kpi
+	JOIN 
+	kbsourceTypemst Sources ON 	Kpi.SourceTypeID=Sources.SOURCETYPE_ID
+	JOIN 
+	kbEntityMst EntityDef ON 	Kpi.ENTITYDEFID=EntityDef.ENTITYDEF_ID
+
+	union  
+
+	SELECT 
+	distinct Kpi.ReportConfigurationID,Kpi.SourceTypeID,'KPI' OBJECTTYPE,Kpi.METRICID,Kpi.METRICNAME
+	,Coalesce(MetricColumnAlias ,Sources.SOURCETYPE_NAME||'_'||EntityDef.ENTITY_NAME||'_'||METRICNAME)||'_Condition KPI','Varchar(255)' METRICDATATYPE
+	,Kpi.IsEnviDataSrc,Kpi.ENTITYDEFID
+	,VCreated_by,VCreated_by,VActiondate,VActiondate
+	from KPI Kpi
+	JOIN 
+	kbsourceTypemst Sources ON 	Kpi.SourceTypeID=Sources.SOURCETYPE_ID
+	JOIN 
+	kbEntityMst EntityDef ON 	Kpi.ENTITYDEFID=EntityDef.ENTITYDEF_ID	;
+
+	if(VIspivote=1) then
+	Begin 		 
+ 
+	Insert into kbreportsmetadata(ReportConfigurationID,SourceTypeID,OBJECTTYPE,MetricName,TABLECOL,METRICDATATYPE
+	,Createdby,modifiedby,createddate,modifieddate
+	)
+	select VReportConfigurationid,kpiid,'KPI','kpiid'||'_'||cast(kpiid as Varchar)||'_'||cast(sourceid as Varchar),Coalesce(ColumnName,kpiname),'bigint'  
+	 ,VCreated_by Createdby,VCreated_by ModifiedBy,VActiondate CreatedDate,VActiondate Modifieddate
+	from selectedkpi  
+	UNION
+	select VReportConfigurationid,kpiid,'KPI','kpiname'||'_'||cast(kpiid as Varchar)||'_'||cast(sourceid as Varchar)
+	,Coalesce(ColumnName,kpiname)||'_Condition Name','Varchar(255)'  
+	 ,VCreated_by Createdby,VCreated_by ModifiedBy,VActiondate CreatedDate,VActiondate Modifieddate
+	from selectedkpi  
+  
+	union  
+ 
+	select VReportConfigurationid,kpiid,'KPI','kpistatus'||'_'||cast(kpiid as Varchar)||'_'||cast(sourceid as Varchar),Coalesce(ColumnName,kpiname)||'_Condition Range','Varchar(255)' 
+	 ,VCreated_by Createdby,VCreated_by ModifiedBy,VActiondate CreatedDate,VActiondate Modifieddate
+	 from selectedkpi  
+	--join kbkpiMst Mst on Coalesce(Mst.OriginalID,Mst.kpi_id)=SK.kpiid
+	union  
+	select VReportConfigurationid,kpiid,'KPI','groupingname'||'_'||cast(kpiid as Varchar)||'_'||cast(sourceid as Varchar),Coalesce(ColumnName,kpiname)||'_Condition KPI','Varchar(255)'  
+	 ,VCreated_by Createdby,VCreated_by ModifiedBy,VActiondate CreatedDate,VActiondate Modifieddate
+	from selectedkpi  ;
+	
+	
+	Insert into kbreportsmetadata(ReportConfigurationID,SourceTypeID,OBJECTTYPE,MetricName,TABLECOL,METRICDATATYPE
+	,Createdby,modifiedby,createddate,modifieddate
+	)
+	select VReportConfigurationid,EventID,'Event','eventid_'||cast(EventID as varchar),EventName||'_ID','BIGINT' 
+	 ,VCreated_by Createdby,VCreated_by ModifiedBy,VActiondate CreatedDate,VActiondate Modifieddate
+	from SelectedEvents;
+	END;
+	End if;
+
+	insert into kbreportsmetadata(ReportConfigurationID,SourceTypeID,OBJECTTYPE,MetricName,TABLECOL,METRICDATATYPE,ENTITYDEFID,Createdby,modifiedby,createddate,modifieddate)
+	select distinct VReportConfigurationid ID,EntityID,'Entity','entityid_'||cast(EntityID as varchar),EntityDefName||'_ID','BIGINT',EntityID
+	,VCreated_by Createdby,VCreated_by ModifiedBy,VActiondate CreatedDate,VActiondate Modifieddate
+	from EntitiesTable A  --where newlyadded=1 
+	;
+
+	-----
+
+	if(VReportOn=0 )/*correlation*/ Then
+	Begin
+
+		/*Getting the correlationName*/
+		VcorrelationName:=(
+					select CorrelationName 
+					from cbcorrelationMst 
+					where  CorrelationID=cast(VDatasources as int)
+				  );
+
+		VJoinquery:='FROM "DM_DRIVER_'||VcorrelationName||'"' ;
+
+		/*for live data based on corelation*/					 
+		if(VReportType='0' and (VDatasources is NOT null or cast(VDatasources as int)!=0) and VREGULARFROMDATE is not null)    Then  
+		Begin
+
+			/*Getting all the source metric tables with sequence columns*/
+			insert into SourceTable(SourceTablecolumn,correlationtablecolumn,Sourcetablename)
+			select distinct '"Fact_'||Mst.Alias||'MetricDetails".SEQ'
+			,'"DM_DRIVER_'||VcorrelationName||'"."'||Mst.Alias||'_SEQ"'
+			,'"Fact_'||Mst.Alias||'MetricDetails"'
+			from kbreportsMetaData MData 
+			join kbsourcetypemst Mst on Mst.SOURCETYPE_ID=MData.SourceTypeID
+			where Objecttype='Source' and MData.ReportConfigurationID=VReportConfigurationID
+			and Mst.SPOKETYPE='0';
+			
+			/*Forming the join query*/ 
+			VCount:=(select count(1) from SourceTable);
+			Vcounter:=1;
+			
+			while(Vcounter<=VCount) Loop
+			
+			VJoinquery:=VJoinquery||
+						(select ' INNER JOIN ' ||Sourcetablename ||' ON ' ||SourceTablecolumn ||'='|| correlationtablecolumn 
+						from SourceTable 
+						where ID=Vcounter);
+			 
+			Vcounter:= Vcounter+1;
+			end loop; 
+
+			/*Getting all the real time data mart source columns excluding the environmental sources*/
+			VReportcols=	(
+						Select String_Agg(tabcol,'')
+						from
+						(
+							select ','||'"'||TableCOL||'"' tabcol
+							from 
+							kbreportsMetaData  MData
+							join kbsourcetypemst Mst on Mst.SOURCETYPE_ID=MData.SourceTypeID
+							where ReportConfigurationID=VReportConfigurationID
+							and Objecttype='Source'  and Mst.SPOKETYPE='0' 
+							Order by Recordid 
+							--for xml path('')
+						)a
+					);
+
+			/*custom dimension cols*/
+			VReportcols:=	VReportcols||Coalesce( 
+								(
+								Select String_Agg(tabcol,'')
+								from
+								(
+									select ','||'"'||TableCOL||'"' tabcol
+									from 
+									kbreportsMetaData  MData
+									JOIN kbreportsconfigurationdetails Det on Det.ReportConfigDetailID=Mdata.ReportConfigDetailID
+									where Mdata.ReportConfigurationID=VReportConfigurationid
+									and  objecttype='Dimension'
+									and Det.dimension_Attribute in ('ID')
+									--Order by Recordid for xml path('') 
+								)a
+								)
+								,'');
+								
+			VReportcols:=	VReportcols||Coalesce( 
+								(
+								Select String_Agg(tabcol,'')
+								from
+								(
+									select ','||'"'||TableCOL||'"' tabcol
+									from 
+									kbreportsMetaData  MData
+									JOIN kbreportsconfigurationdetails Det on Det.ReportConfigDetailID=Mdata.ReportConfigDetailID
+									where Mdata.ReportConfigurationID=VReportConfigurationid
+									and  objecttype='Dimension'
+									and Det.dimension_Attribute in ('TIMEID')
+									--Order by Recordid for xml path('') 
+								)a
+								)
+								,'');
+			VReportcols:=	VReportcols||Coalesce( 
+								(
+								Select String_Agg(tabcol,'')
+								from
+								(
+									select ','||'"'||TableCOL||'"' tabcol
+									from 
+									kbreportsMetaData  MData
+									JOIN kbreportsconfigurationdetails Det on Det.ReportConfigDetailID=Mdata.ReportConfigDetailID
+									where Mdata.ReportConfigurationID=VReportConfigurationid
+									and  objecttype='Dimension'
+									and Det.dimension_Attribute in ('LOCATIONID')
+									--Order by Recordid for xml path('') 
+								)a
+								)
+								,'');
+			/*entity cols*/
+			VReportcols:=	VReportcols||Coalesce( 
+								(
+								Select String_Agg(tabcol,'')
+								from
+								(
+									select ','||'"'||TableCOL||'"' tabcol
+									from 
+									kbreportsMetaData  MData
+									JOIN kbreportsconfigurationdetails Det on Det.ReportConfigDetailID=Mdata.ReportConfigDetailID
+									where Mdata.ReportConfigurationID=VReportConfigurationid
+									and  upper(objecttype)='ENTITY'
+									and MData.METRICNAME LIKE ('%entityid_%')
+									 Order by Recordid
+									--Order by Recordid for xml path('') 
+								)a
+								)
+								,'');
+			VReportcols=Replace(VReportcols,'""','"');
+
+			/*Forming the insert statement*/
+			VReportsql:=('Insert into "RPT_'||VReportConfigurationName||'" ('||VReportcols||')');
+
+			VSrccols:= 'select '|| (
+						Select String_Agg(tabcol,'')
+						from
+						(
+							select ',' ||' "Fact_'||Mst.Alias||'MetricDetails"."'||MetricName||'"' tabcol
+							from 
+							kbreportsMetaData  MData
+							join kbsourcetypemst Mst on Mst.SOURCETYPE_ID=MData.SourceTypeID
+							where ReportConfigurationID=VReportConfigurationID
+							and Objecttype='Source'  and Mst.SPOKETYPE='0' 
+							Order by Recordid 
+							--for xml path('')
+						)a
+						);
+			VSrccols:= VSrccols||Coalesce(
+							(select String_agg(tabcol,'')
+							from
+							(  
+								select',' ||' "Fact_'||Mst.Alias||'MetricDetails"."'||Mst.SOURCETYPE_NAME||'_'||DIM.DimensionName||'_ID'||'"' tabcol
+								from kbsourcetypemst Mst 
+								join kbreportsmetadata Reports on Reports.SourceTypeID=Mst.SOURCETYPE_ID
+								JOIN kbreportsconfigurationdetails Det on Det.ReportConfigDetailID=Reports.ReportConfigDetailID
+								join kb_dim_dimensionMst dim on dim.ID=Det.DimensionID
+								where Objecttype='Dimension' and Reports.ReportConfigurationID=VReportConfigurationID
+								and Det.dimension_Attribute in ('ID')
+								and Mst.SPOKETYPE='0'
+								--Order by Recordid for xml path('')  
+							)a
+							)
+						,'');
+
+			VSrccols:= VSrccols||Coalesce(
+							(select String_agg(tabcol,'')
+							from
+							(  
+								select ',' ||' "Fact_'||Mst.Alias||'MetricDetails"."'||Det.MetricName||'ID"' tabcol
+								from kbsourcetypemst Mst 
+								join kbreportsmetadata Reports on Reports.SourceTypeID=Mst.SOURCETYPE_ID
+								JOIN kbreportsconfigurationdetails Det on Det.ReportConfigDetailID=Reports.ReportConfigDetailID
+								join kb_dim_dimensionMst dim on dim.ID=Det.DimensionID
+								where Objecttype='Dimension' and Reports.ReportConfigurationID=VReportConfigurationID
+								and Det.dimension_Attribute in ('TIMEID')
+								and Mst.SPOKETYPE='0'
+								--Order by Recordid for xml path('')  
+							)a
+							)
+						,'');
+
+			VSrccols:= VSrccols||Coalesce(
+							(select String_agg(tabcol,'')
+							from
+							(  
+								select ',' ||' "Fact_'||Mst.Alias||'MetricDetails"."ENTITYLOCATIONID"' tabcol
+								from kbsourcetypemst Mst 
+								join kbreportsmetadata Reports on Reports.SourceTypeID=Mst.SOURCETYPE_ID
+								JOIN kbreportsconfigurationdetails Det on Det.ReportConfigDetailID=Reports.ReportConfigDetailID
+								join kb_dim_dimensionMst dim on dim.ID=Det.DimensionID
+								where Objecttype='Dimension' and Reports.ReportConfigurationID=VReportConfigurationID
+								and Det.dimension_Attribute in ('LOCATIONID')
+								and Mst.SPOKETYPE='0'
+								--Order by Recordid for xml path('')  
+							)a
+							)
+						,'');	
+			VSrccols:=	VSrccols||Coalesce( 
+								(
+								Select String_Agg(tabcol,'')
+								from
+								(
+									select ',' ||' "Fact_'||Mst.Alias||'MetricDetails"."EntityID"' tabcol
+									from 
+									kbreportsMetaData  MData
+									join kbsourcetypeMst Mst on Mst.SOURCETYPE_ID=MData.SourceTypeID
+									where Objecttype='entity' and MData.ReportConfigurationID=VReportConfigurationID
+									and MData.METRICNAME LIKE ('%entityid_%')
+									Order by Recordid
+									--Order by Recordid for xml path('') 
+								)a
+								)
+								,'');
+			VSrccols=Replace(VSrccols,'""','"');													
+
+			VInsertquery=(select VReportsql||VSrccols||VJoinquery );
+
+			VRes:=
+				(
+					Select Row_to_json(del) as "root"
+					From
+					(
+						select '' "delaytime",'' "uom"
+						,
+						(
+							Select Row_to_json(realt) as "processtype"
+							from
+							(
+								select 1 as "seq",'realtimedatamart' "type"
+								,
+								(
+									Select Row_to_json(que) as "query"
+									from
+									(
+										select 'insert' "type",1 "isquery", VInsertquery   
+										--for xml raw('query') 
+									) as que
+								)
+								--for xml raw('processtype')
+							) as realt
+						)
+						--for xml raw('root')
+					)del	
+				);
+		End;
+		End if;
+	End;
+	Elseif (VReporton=2 and VREGULARFROMDATE is not null ) Then
+	Begin
+
+		
+		select alias,SOURCETYPE_NAME into VsrcName,VSName
+		from kbsourcetypeMst where SOURCETYPE_ID=cast(VDatasources as bigint) and isactive='1';
+				
+		Vsrctable:='from Fact_'||VsrcName||'Metricdetails';
+
+		VVerticastring:=('(select RECORDDATEUTC '|| Vsrctable ||' src join "RPT_'||VReportConfigurationName ||'" rpt on  rpt."'||VSName||'_seq"=src.seq order by RECORDDATEUTC desc   limit 1');
+		VrecordedtaeUtc:=('(select RECORDDATEUTC '|| Vsrctable ||' src join "RPT_'||VReportConfigurationName ||'" rpt on  rpt."'||VSName||'_seq"=src.seq order by RECORDDATEUTC desc limit 1');
+
+		VDateString:=('update Analysiscollectiondimupdatedetails set Lastupdatedtime='||VrecordedtaeUtc||') where ReportconfigurationID='||cast(VReportConfigurationid as varchar)
+			||' and analysistablename=''"RPT_'||VReportConfigurationName ||'"'' and dimensiontablename=''"Fact_'||VsrcName||'Metricdetails"'' and "type"=''singledatasource''');
+				
+		VVerticaupdate:=('update Analysiscollectiondimupdatedetails set Lastupdatedtime='||VVerticastring||') where ReportconfigurationID='||cast(VReportConfigurationid as varchar)
+			||' and analysistablename=''"RPT_'||VReportConfigurationName ||'"'' and dimensiontablename=''"Fact_'||VsrcName||'Metricdetails"'' and "type"=''singledatasource''');
+
+		VPlaceholders:=
+				(
+					Select  Row_to_json(reps) as "replacers"
+					from
+					(
+					Select Row_to_json(rep) as "replace"
+					from
+					(
+					select '#Lastupdatedtime#' as "string",'select Lastupdatedtime from Analysiscollectiondimupdatedetails where ReportconfigurationID='||cast(VReportConfigurationid as varchar)
+					||' and analysistablename=''"RPT_'||VReportConfigurationName ||'"'' and dimensiontablename=''"Fact_'||VsrcName||'Metricdetails"'' and "type"=''singledatasource''' as "selectquery" 
+					,cast(VDateString as varchar(1000)) "updatequery",VVerticaupdate as "updatequery_vertica" 
+					--for xml raw('replace'),root('replacers')
+					)rep
+					)reps
+				);
+
+		VReportcols=	(
+						Select String_Agg(tabcol,'')
+						from
+						(
+							select ','||'"'||TableCOL||'"' tabcol
+							from 
+							kbreportsMetaData  MData
+							join kbsourcetypemst Mst on Mst.SOURCETYPE_ID=MData.SourceTypeID
+							where ReportConfigurationID=VReportConfigurationID
+							and Objecttype='Source'  and Mst.SPOKETYPE='0' 
+							Order by Recordid 
+							--for xml path('')
+						)a
+					);
+
+			/*custom dimension cols*/
+			VReportcols:=	VReportcols||Coalesce( 
+								(
+								Select String_Agg(tabcol,'')
+								from
+								(
+									select ','||'"'||TableCOL||'"' tabcol
+									from 
+									kbreportsMetaData  MData
+									JOIN kbreportsconfigurationdetails Det on Det.ReportConfigDetailID=Mdata.ReportConfigDetailID
+									where Mdata.ReportConfigurationID=VReportConfigurationid
+									and  objecttype='Dimension'
+									and Det.dimension_Attribute in ('ID')
+									--Order by Recordid for xml path('') 
+								)a
+								)
+								,'');
+								
+			VReportcols:=	VReportcols||Coalesce( 
+								(
+								Select String_Agg(tabcol,'')
+								from
+								(
+									select ','||'"'||TableCOL||'"' tabcol
+									from 
+									kbreportsMetaData  MData
+									JOIN kbreportsconfigurationdetails Det on Det.ReportConfigDetailID=Mdata.ReportConfigDetailID
+									where Mdata.ReportConfigurationID=VReportConfigurationid
+									and  objecttype='Dimension'
+									and Det.dimension_Attribute in ('TIMEID')
+									--Order by Recordid for xml path('') 
+								)a
+								)
+								,'');
+			VReportcols:=	VReportcols||Coalesce( 
+								(
+								Select String_Agg(tabcol,'')
+								from
+								(
+									select ','||'"'||TableCOL||'"' tabcol
+									from 
+									kbreportsMetaData  MData
+									JOIN kbreportsconfigurationdetails Det on Det.ReportConfigDetailID=Mdata.ReportConfigDetailID
+									where Mdata.ReportConfigurationID=VReportConfigurationid
+									and  objecttype='Dimension'
+									and Det.dimension_Attribute in ('LOCATIONID')
+									--Order by Recordid for xml path('') 
+								)a
+								)
+								,'');
+			/*entity cols*/
+			VReportcols:=	VReportcols||Coalesce( 
+								(
+								Select String_Agg(tabcol,'')
+								from
+								(
+									select ','||'"'||TableCOL||'"' tabcol
+									from 
+									kbreportsMetaData  MData
+									JOIN kbreportsconfigurationdetails Det on Det.ReportConfigDetailID=Mdata.ReportConfigDetailID
+									where Mdata.ReportConfigurationID=VReportConfigurationid
+									and  upper(objecttype)='ENTITY'
+									and MData.METRICNAME LIKE ('%entityid_%')
+									 Order by Recordid
+									--Order by Recordid for xml path('') 
+								)a
+								)
+								,'');
+			VReportcols=Replace(VReportcols,'""','"');
+
+			/*Forming the insert statement*/
+			VReportsql:=('Insert into "RPT_'||VReportConfigurationName||'" ('||VReportcols||')');
+
+			VSrccols:= 'select '|| (
+						Select String_Agg(tabcol,'')
+						from
+						(
+							select ',' ||' "Fact_'||Mst.Alias||'MetricDetails"."'||MetricName||'"' tabcol
+							from 
+							kbreportsMetaData  MData
+							join kbsourcetypemst Mst on Mst.SOURCETYPE_ID=MData.SourceTypeID
+							where ReportConfigurationID=VReportConfigurationID
+							and Objecttype='Source'  and Mst.SPOKETYPE='0' 
+							Order by Recordid 
+							--for xml path('')
+						)a
+						);
+			VSrccols:= VSrccols||Coalesce(
+							(select String_agg(tabcol,'')
+							from
+							(  
+								select',' ||' "Fact_'||Mst.Alias||'MetricDetails"."'||Mst.SOURCETYPE_NAME||'_'||DIM.DimensionName||'_ID'||'"' tabcol
+								from kbsourcetypemst Mst 
+								join kbreportsmetadata Reports on Reports.SourceTypeID=Mst.SOURCETYPE_ID
+								JOIN kbreportsconfigurationdetails Det on Det.ReportConfigDetailID=Reports.ReportConfigDetailID
+								join kb_dim_dimensionMst dim on dim.ID=Det.DimensionID
+								where Objecttype='Dimension' and Reports.ReportConfigurationID=VReportConfigurationID
+								and Det.dimension_Attribute in ('ID')
+								and Mst.SPOKETYPE='0'
+								--Order by Recordid for xml path('')  
+							)a
+							)
+						,'');
+
+			VSrccols:= VSrccols||Coalesce(
+							(select String_agg(tabcol,'')
+							from
+							(  
+								select ',' ||' "Fact_'||Mst.Alias||'MetricDetails"."'||Det.MetricName||'ID"' tabcol
+								from kbsourcetypemst Mst 
+								join kbreportsmetadata Reports on Reports.SourceTypeID=Mst.SOURCETYPE_ID
+								JOIN kbreportsconfigurationdetails Det on Det.ReportConfigDetailID=Reports.ReportConfigDetailID
+								join kb_dim_dimensionMst dim on dim.ID=Det.DimensionID
+								where Objecttype='Dimension' and Reports.ReportConfigurationID=VReportConfigurationID
+								and Det.dimension_Attribute in ('TIMEID')
+								and Mst.SPOKETYPE='0'
+								--Order by Recordid for xml path('')  
+							)a
+							)
+						,'');
+
+			VSrccols:= VSrccols||Coalesce(
+							(select String_agg(tabcol,'')
+							from
+							(  
+								select ',' ||' "Fact_'||Mst.Alias||'MetricDetails"."ENTITYLOCATIONID"' tabcol
+								from kbsourcetypemst Mst 
+								join kbreportsmetadata Reports on Reports.SourceTypeID=Mst.SOURCETYPE_ID
+								JOIN kbreportsconfigurationdetails Det on Det.ReportConfigDetailID=Reports.ReportConfigDetailID
+								join kb_dim_dimensionMst dim on dim.ID=Det.DimensionID
+								where Objecttype='Dimension' and Reports.ReportConfigurationID=VReportConfigurationID
+								and Det.dimension_Attribute in ('LOCATIONID')
+								and Mst.SPOKETYPE='0'
+								--Order by Recordid for xml path('')  
+							)a
+							)
+						,'');	
+			VSrccols:=	VSrccols||Coalesce( 
+								(
+								Select String_Agg(tabcol,'')
+								from
+								(
+									select ',' ||' "Fact_'||Mst.Alias||'MetricDetails"."EntityID"' tabcol
+									from 
+									kbreportsMetaData  MData
+									join kbsourcetypeMst Mst on Mst.SOURCETYPE_ID=MData.SourceTypeID
+									where Objecttype='entity' and MData.ReportConfigurationID=VReportConfigurationID
+									and MData.METRICNAME LIKE ('%entityid_%')
+									Order by Recordid
+									--Order by Recordid for xml path('') 
+								)a
+								)
+								,'');
+			VSrccols:=Replace(VSrccols,'""','"');	
+
+			VRes:=
+				(
+					Select Row_to_json(del) as "root"
+					From
+					(
+						select '' "delaytime",'' "uom"
+						,
+						(
+							Select Row_to_json(realt) as "processtype"
+							from
+							(
+								select 1 as "seq",'singlesourcedatamart' "type",VPlaceholders
+								,
+								(
+									Select Row_to_json(que) as "query"
+									from
+									(
+										select 'insert' "type",1 "isquery", VInsertquery   
+										--for xml raw('query') 
+									) as que
+								)
+								--for xml raw('processtype')
+							) as realt
+						)
+						--for xml raw('root')
+					)del	
+				);
+		
+		
+	end;
+	
+	end if;
+
+if(VIspivote=0) Then
+
+Begin
+	Return(
+		Select Row_to_json(output)
+		from
+		(
+			Select Row_to_json(a) "REPORTDETAILS"
+			from
+			(
+				Select VReportConfigurationID "Reportid",
+				(
+		
+
+					Select Row_to_json(tabs) "tablestructure"
+					from
+					(	
+						Select Array_to_json(Array_agg(Row_to_json(tab))) as "table"
+						from
+						(
+				 
+							select 'RPT_'|| ReportConfigurationName as "name"
+							,
+							(
+								Select Array_to_json(Array_Agg(Row_to_json(col)))
+								from
+								(
+									select TABLECOL "TABLECOL",METRICDATATYPE "METRICDATATYPE" 
+									from kbreportsmetadata 
+									where ReportconfigurationID=Mst.ReportconfigurationID 
+									order by Recordid
+									--for xml raw('column')
+								) as col
+							) "column"
+							from KBReportsConfigurationMSt mst
+							where Mst.ReportconfigurationID=VReportConfigurationID
+							
+							union all
+							
+							select 'RPT_'|| ReportConfigurationName||'_Conditions' as "name"
+							,
+							(
+								Select Array_to_json(Array_Agg(Row_to_json(col))) 
+								from
+								(
+									select A.TABLECOL "TABLECOL",A.METRICDATATYPE  "METRICDATATYPE"
+									from
+									(
+										select 'seq' TABLECOL,'varchar(500)' as METRICDATATYPE,1 as Torder
+										union
+										select 'Condition Name' TABLECOL,'varchar(500)' as METRICDATATYPE,2 as Torder
+										union
+										select 'Condition Range' TABLECOL,'varchar(500)' as METRICDATATYPE,3 as Torder
+										union
+										select 'Condition KPI' TABLECOL,'varchar(500)' as METRICDATATYPE,4 as Torder
+									)A order by A.Torder
+									--for xml raw('column')
+								) as col
+							) "column"
+							from KBReportsConfigurationMSt mst
+							where Mst.ReportconfigurationID=VReportConfigurationID
+							
+							Union All
+
+							select 'RPT_'|| ReportConfigurationName||'_events' as "name",
+							
+							(
+								Select Array_to_json(Array_Agg(Row_to_json(col))) 
+								from
+								(
+									select A.TABLECOL as "TABLECOL",A.METRICDATATYPE as "METRICDATATYPE" 
+									from
+									(
+									select 'seq' TABLECOL,'varchar(500)' as METRICDATATYPE,1 as Torder
+									union
+									select 'eventid' TABLECOL,'bigint' as METRICDATATYPE,2 as Torder
+									union
+									select 'eventname' TABLECOL,'varchar(500)' as METRICDATATYPE,3 as Torder
+									)A order by A.Torder
+									--for xml raw('column')
+								)as col
+							)"column"
+
+							from KBReportsConfigurationMSt mst
+							where Mst.ReportconfigurationID=VReportConfigurationID
+							
+						)tab
+					)tabs
+				)	
+			)a
+		) output			
+	);								
+				 
+END;
+
+else
+Begin
+
+	Return(
+		Select Row_to_json(output)
+		from
+		(
+		Select Row_to_json(a) "REPORTDETAILS"
+		from
+		(
+			Select VReportConfigurationID "Reportid",
+			(
+
+				Select row_to_json(tabs) "tablestructure" 
+				from
+				(
+					Select Array_to_json(array_agg(Row_to_json(tab))) "table"
+					from
+					(
+					select 'RPT_'|| ReportConfigurationName as "name"
+					,
+					(
+						Select Array_to_json(Array_Agg(Row_to_json(col))) "column"
+						from
+						(
+							select TABLECOL "TABLECOL",METRICDATATYPE "METRICDATATYPE" 
+							from kbreportsmetadata 
+							where ReportconfigurationID=Mst.ReportconfigurationID 
+							order by Recordid
+							--for xml raw('column')
+						) as col
+					)
+					from KBReportsConfigurationMSt mst
+					where Mst.ReportconfigurationID=VReportconfigurationID
+					--for xml raw('table'),root('tablestructure')
+					) as tab
+				)tabs	
+			)	
+		)a
+		) output
+
+	);
+END;
+End if;
+
+end;
+Elseif Lower(Vtran)='update' then
+Begin
+
+	select 
+	ivalue->'REPORTDETAILS'->'CONFIGDETAILS'->> 'DATARETENTIONPERIOD' 
+	,ivalue->'REPORTDETAILS'->'CONFIGDETAILS'->> 'UOM'
+	,ivalue->'REPORTDETAILS'->'CONFIGDETAILS'->> 'ACTIONONHISTORICALDATA'
+	,ivalue->'REPORTDETAILS'->'CONFIGDETAILS'->> 'DATABACKUPPATH'
+	,cast(ivalue->'REPORTDETAILS'->'CONFIGDETAILS'->> 'CORRELATIONID' as smallint)
+	,ivalue->'REPORTDETAILS'->'CONFIGDETAILS'->> 'SNAPSHOTFROMDATE'
+	,ivalue->'REPORTDETAILS'->'CONFIGDETAILS'->> 'SNAPSHOTTODATE'
+	,cast(ivalue->'REPORTDETAILS'->'CONFIGDETAILS'->> 'STORAGETYPE' as smallint)
+	,ivalue->'REPORTDETAILS'->'CONFIGDETAILS'->> 'REGULARFROMDATE'
+	into
+	VDATARETENTIONPERIOD,VUOM,VACTIONONHISTORICALDATA,VDATABACKUPPATH,VCORRELATIONID,VSNAPSHOTFROMDATE,VSNAPSHOTTODATE,VSTORAGETYPE, VREGULARFROMDATE
+	from temps limit 1;	
+
+	select 
+	ivalue->'REPORTDETAILS'->>'NAME'
+	,ivalue->'REPORTDETAILS'->>'DESCRIPTION'
+	,cast(ivalue->'REPORTDETAILS'->>'REPORTID' as int)
+	,ivalue->'REPORTDETAILS'->> 'DATARETENTIONPERIOD' 
+	,ivalue->'REPORTDETAILS'->> 'UOM'
+	,ivalue->'REPORTDETAILS'->'CONFIGDETAILS'->> 'ACTIONONHISTORICALDATA'
+	,ivalue->'REPORTDETAILS'->'CONFIGDETAILS'->> 'DATABACKUPPATH'
+	,cast(ivalue->'REPORTDETAILS'->'CONFIGDETAILS'->> 'CORRELATIONID' as smallint)
+	,ivalue->'REPORTDETAILS'->'CONFIGDETAILS'->> 'SNAPSHOTFROMDATE'
+	,ivalue->'REPORTDETAILS'->'CONFIGDETAILS'->> 'SNAPSHOTTODATE'
+	,cast(ivalue->'REPORTDETAILS'->'CONFIGDETAILS'->> 'STORAGETYPE' as smallint)
+	,ivalue->'REPORTDETAILS'->'CONFIGDETAILS'->> 'REGULARFROMDATE'
+	,cast(ivalue->'REPORTDETAILS'->> 'ServiceTime' as smallint)
+	,ivalue->'REPORTDETAILS'->> 'ServiceTimeUOM'
+	,ivalue->'REPORTDETAILS'->>'ReportOn'
+	,ivalue->'REPORTDETAILS'->>'ReportType'
+	into
+	VReportConfigurationName,VReportConfigurationDescription,vReportConfigurationid,VDATARETENTIONPERIOD,VUOM,VACTIONONHISTORICALDATA,VDATABACKUPPATH,VCORRELATIONID
+	,VSNAPSHOTFROMDATE,VSNAPSHOTTODATE,VSTORAGETYPE, VREGULARFROMDATE,VServiceTime,VServiceTimeUOM,VReportOn,VReporttype
+	from temps limit 1;	
+
+	select 
+	Cast(ivalue->'REPORTDETAILS'->'DIMENSIONS'->'DIMENSIONS'->> 'ID' as int)
+	,ivalue->'REPORTDETAILS'->'DIMENSIONS'->'DIMENSIONS'->> 'NAME'
+	into VDimensionId, VDimensionName 
+	from temps 
+	limit 1;
+
+	
+	VDataid:=(select max(recordid) from KBReportsmetadata where ReportConfigurationID=VReportConfigurationID );
+	VDetid:=(select max(reportconfigdetailid) from KBReportsConfigurationDetails where ReportConfigurationID=VReportConfigurationID );
+
+	/* updating the newlyadded of the old records to 0 */
+	Update KBReportsConfigurationDetails set NewlyAdded=0 where ReportConfigurationID=VReportConfigurationID and Newlyadded=1;
+	Update kbreportsmetadata set NewlyAdded=0 where ReportConfigurationID=VReportConfigurationID and Newlyadded=1;
+
+	/* Inserting into the Analysis Collection master table  */
+	
+	/*
+	(this can 0-Correlation,1-Multiple Datasource,2-Single Datasource)
+	(If ReportOn-0,expect CorrelationId )
+	*/
+
+	if(VReportOn=0) Then
+	Begin
+		update KBReportsConfigurationMSt set CorrelationID=cast(VDataSources as int),ServiceTime=VServiceTime,ServiceTimeUOM= VServiceTimeUOM ,modifieddate=Vactiondate
+		,modifiedby=Vcreated_by
+		where ReportConfigurationID=VReportConfigurationID;
+	end;
+	else
+	Begin
+		update KBReportsConfigurationMSt set DataSourceID=VDataSources,ServiceTime=VServiceTime,ServiceTimeUOM= VServiceTimeUOM  ,modifieddate=Vactiondate
+		,modifiedby=Vcreated_by
+		where ReportConfigurationID=VReportConfigurationID;
+	end;
+	End if;
+
+	If(VSTORAGETYPE=0) then
+	Begin
+			/*0:fromdate,todate*/
+-- 			update KBReportsConfigurationMSt set SNAPSHOTFROMDATE=NULL, SNAPSHOTTODATE=NULL,STORAGETYPE=NULL ,modifieddate=Vactiondate
+-- 		,modifiedby=Vcreated_by
+-- 			where ReportConfigurationID=VReportConfigurationid;
+			
+			update KBReportsConfigurationMSt set SNAPSHOTFROMDATE=VSNAPSHOTFROMDATE, SNAPSHOTTODATE=VSNAPSHOTTODATE,STORAGETYPE=VSTORAGETYPE ,modifieddate=Vactiondate
+		,modifiedby=Vcreated_by
+			where ReportConfigurationID=VReportConfigurationid;
+	END;
+	elseif(VSTORAGETYPE=1) then
+	Begin
+			/*1:fromdate*/
+			
+			-- update KBReportsConfigurationMSt set REGULARFROMDATE=NULL,STORAGETYPE=NULL ,modifieddate=Vactiondate
+-- 		,modifiedby=Vcreated_by
+-- 			where ReportConfigurationID=VReportConfigurationid;
+			
+			update KBReportsConfigurationMSt set REGULARFROMDATE=VREGULARFROMDATE ,STORAGETYPE=VSTORAGETYPE ,modifieddate=Vactiondate
+		,modifiedby=Vcreated_by
+			where ReportConfigurationID=VReportConfigurationid;
+	END;
+	ELSE  
+	Begin
+			/*2:DATARETENTIONPERIOD,UOM*/
+			
+			-- update KBReportsConfigurationMSt set DataRetentionPeriod=NULL, DRPUOM=NULL,STORAGETYPE=NULL ,modifieddate=Vactiondate
+-- 		,modifiedby=Vcreated_by
+-- 			where ReportConfigurationID=VReportConfigurationid;
+			
+			update KBReportsConfigurationMSt set DataRetentionPeriod=VDATARETENTIONPERIOD ,DRPUOM=VUOM,STORAGETYPE=VSTORAGETYPE ,modifieddate=Vactiondate
+		,modifiedby=Vcreated_by
+			where ReportConfigurationID=VReportConfigurationid;
+        END;
+        end if;
+
+	
+	insert into Tempdata(ReportConfigurationID,IsEnviDataSrc,SourceTypeID,MetricID,MetricName,CreatedBy,ModifiedBy,ENTITYDEFID,TblColumnName,Type,DIMENSIONID
+	,DIMENSION_ATTRIBUTE,MetricColumnAlias,DimensionColumnAlias,columntype)
+	SELECT 
+	ReportId,cast(IsEnviDataSrc as smallint),SPOKEID,METRICID,METRICNAME,VCreated_by CreatedBy,VCreated_by ModifiedBy,ENTITYDEFID
+	,'"'||Sources.Alias||'_'||METRICNAME||'"'
+	,iType,cast( DImensionID as int),"Name" ,MetricColumnAlias
+
+	,DimensionColumnAlias,columnType
+	FROM
+	(
+		SELECT 
+		VReportConfigurationid					ReportId
+		,IsEnviDataSrc  
+		,SPOKEID  
+		,METRICID  
+		,METRICNAME
+		,1 							CreatedBy									
+		,1 							ModifiedBy 
+		,ENTITYDEFID  
+		,cast(NULL as int)					AS DImensionID 
+		,NULL							AS "Name"
+		,NewlyAdded  
+		,iType  
+		,case when ColumnName is null or ColumnName ='' then NULL else ColumnName END  AS MetricColumnAlias
+		,NULL DimensionColumnAlias
+		,NULL columnType--NewlyAdded columnType
+		from 
+		(
+			Select IsEnviDataSrc
+			,Cast(metrics->>'SPOKEID' as int) as SPOKEID
+			,Cast(metrics->>'METRICID' as int) as METRICID
+			,metrics->>'METRICNAME' as METRICNAME
+			,Cast(metrics->>'ENTITYDEFID' as int) as ENTITYDEFID
+			,cast(metrics->>'NewlyAdded' as smallint) as NewlyAdded
+			,metrics->>'Type' as iType
+			,metrics->>'ColumnName' as ColumnName
+			from
+			(
+				Select IsEnviDataSrc, json_array_elements(Mets) as metrics
+				from
+				(
+					Select spokes->>'IsEnviDataSrc' as IsEnviDataSrc
+					,spokes->'Metric' as Mets
+					from
+					(
+						select json_array_elements(spoke) spokes
+						from
+						(
+							Select ivalue->'REPORTDETAILS'->'CONFIGDETAILS'->'SPOKE' spoke
+							from
+							Temps
+							Limit 1
+						) itemp	
+					)spks
+				)aa
+			)outp	
+		)spokemets		
+	) Inputs
+	INNER JOIN 
+	kbsourceTypemst Sources ON Inputs.SPOKEID = Sources.SOURCETYPE_ID AND SpokeType = '0' AND NewlyAdded = 1
+
+	UNION 
+		
+		
+	SELECT 
+		ReportId,cast(Input.IsEnviDataSrc as smallint),SPOKEID,METRICID,METRICNAME
+		,VCreated_By, VCreated_By ModifiedBy,ENTITYDEFID
+		,Sources.Alias||'_'||"Name"||'_'||METRICNAME,iType,Cast(DIMENSIONID as int),"Name"
+		,case when Columntype='envidatasource' then NULL Else MetricColumnAlias End MetricColumnAlias,DimensionColumnAlias,columntype
+	FROM
+	(
+			select
+			VReportConfigurationid				ReportId
+			,IsEnviDataSrc  
+			,SPOKEID  
+			,METRICID  
+			,METRICNAME
+			,1 CreatedBy
+			,1 ModifiedBy 
+			,ENTITYDEFID  
+			,cast(dimatt->'Attribute'->>'DimensionId' as int)	AS DimensionId  
+			,dimatt->'Attribute'->>'Name'			AS "Name"
+			,iType  
+			,dimatt->'Attribute'->>'NewlyAdded'		AS NewlyAdded  
+			,case when ColumnName is null or ColumnName ='' then NULL
+				else ColumnName END  AS MetricColumnAlias
+			,case when coalesce(dimatt->'Attribute'->>'ColumnName','') ='' then NULL
+				else dimatt->'Attribute'->>'ColumnName' END AS DimensionColumnAlias
+			,dimatt->'Attribute'->>'type'			AS columntype  
+			,cast(dimatt->'Attribute'->>'NewlyAdded' as smallint) as dimNewlyAdded
+			from 
+			(
+			Select IsEnviDataSrc,SPOKEID,METRICID,METRICNAME,ENTITYDEFID,NewlyAdded,iType,ColumnName
+			,json_array_elements(dims) dimatt
+			from
+			(
+				Select IsEnviDataSrc
+				,Cast(metrics->>'SPOKEID' as int) as SPOKEID
+				,Cast(metrics->>'METRICID' as int) as METRICID
+				,metrics->>'METRICNAME' as METRICNAME
+				,Cast(metrics->>'ENTITYDEFID' as int) as ENTITYDEFID
+				,cast(metrics->>'NewlyAdded' as smallint) as NewlyAdded
+				,metrics->>'Type' as iType
+				,metrics->>'ColumnName' as ColumnName
+				,metrics->'DimAttributes' as dims
+				from
+				(
+				Select IsEnviDataSrc, json_array_elements(Mets) as metrics
+				from
+				(
+					Select spokes->>'IsEnviDataSrc' as IsEnviDataSrc
+					,spokes->'Metric' as Mets
+					from
+					(
+						select json_array_elements(spoke) spokes
+						from
+						(
+							Select ivalue->'REPORTDETAILS'->'CONFIGDETAILS'->'SPOKE' spoke
+							from
+							Temps
+							Limit 1
+						) itemp	
+					)spks
+				)aa
+				)outp
+			)dimsmets
+			)atts	
+
+	) Input
+	INNER JOIN 
+		kbsourceTypemst Sources ON Input.SPOKEID = Sources.SOURCETYPE_ID
+	
+	WHERE 
+	SPOKETYPE = '0' and dimNewlyAdded=1
+
+	UNION
+		
+		
+		SELECT 
+		Input.ReportId,cast(Input.IsEnviDataSrc as smallint),input.SPOKEID,Input.METRICID,Input.METRICNAME
+		,Input.CreatedBy,Input.ModifiedBy,Input.ENTITYDEFID
+		,Sources.Alias||'_'||EntityDef.ENTITY_NAME||'_'||METRICNAME,iType,Cast(DIMENSIONID as int),"Name",MetricColumnAlias ,DimensionColumnAlias,columntype
+		FROM
+		(
+		Select
+		VReportConfigurationid  ReportId
+		,IsEnviDataSrc
+		,Cast(metrics->>'SPOKEID' as int) as SPOKEID
+		,Cast(metrics->>'METRICID' as int) as METRICID
+		,metrics->>'METRICNAME' as METRICNAME
+		,1 CreatedBy
+		,1 ModifiedBy 
+		,Cast(metrics->>'ENTITYDEFID' as int) as ENTITYDEFID
+		,cast(NULL as int)	DimensionId
+		,NULL  "Name"
+		,metrics->>'Type' as iType
+		,cast(metrics->>'NewlyAdded' as smallint) as NewlyAdded
+		,case when Coalesce(metrics->>'ColumnName','')='' then NULL Else metrics->>'ColumnName' End as MetricColumnAlias 
+		,NULL as DimensionColumnAlias 
+		,NULL AS columntype 
+		from
+		(
+		Select IsEnviDataSrc, json_array_elements(Mets) as metrics
+		from
+		(
+			Select spokes->>'IsEnviDataSrc' as IsEnviDataSrc
+			,spokes->'Metric' as Mets
+			from
+			(
+				select json_array_elements(spoke) spokes
+				from
+				(
+					Select ivalue->'REPORTDETAILS'->'CONFIGDETAILS'->'SPOKE' spoke
+					from
+					Temps
+					Limit 1
+				) itemp	
+			)spks
+		)aa
+		)outp
+		) Input
+		INNER JOIN 
+			kbsourceTypemst Sources ON Input.SPOKEID = Sources.SOURCETYPE_ID
+		INNER JOIN 
+			kbEntityMst EntityDef	ON Input.ENTITYDEFID = EntityDef.ENTITYDEF_ID
+		WHERE 
+		SPOKETYPE = '1' AND Input.NewlyAdded = '1' and input.iType !='KPI'
+
+	UNION
+
+		SELECT 
+		Input.ReportId,cast(Input.IsEnviDataSrc as smallint),input.SPOKEID,Input.METRICID,Input.METRICNAME
+		,Input.CreatedBy,Input.ModifiedBy,Input.ENTITYDEFID
+		,Sources.Alias||'_'||EntityDef.ENTITY_NAME||'_'||"Name"||'_'||METRICNAME,iType ,Cast(DIMENSIONID as int),"Name"
+		,case when Columntype='envidatasource' then NULL Else MetricColumnAlias End MetricColumnAlias,DimensionColumnAlias ,columntype
+		FROM
+		(
+			select
+			VReportConfigurationid		ReportId
+			,IsEnviDataSrc  
+			,SPOKEID  
+			,METRICID  
+			,METRICNAME
+			,1 CreatedBy
+			,1 ModifiedBy 
+			,ENTITYDEFID  
+			,cast(dimatt->'Attribute'->>'DimensionId' as int)	AS DimensionId  
+			,dimatt->'Attribute'->>'Name'			AS "Name"
+			,iType  
+			,dimatt->'Attribute'->>'NewlyAdded'		AS NewlyAdded  
+			,case when ColumnName is null or ColumnName ='' then NULL
+				else ColumnName END  AS MetricColumnAlias
+			,case when Coalesce(dimatt->'Attribute'->>'ColumnName','') ='' then NULL
+				else dimatt->'Attribute'->>'ColumnName' END AS DimensionColumnAlias
+			,dimatt->'Attribute'->>'type'			AS columntype  
+			,cast(dimatt->'Attribute'->>'NewlyAdded' as smallint) as dimNewlyAdded
+			
+			from 
+			(
+			Select IsEnviDataSrc,SPOKEID,METRICID,METRICNAME,ENTITYDEFID,NewlyAdded,iType,ColumnName
+			,json_array_elements(dims) dimatt
+			from
+			(
+				Select IsEnviDataSrc
+				,Cast(metrics->>'SPOKEID' as int) as SPOKEID
+				,Cast(metrics->>'METRICID' as int) as METRICID
+				,metrics->>'METRICNAME' as METRICNAME
+				,Cast(metrics->>'ENTITYDEFID' as int) as ENTITYDEFID
+				,cast(metrics->>'NewlyAdded' as smallint) as NewlyAdded
+				,metrics->>'Type' as iType
+				,metrics->>'ColumnName' as ColumnName
+				,metrics->'DimAttributes' as dims
+				from
+				(
+				Select IsEnviDataSrc, json_array_elements(Mets) as metrics
+				from
+				(
+					Select spokes->>'IsEnviDataSrc' as IsEnviDataSrc
+					,spokes->'Metric' as Mets
+					from
+					(
+						select json_array_elements(spoke) spokes
+						from
+						(
+							Select ivalue->'REPORTDETAILS'->'CONFIGDETAILS'->'SPOKE' spoke
+							from
+							Temps
+							Limit 1
+						) itemp	
+					)spks
+				)aa
+				)outp
+			)dimsmets
+			)atts	
+		) Input
+		INNER JOIN 
+				kbsourceTypemst Sources ON Input.SPOKEID = Sources.SOURCETYPE_ID
+		INNER JOIN 
+				kbEntityMst EntityDef	ON Input.ENTITYDEFID = EntityDef.ENTITYDEF_ID
+		WHERE 
+		SPOKETYPE = '1'  and dimNewlyAdded=1
+		;
+
+	
+	INSERT INTO 
+		KBReportsConfigurationDetails
+	(  
+	ReportConfigurationID,IsEnviDataSrc,SourceTypeID,MetricID,MetricName
+	 , CreatedBy,ModifiedBy,ENTITYDEFID,TblColumnName,DIMENSIONID,DIMENSION_ATTRIBUTE,Type,MetricColumnAlias,DimensionColumnAlias,CReatedDate,ModifiedDate,subtype
+	) 
+	Select ReportConfigurationID,IsEnviDataSrc  ,SourceTypeID  ,MetricID  ,MetricName  ,CreatedBy  
+	 ,ModifiedBy  ,ENTITYDEFID  ,TblColumnName  ,DIMENSIONID  ,DIMENSION_ATTRIBUTE ,Type ,MetricColumnAlias  ,DimensionColumnAlias  
+	 ,VActionDate,VActionDate,columntype 
+	 from Tempdata A
+	 Where Not exists (
+			Select 1 
+			from 
+			KBReportsConfigurationDetails B 
+			where A.ReportConfigurationID=B.ReportConfigurationID and A.SOURCETYPEID=B.SourceTypeID and A.TblColumnName=B.TblColumnName)	 ;
+
+		if(VReportOn=0/*Report on 0 then correlationID*/) then
+		Begin 
+		
+
+			INSERT INTO 
+			KBReportsConfigurationDetails
+			(  
+			ReportConfigurationID,IsEnviDataSrc,SourceTypeID,MetricID,MetricName
+			, CreatedBy,ModifiedBy,ENTITYDEFID,TblColumnName,DIMENSIONID,DIMENSION_ATTRIBUTE,Type,MetricColumnAlias,DimensionColumnAlias,CReatedDate,ModifiedDate
+			) 
+			select A.*
+			from
+			(
+
+			Select distinct ReportConfigurationID, cast(src.SPOKETYPE as smallint) IsEnviDataSrc,SOURCETYPE_ID, 0 MetricID,'seq' MetricName
+			 , 1,1, cast(null as int) ENTITYDEFID,SOURCETYPE_NAME||'_SEQ' TblColumnName,cast(null as int) DIMENSIONID,null DIMENSION_ATTRIBUTE
+			 ,NUll "Type",NULL,NULL,VActionDate,VActionDate
+			 from KBReportsConfigurationMSt Mst
+			 JOin cbcorrelationMst corrMst on corrMst.CorrelationID=Mst.CorrelationID
+			 JOIN cbcorrelationdetails details on details.CorrelationID=corrMst.CorrelationID
+			 JOIN kbsourcetypeMst src on src.SOURCETYPE_ID=Details.SourceID
+			 where Mst.ReportConfigurationID=VReportConfigurationID and src.spoketype='0'
+			 and corrMst.Isactive='1'
+			 UNION ALL
+			 Select distinct VReportConfigurationID,Cast(SPOKETYPE as smallint) IsEnviDataSrc,SOURCETYPE_ID, 0 MetricID,'seq' MetricName
+			 , 1,1, cast(null as int) ENTITYDEFID,SOURCETYPE_NAME||'_SEQ' TblColumnName,cast(null as int) DIMENSIONID,null DIMENSION_ATTRIBUTE,NUll "Type",NULL,NULL,VActionDate,VActionDate
+			 from kbsourcetypeMst src
+			 where SPOKETYPE='1'  and Isactive='1' and exists (select 1 from users usr where src.createdby=usr.userid )
+			) A
+			Where Not exists (
+			Select 1 
+			from 
+			KBReportsConfigurationDetails B 
+			where A.ReportConfigurationID=B.ReportConfigurationID and A.SOURCETYPE_ID=B.SourceTypeID and A.TblColumnName=B.TblColumnName)	
+			 ;
+			
+		END;
+		Else
+		Begin
+		 
+		INSERT INTO 
+		KBReportsConfigurationDetails
+		(  
+		ReportConfigurationID,IsEnviDataSrc,SourceTypeID,MetricID,MetricName
+		, CreatedBy,ModifiedBy,ENTITYDEFID,TblColumnName,DIMENSIONID,DIMENSION_ATTRIBUTE,Type,MetricColumnAlias,DimensionColumnAlias,CReatedDate,ModifiedDate
+		) 
+		Select A.*
+		from
+		(	
+		Select distinct ReportConfigurationID,IsEnviDataSrc,SourceTypeID, 0 MetricID,'seq' MetricName
+		, RDetails.CreatedBy,RDetails.ModifiedBy,  ENTITYDEFID,SOURCETYPE_NAME||'_SEQ' TblColumnName,cast(null as int) DIMENSIONID,null DIMENSION_ATTRIBUTE,NUll "Type"
+		,NULL,NULL,VActionDate,VActionDate
+		from Tempdata RDetails		
+		JOIN KbsourcetypeMst Mst   on RDetails.SourceTypeID=Mst.SOURCETYPE_ID	 
+		 Where  IsEnviDataSrc='0' and spoketype='0'  and  Mst.Isactive='1' --Order by SourceTypeID,MetricID
+		union 
+		Select distinct VReportConfigurationID,cast(SPOKETYPE as smallint) IsEnviDataSrc,SOURCETYPE_ID, 0 MetricID,'seq' MetricName
+		, VCreated_by,VCreated_by, cast(null as int) ENTITYDEFID,SOURCETYPE_NAME||'_SEQ' TblColumnName,cast(null as int) DIMENSIONID,null DIMENSION_ATTRIBUTE,NUll "Type",NULL,NULL,VActionDate,VActionDate
+		from kbsourcetypeMst src
+		where SPOKETYPE='1'  and Isactive='1' and exists (select 1 from users usr where src.createdby=usr.userid )
+		) A
+		Where Not exists (
+			Select 1 
+			from 
+			KBReportsConfigurationDetails B 
+			where A.ReportConfigurationID=B.ReportConfigurationID and A.SOURCETYPEID=B.SourceTypeID and A.TblColumnName=B.TblColumnName)
+		;
+	 END;
+	 End if;
+
+	INSERT INTO  KPI
+			(
+			
+			 ReportConfigurationID,IsEnviDataSrc,SourceTypeID,MetricID,MetricName
+			, CreatedBy,ModifiedBy,ENTITYDEFID,TblColumnName,DIMENSIONID,DIMENSION_ATTRIBUTE,iType,MetricColumnAlias,DimensionColumnAlias
+			)
+	SELECT 
+		Input.ReportId,cast(Input.IsEnviDataSrc as smallint),input.SPOKEID,Input.METRICID,Input.METRICNAME
+		,VCreated_by CreatedBy,VCreated_by ModifiedBy,Input.ENTITYDEFID
+		,'',DimensionId,"Name",iType,MetricAlias,dimensioncolumnAlias
+	FROM
+	(
+		select
+		VReportConfigurationid		ReportId
+		,IsEnviDataSrc  
+		,SPOKEID  
+		,METRICID  
+		,METRICNAME
+		,1 CreatedBy
+		,1 ModifiedBy 
+		,ENTITYDEFID  
+		,iType  
+		,cast(dimatt->'Attribute'->>'DimensionId' as int)	AS DimensionId  
+		,dimatt->'Attribute'->>'Name'			AS "Name"
+		,case when ColumnName is null or ColumnName ='' then NULL
+			else ColumnName END  AS MetricAlias
+		,case when Coalesce(dimatt->'Attribute'->>'ColumnName','') ='' then NULL
+			else dimatt->'Attribute'->>'ColumnName' END AS DimensionColumnAlias,atts.NewlyAdded
+		,cast(dimatt->'Attribute'->>'NewlyAdded' as smallint) as dimNewlyAdded
+		from 
+		(
+		Select IsEnviDataSrc,SPOKEID,METRICID,METRICNAME,ENTITYDEFID,iType,ColumnName
+		,json_array_elements(dims) dimatt,NewlyAdded
+		from
+		(
+			Select IsEnviDataSrc
+			,Cast(metrics->>'SPOKEID' as int) as SPOKEID
+			,Cast(metrics->>'METRICID' as int) as METRICID
+			,metrics->>'METRICNAME' as METRICNAME
+			,Cast(metrics->>'ENTITYDEFID' as int) as ENTITYDEFID
+			,cast(metrics->>'NewlyAdded' as smallint) as NewlyAdded
+			,metrics->>'Type' as iType
+			,metrics->>'ColumnName' as ColumnName
+			,metrics->'DimAttributes' as dims
+			from
+			(
+			Select IsEnviDataSrc, json_array_elements(Mets) as metrics
+			from
+			(
+				Select spokes->>'IsEnviDataSrc' as IsEnviDataSrc
+				,spokes->'Metric' as Mets
+				from
+				(
+					select json_array_elements(spoke) spokes
+					from
+					(
+						Select ivalue->'REPORTDETAILS'->'CONFIGDETAILS'->'SPOKE' spoke
+						from
+						Temps
+						Limit 1
+					) itemp	
+				)spks
+			)aa
+			)outp
+		)dimsmets
+		)atts	
+
+	) Input
+	JOIN 
+		kbsourceTypemst Sources ON 	Input.SPOKEID=Sources.SOURCETYPE_ID
+	WHERE 
+	SPOKETYPE='1' and itype='KPI' and dimNewlyAdded=1;
+
+	INSERT INTO 
+	KBReportsConfigurationDetails
+	(  
+		ReportConfigurationID,IsEnviDataSrc,SourceTypeID,MetricID,MetricName
+	 , CreatedBy,ModifiedBy,ENTITYDEFID,TblColumnName,DIMENSIONID,DIMENSION_ATTRIBUTE,type,CreatedDate,ModifiedDate,MetricColumnAlias,DimensionColumnAlias
+	  
+	)
+	SELECT 
+	 distinct Kpi.ReportConfigurationID,Kpi.IsEnviDataSrc,Kpi.SourceTypeID,Kpi.METRICID,Kpi.METRICNAME
+	,Kpi.CreatedBy,Kpi.ModifiedBy,Kpi.ENTITYDEFID
+	,'"'||Sources.SOURCETYPE_NAME||'_'||EntityDef.ENTITY_NAME||'_'||METRICNAME ||'"',DIMENSIONID,DIMENSION_ATTRIBUTE ,itype,VActionDate,VActionDate
+	,MetricColumnAlias,DimensionColumnAlias
+	from KPI Kpi
+	JOIN 
+		kbsourceTypemst Sources ON 	Kpi.SourceTypeID=Sources.SOURCETYPE_ID
+	JOIN 
+		kbEntityMst EntityDef ON 	Kpi.ENTITYDEFID=EntityDef.ENTITYDEF_ID
+	;
+
+	Insert into KBReportsConfigurationRules(ReportConfigurationId,SelectedDataSource,SelectedMetricID,TargetDataSource,TargetMetricID,
+	BufferTime,BufferTimeUOM,CreatedBy, ModifiedBy  )
+	select 
+	VReportConfigurationID
+	, Cast(ivalue->'REPORTDETAILS'->'Rules'->'Rule'->> 'Datasource' as bigint)
+	,Cast(ivalue->'REPORTDETAILS'->'Rules'->'Rule'->> 'SelectedMetric' as bigint)
+	,Cast(ivalue->'REPORTDETAILS'->'Rules'->'Rule'->> 'TargetDatasource' as bigint)
+	,Cast(ivalue->'REPORTDETAILS'->'Rules'->'Rule'->> 'SelectedTargetMetric' as bigint)
+	,Cast(ivalue->'REPORTDETAILS'->'Rules'->'Rule'->> 'BufferTime' as int)
+	,ivalue->'REPORTDETAILS'->'Rules'->'Rule'->> 'BufferTimeUOM'
+	,VCreated_by
+	,VCreated_by
+	from temps limit 1;
+
+	VSourceTypeID:=(SELECT SourceTypeID FROM KBReportsConfigurationDetails WHERE ReportConfigurationID=VReportConfigurationid Limit 1);
+
+	INSERT INTO 
+	Dimension(DimensionID,DimensionName,MetricID,MetricName)
+	SELECT DimensionID,DimensionName,cast(metrics->>'METRICID' as int) AS METRICID,metrics->>'METRICNAME' AS METRICNAME  
+	from
+	(
+	Select DimensionID, DimensionName, json_array_elements(Mets) as metrics
+	from
+	(
+		Select 
+		cast(dimesion->>'ID' as int) as DimensionID
+		,dimesion->>'NAME' DimensionName
+		,dimesion->'METRIC' Mets
+		From
+		(
+			Select json_array_elements(dimes) as dimesion
+			from
+			(
+			Select ivalue->'REPORTDETAILS'->'DIMENSIONS'->'DIMENSION' dimes
+			from
+			Temps
+			Limit 1
+			)a
+		)dims
+		where dimesion->>'NewlyAdded' ='1'
+	)aa
+	)outp;
+	 
+	IF(SELECT COUNT(1) FROM Dimension)>0 Then
+	BEGIN
+		INSERT INTO 
+		KBReportsConfigurationDetails
+		(ReportConfigurationID,SourceTypeID,MetricID,MetricName,CreatedBy,ModifiedBy,ISDIMENSION,TblColumnName,CreatedDate,ModifiedDate)
+		SELECT 
+			VReportConfigurationid,DimensionID,MetricID,MetricName,VCreated_by,VCreated_by,1 ,'"'||DIMENSIONNAME||'_'||MetricName||'"',VActionDate,VActionDate
+		FROM 
+		Dimension Dims;
+	END;
+	End if;
+
+	INSERT INTO 
+	EntitiesTable
+	(EntityID,EntityDefName,EntityAttributeName,MetricId,MetricColumnAlias,SourceId,ReportConfigurationid)
+	SELECT 
+	 EntityID  
+	,EntityDefName 
+	,EntAtt->>'Name' EntityAttributeName  
+	,cast(EntAtt->>'MetricId' as int) MetricId  
+	,case when Coalesce(EntAtt->>'ColumnName','')='' then NULL
+	 else EntAtt->>'ColumnName' END	AS ColumnName 
+	,cast(EntAtt->>'SourceId' as int)SourceId  
+	,VReportConfigurationid
+	From
+	(
+	 select EntityID,EntityDefName, json_array_elements(mets) as EntAtt
+	 from
+	 ( 
+		Select 
+		cast(dimes->>'ID' as int) as EntityID
+		,dimes->>'NAME' EntityDefName
+		,dimes->'EntityAttribute' Mets
+		From
+		(
+			Select json_array_elements(dimes) dimes
+			from
+			(
+			Select ivalue->'REPORTDETAILS'->'ENTITIES'->'Entity' dimes
+			from
+			Temps
+			Limit 1
+			)a
+		)dims
+		
+	)attb	
+	)ents
+	where EntAtt->>'NewlyAdded' ='1'
+	;
+
+	--return(select array_to_json(array_Agg(row_to_json(a)))from(select * from  EntitiesTable)a);
+
+		 IF(SELECT COUNT(1) FROM EntitiesTable)>0 then
+		 BEGIN
+				 
+				/* Inserting the selected Entity related data */
+		INSERT INTO
+			KBReportsConfigurationDetails
+			(ReportConfigurationID,SourceTypeID,MetricID,MetricName,ServiceLabel,CreatedBy,ModifiedBy,ISDIMENSION,TblColumnName,CreatedDate,ModifiedDate,MetricColumnAlias,DIMENSIONID)
+		SELECT 
+			VReportConfigurationid,EntityID,MetricID,EntityAttributeName,EntityConfig.ServiceLabel,VCreated_by,VCreated_by,2 
+			,EntityDefName||'_'||Sources.alias||'_'||EntityAttributeName,VActionDate,VActionDate,MetricColumnAlias,SourceId
+		FROM 
+		EntitiesTable Entity
+		Join 
+		KBEntityScreenConfigurationMst EntityConfig ON Entity.EntityID=EntityConfig.EntityDefID and Entity.EntityAttributeName=EntityConfig.ControlTitle    
+		Join KBSourceTypeMst Sources on Entity.sourceid=Sources.SourceType_Id;
+		END;
+		End if;
+
+	-- Delete
+-- 	from 
+-- 	KBReportsConfigurationRules   
+-- 	Where not exists(Select 1  From @KBReportsConfigurationRules B where Coalesce(B.RuleId,0)=KBReportsConfigurationRules.RecordID)
+-- 	and KBReportsConfigurationRules.ReportConfigurationId=@ReportConfigurationid
+
+	-- INSERT INTO 
+-- 	KBANALYSISCOLLECTIONRULES(ReportConfigurationid,ENTITYDEFID,FIELDLABEL,CONDITIONID,VALUE1,ENTITYID,LOCATIONNAME,ISENTITY,VALUE2,OPERATOR,TORDER
+-- 	,CreatedBy, ModifiedBy, ModifiedDate
+-- 	)
+-- 	Select 
+-- 	VReportConfigurationid
+-- 	, cast(Ruledata->>'ENTITYDEFID'as int) as ENTITYDEFID
+-- 	,Ruledata->>'FIELDLABEL' as FIELDLABEL
+-- 	,Ruledata->>'CONDITIONID' as CONDITIONID
+-- 	,Ruledata->>'VALUE1' as VALUE1
+-- 	,Ruledata->>'ENTITYID' as ENTITYID
+-- 	,Ruledata->>'LOCATIONNAME' as LOCATIONNAME
+-- 	,Cast(Ruledata->>'ISENTITY' as smallint) as ISENTITY
+-- 	,Ruledata->>'VALUE2' as VALUE2
+-- 	,Ruledata->>'OPERATOR' as OPERATOR
+-- 	,cast(Ruledata->>'TORDER' as smallint) as TORDER
+-- 	,Vcreated_by
+-- 	,Vcreated_by
+-- 	,VActionDate
+-- 	From
+-- 	(
+-- 		Select json_array_elements(iRules) Ruledata
+-- 		from
+-- 		(
+-- 		Select ivalue->'REPORTDETAILS'->'RULES'->'RULE' iRules
+-- 		from
+-- 		Temps
+-- 		Limit 1
+-- 		)a
+-- 	)RD;
+
+	--VEVENTIDS:=xmlList.rows.query('EVENTS').value('.','varchar(max)') FROM  @Trans_xml.nodes('REPORTDETAILS') xmlList(rows) ;
+	--VKPIIDS:=xmlList.rows.query('KPIS').value('.','varchar(max)') FROM  @Trans_xml.nodes('REPORTDETAILS') xmlList(rows) ;
+
+	insert into selectedkpi(REPORTCONFIGURATIONID,kpiid,kpiname,ColumnName,sourceid)
+	select input.ReportConfigurationid,input.kpiid,input.kpiname,input.ColumnName,Mst.source_ID
+	from
+	(
+	select distinct
+	VReportConfigurationid as ReportConfigurationid
+	,cast(kpidata->>'ID'as INT)  kpiid
+	,kpidata->>'Name'kpiname
+	,case when kpidata->>'ColumnName' ='' then null else kpidata->>'ColumnName' end as ColumnName
+	from
+	(
+		Select json_array_elements(Kpis) kpidata
+		from
+		(
+		Select ivalue->'REPORTDETAILS'->'KPIS'->'KPI' Kpis
+		from
+		Temps
+		Limit 1
+		)a
+		)kpisdata
+	)input
+	join kbkpiMst Mst on Coalesce(Mst.OriginalID,Mst.kpi_id)=input.kpiid
+	where Mst.Isactive='1' ;
+	
+	insert into selectedevents(REPORTCONFIGURATIONID,Eventid,EventName,ColumnName)
+	select 
+	VReportConfigurationid
+	,cast(evtdata->>'ID' as INT)  eventid
+	,evtdata->>'Name' Eventname
+	,case when evtdata->>'ColumnName' ='' then null else evtdata->>'ColumnName'  end Colname
+	from
+	(
+		Select json_array_elements(events) evtdata
+		from
+		(
+		Select ivalue->'REPORTDETAILS'->'EVENTS'->'EVENT' events
+		from
+		Temps
+		Limit 1
+		)a
+	)eventsdata
+
+	;
+
+	if(VIsPivote=1) Then
+	Begin
+
+	Insert into kbreportsconfigurationdetails(ReportConfigurationID,SourceTypeID,MetricName,CreatedBy,CreatedDate,ModifiedBy,ModifiedDate,TblColumnName,Type,MetricColumnAlias)
+	select VReportConfigurationid,kpiid,kpiname,VCreated_by,VActiondate,VCreated_by,VActiondate,kpiname,'KPI',ColumnName 
+	from 
+	selectedkpi;
+
+	/*Inserting Events*/
+	Insert into kbreportsconfigurationdetails(ReportConfigurationID,SourceTypeID,MetricName,CreatedBy,CreatedDate,ModifiedBy,ModifiedDate,TblColumnName,Type,MetricColumnAlias)
+	select VReportConfigurationid,EventID,EventName,VCreated_by,VActiondate,VCreated_by,VActiondate,EventName,'Event',ColumnName 
+	from 
+	selectedevents;
+	
+	END;
+	End if; 
+
+	
+	INSERT INTO 
+	KBANALYSISCOLLECTIONRULESEVENTKPIS
+	(REPORTCONFIGURATIONID,EVENTIDS,KPIIDS,columnalias,createddate,createdby,modifiedby,modifieddate)
+	select REPORTCONFIGURATIONID,NULL,kpiid,ColumnName,VActiondate,VCreated_by,VCreated_by,VActiondate 
+	from selectedkpi;
+
+	INSERT INTO 
+	KBANALYSISCOLLECTIONRULESEVENTKPIS
+	(REPORTCONFIGURATIONID,EVENTIDS,KPIIDS,columnalias,createddate,createdby,modifiedby,modifieddate)
+	select REPORTCONFIGURATIONID,Eventid,NULL,ColumnName,VActiondate,VCreated_by,VCreated_by,VActiondate  
+	from selectedevents ;
+
+	INSERT INTO 
+	InputMetrics(SourceTypeId,MetricID,MetricName,IsDimension)
+	Select distinct SourceTypeID,MetricID,MetricName,cast(NULL   as smallint)
+	from KPI
+
+	UNION ALL
+
+	select DimensionID,NULL,MetricName,1 
+	FROM 
+	Dimension
+
+	UNION ALL
+
+	SELECT  
+	EntityID
+	,NULL
+	,EntityDefName
+	,2
+	FROM 
+	EntitiesTable;
+
+	/* updating the newlyadded column in the table KBReportsConfigurationDetails */
+ 
+	Update KBReportsConfigurationDetails set newlyadded=1 where reportconfigdetailid > VDetid and reportconfigurationid=VReportConfigurationID;
+
+	if(VIspivote=2) then
+	Begin  
+	Insert into kbreportsmetadata(ReportConfigurationID,SourceTypeID,OBJECTTYPE,MetricID,MetricName,TABLECOL,METRICDATATYPE,SPOKETYPE,ENTITYDEFID,Createdby,ModifiedBy,CreatedDate,ModifiedDate)
+	Select distinct  VReportConfigurationID,SpokeId,'DefaultColumns' ObjectType, MetricID, MetricName, TableCol,METRICDATATYPE, SpokeType,ENTITYDEFID
+	,VCreated_by,VCreated_by,VActiondate,VActiondate
+	From
+	(
+	/*default columns*/
+		select distinct 0 as SPOKEID,0 as METRICID
+		,Case columnName when 'Condition Name' then 'KPINAME'
+		when 'Condition Range' then 'KPISTATUS'
+		when 'Condition KPI' then 'groupingname'
+		when 'Seq' then 'correlationguid'
+		else columnName end as METRICNAME
+		,DM.ColumnName as TABLECOL
+		,Case DM.ColumnName when 'EVENTID' then 'bigint'
+		when 'CorrelationID' then 'bigint'
+		when 'CreatedBy' then 'bigint'
+		else 'varchar(255)' end as METRICDATATYPE
+		,cast(NULL as int) as SPOKETYPE
+		,0 as ENTITYDEFID 
+		,ID
+		from KB_DynamicTable_MetaData  DM
+		where lower(DM.SubType)='analysiscollection'   
+	) A 
+	where not exists (select 1 from kbreportsmetadata B where ReportConfigurationID=VReportConfigurationID and OBJECTTYPE='DefaultColumns' and B.TABLECOL=A.TableCol and A.SpokeId=B.SourceTypeID)
+
+;
+
+	END;
+	else
+	Begin
+
+	Insert into kbreportsmetadata(ReportConfigurationID,SourceTypeID,OBJECTTYPE,MetricID,MetricName,TABLECOL,METRICDATATYPE,Createdby,modifiedby,createddate,modifieddate)
+	Select ReportConfigurationID,SPOKEID,OBJECTTYPE,METRICID, MetricName,TABLECOL,METRICDATATYPE ,VCreated_by,VCreated_by,VActiondate,VActiondate
+	from
+	(
+		select VReportConfigurationID ReportConfigurationID,0 as SPOKEID,'DefaultColumns' as OBJECTTYPE,0 as METRICID,'correlationguid' as MetricName,'Seq' as TABLECOL
+		,'varchar(255)' METRICDATATYPE
+		UNION
+		select VReportConfigurationID,0 as SPOKEID,'DefaultColumns' as OBJECTTYPE,0 as METRICID,'CorrelationID' as MetricName,'CorrelationID' as TABLECOL,'bigint' METRICDATATYPE
+	) A
+	where not exists (select 1 from kbreportsmetadata B where ReportConfigurationID=VReportConfigurationID and A.OBJECTTYPE=B.OBJECTTYPE and B.TABLECOL=A.TABLECOL 
+	and A.SpokeId=B.SourceTypeID)
+	;
+
+	END;
+	End if;
+
+	if(VReportOn=0) Then
+	Begin 		 
+		
+	Insert into kbreportsmetadata(ReportConfigurationID,SourceTypeID,OBJECTTYPE,MetricID,MetricName,TABLECOL,METRICDATATYPE,SPOKETYPE,ENTITYDEFID
+	,Createdby,modifiedby,createddate,modifieddate)
+
+	select  ReportConfigurationID,SOURCETYPE_ID,ObjectType,MetricID,METRICNAME,TblColumnName,METRICDATATYPE,SPOKETYPE
+	, 0 ENTITYDEFID,VCreated_by,VCreated_by,VActiondate,VActiondate
+	from
+	(
+	Select distinct ReportConfigurationID,SOURCETYPE_ID,'Source' as  ObjectType,0 as MetricID,'seq' as METRICNAME
+	,SOURCETYPE_NAME||'_SEQ' TblColumnName,'Varchar(255)' as METRICDATATYPE,cast('0' as smallint) SPOKETYPE
+	from KBReportsConfigurationMSt Mst
+	JOin cbcorrelationMst corrMst on corrMst.CorrelationID=Mst.CorrelationID
+	JOIN cbcorrelationdetails details on details.CorrelationID=corrMst.CorrelationID
+	JOIN kbsourcetypeMst src on src.SOURCETYPE_ID=Details.SourceID
+	where Mst.ReportConfigurationID=VReportConfigurationID
+	and corrMst.Isactive='1' and src.Isactive='1'
+
+	UNION
+
+	select distinct VReportConfigurationID  ,SOURCETYPE_ID,'Source' as  ObjectType,0 as METRICID,'seq' as METRICNAME
+	,SOURCETYPE_NAME||'_SEQ' as TABLECOL,
+	'varchar(255)' as METRICDATATYPE, cast(SPOKETYPE  as smallint)
+	from KbsourcetypeMst   src
+	where SPOKETYPE='1'  and Isactive='1' and exists (select 1 from users usr where src.createdby=usr.userid )
+	) A
+	where not exists (select 1 from kbreportsmetadata B where ReportConfigurationID=VReportConfigurationID and A.OBJECTTYPE=B.OBJECTTYPE and B.TABLECOL=A.TblColumnName 
+	and A.SOURCETYPE_ID=B.SourceTypeID)
+	;
+
+	END;	
+	Else
+	Begin			 
+	Insert into kbreportsmetadata(ReportConfigurationID,SourceTypeID,OBJECTTYPE,MetricID,MetricName,TABLECOL,METRICDATATYPE,SPOKETYPE,ENTITYDEFID
+	,Createdby,modifiedby,createddate,modifieddate)
+	select distinct VReportConfigurationID, SourceTypeID SpokeId,'Source' as  ObjectType,0 as MetricID,'seq' as METRICNAME,SOURCETYPE_NAME||'_SEQ' as TABLECOL,
+	'varchar(255)' as METRICDATATYPE,0 SPOKETYPE,  ENTITYDEFID,VCreated_by,VCreated_by,VActiondate,VActiondate
+	from KBReportsConfigurationDetails RDetails
+	JOIN KbsourcetypeMst Mst   on RDetails.SourceTypeID=Mst.SOURCETYPE_ID
+	JOIN KBReportsConfigurationMSt RptMst  on   RptMst.ReportConfigurationID=RDetails.ReportConfigurationID
+	where RDetails.ReportConfigurationID=RptMst.ReportConfigurationID and RDetails.ISDIMENSION IS NULL
+	/*and Mst.SPOKETYPE=0*/ and RDetails.TYPE IS NULL and RptMst.ReportConfigurationID=VReportConfigurationID and Mst.Isactive='1'
+	and not exists (select 1 from kbreportsmetadata B where ReportConfigurationID=RDetails.ReportConfigurationID and B.OBJECTTYPE='Source' and B.TABLECOL=SOURCETYPE_NAME||'_SEQ' 
+	and RDetails.SourceTypeID=B.SourceTypeID)	
+	;
+	 
+	END;
+	End if;
+
+	/* Inserting into the Reportsmetadata*/
+
+	Insert into kbreportsmetadata(ReportConfigurationID,SourceTypeID,OBJECTTYPE,MetricID,MetricName,TABLECOL,METRICDATATYPE,SPOKETYPE,ENTITYDEFID,ReportConfigDetailID
+	,Createdby,modifiedby,createddate,modifieddate
+	)
+	select AA.ReportConfigurationID,AA.SPOKEID,AA.ObjectType,AA.METRICID,AA.METRICNAME,Replace(AA.TABLECOL,'__','_') as TABLECOL 
+	,AA.METRICDATATYPE,AA.SPOKETYPE,AA.ENTITYDEFID ,AA.ReportConfigDetailID 
+	,VCreated_by,VCreated_by,VactionDate,VactionDate
+	from
+	(
+	/*Normal source  columns*/
+	
+		Select   distinct  VReportConfigurationID ReportConfigurationID,RDetails.SourceTypeID SPOKEID
+		,'Source' ObjectType, Coalesce(RDetails.MetricID,0) METRICID, METRICS.MetricName  METRICNAME
+		,Coalesce(RDetails.MetricColumnAlias,Sources.sourcetype_name||'_'||RDetails.METRICNAME)	TABLECOL
+		,METRICS.METRICDATATYPE
+		,Sources.SOURCETYPE SPOKETYPE
+		,Coalesce(RDetails.ENTITYDEFID,0) ENTITYDEFID
+		 ,RDetails.ReportConfigDetailID ReportConfigDetailID
+		from 
+		KBReportsConfigurationDetails RDetails 
+		JOIN KbMETRICMST METRICS ON METRICS.METRIC_ID=RDetails.MetricID
+		Join KBSourceTypeMst Sources on RDetails.SourceTypeID=Sources.SOURCETYPE_ID
+		JOIN KBReportsConfigurationMSt RptMst  on   RptMst.ReportConfigurationID=RDetails.ReportConfigurationID
+		where Rptmst.ReportConfigurationID=VReportConfigurationID and RDetails.ISDIMENSION Is Null 
+		and Isenvidatasrc=0 and TYPE='Metric' and RDetails.DIMENSIONID IS NULL
+		and RDetails.subtype is null--!='envidatasource'
+		UNION ALL
+		/*Normal source  measure columns*/
+		Select   distinct  VReportConfigurationID ReportConfigurationID,RDetails.SourceTypeID SPOKEID
+		,'Measure' ObjectType, Coalesce(RDetails.MetricID,0) METRICID, Measures.MEASURE_NAME  METRICNAME
+		,Coalesce(RDetails.MetricColumnAlias,Sources.sourcetype_name||'_'||RDetails.METRICNAME)	TABLECOL
+		,DataTypes.DataTypeName METRICDATATYPE
+		,Sources.SOURCETYPE SPOKETYPE
+		,Coalesce(RDetails.ENTITYDEFID,0) ENTITYDEFID
+		,RDetails.ReportConfigDetailID ReportConfigDetailID
+		from 
+		KBReportsConfigurationDetails RDetails 
+		JOIN KbMeasureMst Measures ON Measures.MEASURE_ID=RDetails.MetricID
+		Join KBSourceTypeMst Sources on RDetails.SourceTypeID=Sources.SOURCETYPE_ID
+		JOIN KBReportsConfigurationMSt RptMst  on   RptMst.ReportConfigurationID=RDetails.ReportConfigurationID
+		JOIN kbMasterDataTypes DataTypes on DataTypes.DaTaTypeID=Measures.MEASUREUNIT_ID
+		where Rptmst.ReportConfigurationID=VReportConfigurationID and RDetails.ISDIMENSION Is Null 
+		and RDetails.Type='Measure' and Isenvidatasrc=0 and RDetails.DIMENSIONID IS NULL
+		and RDetails.subtype is null--!='envidatasource'
+		Union All
+		/*envi source  columns*/
+		Select distinct  VReportConfigurationID,RDetails.SourceTypeID SPOKEID
+		,'Source' ObjectType, Coalesce(RDetails.MetricID,0) METRICID,METRICS.MetricName METRICNAME-- RDetails.MetricName METRICNAME
+		,Coalesce(Rdetails.MetricColumnAlias,Sources.sourcetype_name||'_'||	Entitydef.ENTITY_NAME||'_'||RDetails.METRICNAME)	TABLECOL
+		,METRICS.METRICDATATYPE
+		,Sources.SOURCETYPE SPOKETYPE
+		,Coalesce(RDetails.ENTITYDEFID,0) ENTITYDEFID
+		,RDetails.ReportConfigDetailID ReportConfigDetailID 
+		from 
+		KBReportsConfigurationDetails RDetails 
+		JOIN KbMETRICMST METRICS ON METRICS.METRIC_ID=RDetails.MetricID
+		Join KBSourceTypeMst Sources on RDetails.SourceTypeID=Sources.SOURCETYPE_ID
+		JOIN KBEntityMst Entitydef on Entitydef.ENTITYDEF_ID=RDetails.ENTITYDEFID
+		JOIN KBReportsConfigurationMSt RptMst  on   RptMst.ReportConfigurationID=RDetails.ReportConfigurationID
+		where Rptmst.ReportConfigurationID=VReportConfigurationID and RDetails.ISDIMENSION Is Null 
+		and Isenvidatasrc=1 and RDetails.DIMENSIONID IS NULL--and RDetails.type is null 
+		and  TYPE='Metric' and RDetails.subtype is null--!='envidatasource'
+		UNION ALL
+		/* Envi Measure columns*/
+		Select   distinct  VReportConfigurationID ReportConfigurationID,RDetails.SourceTypeID SPOKEID
+		,'Measure' ObjectType, Coalesce(RDetails.MetricID,0) METRICID, Measures.MEASURE_NAME  METRICNAME
+		,Coalesce(Rdetails.MetricColumnAlias,Sources.sourcetype_name||'_'||	Entitydef.ENTITY_NAME||'_'||RDetails.METRICNAME)	TABLECOL
+		,DataTypes.DataTypeName METRICDATATYPE
+		,Sources.SOURCETYPE SPOKETYPE
+		,Coalesce(RDetails.ENTITYDEFID,0) ENTITYDEFID
+		,RDetails.ReportConfigDetailID ReportConfigDetailID
+		from 
+		KBReportsConfigurationDetails RDetails 
+		JOIN KbMeasureMst Measures ON Measures.MEASURE_ID=RDetails.MetricID
+		Join KBSourceTypeMst Sources on RDetails.SourceTypeID=Sources.SOURCETYPE_ID
+		JOIN KBEntityMst Entitydef on Entitydef.ENTITYDEF_ID=RDetails.ENTITYDEFID
+		JOIN KBReportsConfigurationMSt RptMst  on   RptMst.ReportConfigurationID=RDetails.ReportConfigurationID
+		JOIN kbMasterDataTypes DataTypes on DataTypes.DaTaTypeID=Measures.MEASUREUNIT_ID
+		where Rptmst.ReportConfigurationID=VReportConfigurationID and RDetails.ISDIMENSION Is Null 
+		and RDetails.Type='Measure' and   Isenvidatasrc=1  and RDetails.DIMENSIONID IS NULL and RDetails.subtype is null--!='envidatasource'
+		UNION ALL
+		/*envi source KPI columns*/
+		Select distinct RptMst. ReportConfigurationID,RDetails.SourceTypeID SPOKEID
+		,'KPI' ObjectType, Coalesce(RDetails.MetricID,0) METRICID
+		,RDetails.MetricName 
+		,Coalesce(RDetails.MetricColumnAlias,TblColumnName) as TABLECOL
+		,'varchar(255)' METRICDATATYPE
+		,Sources.SOURCETYPE SPOKETYPE
+		,Coalesce(RDetails.ENTITYDEFID,0) ENTITYDEFID
+		,RDetails.ReportConfigDetailID ReportConfigDetailID
+		from 
+		KBReportsConfigurationDetails RDetails 
+		JOIN KBReportsConfigurationMSt RptMst  on   RptMst.ReportConfigurationID=RDetails.ReportConfigurationID
+		Join KBSourceTypeMst Sources on RDetails.SourceTypeID=Sources.SOURCETYPE_ID
+		where RptMst.ReportConfigurationID=VReportConfigurationID and RDetails.ISDIMENSION Is Null and Rdetails.Isenvidatasrc=1
+		and RDetails.type='KPI' --and RDetails.subtype!='envidatasource'
+		Union All
+		/*dimension    columns*/
+		Select distinct  VReportConfigurationID,RDetails.SourceTypeID SPOKEID,'Dimension' ObjectType
+		,Coalesce(RDetails.MetricID,0) METRICID
+		,case 
+		when 
+		LINK.ID =1  then Sources.Alias||'_'|| RDetails.METRICNAME||'_'|| Attrib.AttributeName||'ID'  
+		when LINK.ID =2 then  Sources.Alias||'_'|| Attrib.AttributeName||'ID'   end as METRICNAME
+		--Sources.Alias||'_'||MST.DIMENSIONNAME||'_'||RDetails.DIMENSION_ATTRIBUTE ||'ID' end AS METRICNAME --Initally Rdetails.MetricName||'ID'
+		,Case  
+		when	Attrib.ISPrimary=1 
+		then Coalesce(Rdetails.DimensionColumnAlias,Sources.SOURCETYPE_NAME||'_'||Coalesce(EM.ENTITY_NAME,'')||'_'|| MST.DIMENSIONNAME||'_'||Attrib.AttributeName||'_'||RDetails.METRICNAME||'_id')
+		ELSE
+		Coalesce(Rdetails.DimensionColumnAlias,Sources.SOURCETYPE_NAME||'_'||Coalesce(EM.ENTITY_NAME,'')||'_'|| MST.DIMENSIONNAME||'_'||Attrib.AttributeName||'_'||RDetails.METRICNAME )
+		--Sources.SOURCETYPE_NAME||'_'|| MST.DIMENSIONNAME||'_'||Attrib.AttributeName||'_'||RDetails.METRICNAME 
+		END as TABLECOL
+
+		,Case when Attrib.ISPrimary=1  then 'BIGINT' else Attrib.DataType END as METRICDATATYPE
+		,Sources.SOURCETYPE SPOKETYPE
+		,Coalesce(RDetails.ENTITYDEFID,0) as ENTITYDEF_ID
+		,RDetails.ReportConfigDetailID ReportConfigDetailID
+		from 
+		KBReportsConfigurationDetails RDetails
+		JOIN kb_dim_sourcelink LINK on LINK.SOURCEID=RDetails.SourceTypeID and Link.id=RDetails.Dimensionid 
+
+		Join KBSourceTypeMst Sources on RDetails.SourceTypeID=Sources.SOURCETYPE_ID
+
+		JOIN dim_dimensionAttributes Attrib on RDetails.DIMENSIONID=Attrib.DimensionID 
+		and RDetails.DIMENSION_ATTRIBUTE=Attrib.AttributeName
+
+		JOIN kb_dim_dimensionMst  MST  on Mst.ID=RDetails.DIMENSIONID
+		Left JOIN KbentityMst EM on EM.ENTITYDEF_ID=Rdetails.ENTITYDEFID
+		JOIN KBReportsConfigurationMSt RptMst  on   RptMst.ReportConfigurationID=RDetails.ReportConfigurationID
+		Where RDetails.ISDIMENSION Is Null and RptMst.ReportConfigurationID=VReportConfigurationID and RDetails.DIMENSION_ATTRIBUTE!='AlternateDate'
+		and Mst.id in(1,2) and RDetails.subtype ='Dimension'
+		UNION ALL
+		Select distinct   VReportConfigurationID,RDetails.SourceTypeID SPOKEID,'Dimension' ObjectType
+		,Coalesce(RDetails.MetricID,0) METRICID
+		,  case when Attrib.AttributeName is null then MST.DIMENSIONNAME||'_'||RDetails.METRICNAME||'_'||'id'
+		else --RDetails.MetricName||'ID'   end as METRICNAME
+		link.MetricName||'id' END as  METRICNAME  /*changed ID to id*/
+		,Case  
+			when	Attrib.ISPrimary=1 
+					then Coalesce(RDetails.DimensionColumnAlias,Sources.SOURCETYPE_NAME||'_'||Coalesce(EM.ENTITY_NAME,'')||'_'|| MST.DIMENSIONNAME||'_'|| Attrib.AttributeName||'_'||RDetails.METRICNAME||'_id')
+		ELSE
+			Coalesce(RDetails.DimensionColumnAlias,Sources.SOURCETYPE_NAME||'_'||Coalesce(EM.ENTITY_NAME,'')||'_'|| MST.DIMENSIONNAME||'_'||Coalesce(Attrib.AttributeName,'ID')||'_'||RDetails.METRICNAME )
+			 --Sources.SOURCETYPE_NAME||'_'|| MST.DIMENSIONNAME||'_'||Attrib.AttributeName||'_'||RDetails.METRICNAME 
+		END as TABLECOL
+
+		,Coalesce( Attrib.DataType  ,'BIGINT' )   METRICDATATYPE
+		--,Coalesce(Case when Attrib.ISPrimary=1  then 'BIGINT' else Attrib.DataType END,'BIGINT' )   METRICDATATYPE
+		,Sources.SOURCETYPE SPOKETYPE
+		,Coalesce(RDetails.ENTITYDEFID,0) as ENTITYDEF_ID
+		,RDetails.ReportConfigDetailID ReportConfigDetailID
+		from 
+		KBReportsConfigurationDetails RDetails
+		Left  JOIN kb_dim_sourcelink LINK on LINK.SOURCEID=RDetails.SourceTypeID and Link.id=RDetails.Dimensionid and Link.AttributeName=RDetails.DIMENSION_ATTRIBUTE
+		--and Rdetails.MetricName=LINK.MetricName
+
+		Join KBSourceTypeMst Sources on RDetails.SourceTypeID=Sources.SOURCETYPE_ID
+
+		Left JOIN dim_dimensionAttributes Attrib on RDetails.DIMENSIONID=Attrib.DimensionID 
+		and RDetails.DIMENSION_ATTRIBUTE=Attrib.AttributeName
+
+		JOIN kb_dim_dimensionMst  MST  on Mst.ID=RDetails.DIMENSIONID
+		Left JOIN KbentityMst EM on EM.ENTITYDEF_ID=Rdetails.ENTITYDEFID
+		JOIN KBReportsConfigurationMSt RptMst  on   RptMst.ReportConfigurationID=RDetails.ReportConfigurationID
+		Where RDetails.ISDIMENSION Is Null and RptMst.ReportConfigurationID=VReportConfigurationID and RDetails.DIMENSION_ATTRIBUTE!='AlternateDate'
+		and Mst.id not in(1,2) and RDetails.subtype ='Dimension'
+		UNION ALL
+
+		/*Entities columns*/
+		Select distinct  VReportConfigurationID,0 SpokeId,'Entity' ObjectType,0 MetricId
+		, B.ServiceLabel  "NAME"
+		--,Coalesce(B.MetricColumnAlias,EntityDef.ENTITY_NAME||'_'||B.MetricName)
+		,Coalesce(B.MetricColumnAlias,tblcolumnname)
+		,Case when lower(METRICS.ControlDataType) like '%latitude%' OR lower(METRICS.ControlDataType) like '%longitude%' 
+		OR lower(METRICS.ControlDataType) like '%zip code%' 
+		OR lower(METRICS.ControlDataType) like '%post code%'
+		OR lower(METRICS.ControlDataType) like '%city%' 
+		OR lower(METRICS.ControlDataType) like '%state%' OR METRICS.ControlDataType like '%country%' 
+		OR lower(METRICS.ControlDataType) like '%string%' 
+		Then 'varchar(255)' 
+
+		when lower(METRICS.ControlDataType) like  '%integer%' then 'BIGINT'
+
+		Else METRICS.ControlDataType End METRICDATATYPE
+		,0,Coalesce(B.SourceTypeID,0) as ENTITYDEFID
+		,B.ReportConfigDetailID ReportConfigDetailID
+
+		from KBReportsConfigurationDetails B 
+		Join KBEntityMst EntityDef on B.SourceTypeID=EntityDef.ENTITYDEF_ID
+		JOIN KBEntityScreenConfigurationMst METRICS ON EntityDef.ENTITYDEF_ID=Metrics.EntityDefID and B.METRICNAME=Metrics.ControlTitle
+		and B.SourceTypeID=Metrics.EntityDefID and B.ServiceLabel=Metrics.ServiceLabel	
+
+		JOIN KBReportsConfigurationMSt RptMst  on   RptMst.ReportConfigurationID=B.ReportConfigurationID			
+		Where B.ISDIMENSION=2 and Rptmst.ReportConfigurationID=VReportConfigurationID
+		Union All
+
+		/*dimension ID  columns*/
+		Select  distinct VReportConfigurationID,0 SpokeId,'Dimension' ObjectType,0 MetricId
+		,case 
+		when 
+			LINK.ID =1 then Mst.SOURCETYPE_NAME||'_'|| B.MetricName||'_'|| LINK.METRICNAME||'ID'  
+		when 	
+			LINK.ID =2 then Mst.SOURCETYPE_NAME||'_'|| B.MetricName||'ID'  
+		else B.MetricName||'ID'  end AS NAME
+		,DIMENSIONNAME||'_'||B.MetricName
+		,Attrs.DataType METRICDATATYPE
+		,0
+		,Coalesce(B. ENTITYDEFID,0) as ENTITYDEFID
+		,B.ReportConfigDetailID ReportConfigDetailID
+		from KBReportsConfigurationDetails B 
+		JOIN kb_dim_sourcelink LINK on LINK.ID=B.SourceTypeID
+		Join KB_DIM_DIMENSIONMST Dims on B.SourceTypeID=dims.ID
+		join KbsourcetypeMst Mst on Mst.SOURCETYPE_ID=LINK.SOURCEID
+		join dim_dimensionAttributes Attrs on Attrs.AttributeName=B.MetricName and Attrs.DimensionID=B.SourceTypeID
+		JOIN KBReportsConfigurationMSt RptMst  on   RptMst.ReportConfigurationID=B.ReportConfigurationID
+		Where B.ISDIMENSION=1 and Rptmst.ReportConfigurationID=VReportConfigurationID and B.subtype is null--!='envidatasource'
+		union all
+		/*Unknown*/
+		Select distinct VReportConfigurationID,0 SPOKEID
+		,'Dimension' ObjectType
+		,0 METRICID
+		,Dims.DIMENSIONNAME||'ID' METRICNAME
+		,Dims.DIMENSIONNAME||'ID' as  TABLECOL
+		,'Bigint' METRICDATATYPE
+		,0 SPOKETYPE
+		,0 ENTITYDEFID
+		,B.ReportConfigDetailID ReportConfigDetailID
+		from 
+		KBReportsConfigurationDetails B 
+		Join KB_DIM_DIMENSIONMST Dims on B.SourceTypeID=Dims.ID
+		JOIN KBMETRICMST Metrics on Metrics.METRIC_ID=B.MetricID
+		JOIN KBReportsConfigurationMSt RptMst  on   RptMst.ReportConfigurationID=B.ReportConfigurationID
+		Where B.ISDIMENSION=1 and RptMst.ReportConfigurationID=VReportConfigurationID --and B.subtype!='envidatasource'
+		union all
+		Select distinct   VReportConfigurationID,RDetails.DIMENSIONID SPOKEID,'envidatasource' ObjectType
+		,Coalesce(Mets.METRIC_ID,0) METRICID
+		,   Rdetails.DIMENSION_ATTRIBUTE as  METRICNAME  
+		,Coalesce(Rdetails.MetricColumnAlias,Sources1.SOURCETYPE_NAME||'_'||Sources.sourcetype_name||'_'||	RDetails.DIMENSION_ATTRIBUTE)	TABLECOL 
+		,Coalesce( Mets.METRICDATATYPE  ,'BIGINT' )   METRICDATATYPE
+		,1 SPOKETYPE
+		,Coalesce(RDetails.ENTITYDEFID,0) as ENTITYDEF_ID
+		,RDetails.ReportConfigDetailID ReportConfigDetailID
+		from 
+		KBReportsConfigurationDetails RDetails
+		JOIN KBMetricMst Mets on Coalesce(Mets.METRICALIAS,Mets.Metricname)=RDetails.DIMENSION_ATTRIBUTE and rdetails.DIMENSIONID=Mets.SOURCE_ID
+		Join KBSourceTypeMst Sources on RDetails.DIMENSIONID=Sources.SOURCETYPE_ID
+		join KBSourceTypeMst Sources1 on Sources1.SOURCETYPE_ID=RDetails.SourceTypeID
+		Where  RDetails.ReportConfigurationID=VReportConfigurationID and RDetails.subtype='envidatasource' and Mets.TEMPLATE_ID=1
+	)AA
+	Where Not Exists (Select 1 from kbreportsmetadata B where AA.ReportConfigurationID=B.ReportConfigurationID and Replace(AA.TABLECOL,'__','_')=B.TABLECOL)
+	;
+
+	Insert into kbreportsmetadata(ReportConfigurationID,SourceTypeID,OBJECTTYPE,MetricID,MetricName,TABLECOL,METRICDATATYPE,SPOKETYPE,ENTITYDEFID
+	,Createdby,modifiedby,createddate,modifieddate
+	)
+	SElect AA.*
+	from
+	(
+	SELECT 
+	distinct Kpi.ReportConfigurationID,Kpi.SourceTypeID,'KPI' OBJECTTYPE,Kpi.METRICID,Kpi.METRICNAME
+	,Coalesce(MetricColumnAlias ,Sources.SOURCETYPE_NAME||'_'||EntityDef.ENTITY_NAME||'_'||METRICNAME)||'_Condition Name' TblColumnName
+	,'Varchar(255)' METRICDATATYPE
+	,Kpi.IsEnviDataSrc,Kpi.ENTITYDEFID
+	,VCreated_by Createdby,VCreated_by ModifiedBy,VActiondate CreatedDate,VActiondate Modifieddate
+	from KPI Kpi
+	JOIN 
+	kbsourceTypemst Sources ON 	Kpi.SourceTypeID=Sources.SOURCETYPE_ID
+	JOIN 
+	kbEntityMst EntityDef ON 	Kpi.ENTITYDEFID=EntityDef.ENTITYDEF_ID
+
+	Union  
+
+	SELECT 
+	distinct Kpi.ReportConfigurationID,Kpi.SourceTypeID,'KPI' OBJECTTYPE,Kpi.METRICID,Kpi.METRICNAME
+	,Coalesce(MetricColumnAlias ,Sources.SOURCETYPE_NAME||'_'||EntityDef.ENTITY_NAME||'_'||METRICNAME)||'_Condition Range' TblColumnName
+	,'Varchar(255)' METRICDATATYPE
+	,Kpi.IsEnviDataSrc,Kpi.ENTITYDEFID
+	,VCreated_by,VCreated_by,VActiondate,VActiondate
+	from KPI Kpi
+	JOIN 
+	kbsourceTypemst Sources ON 	Kpi.SourceTypeID=Sources.SOURCETYPE_ID
+	JOIN 
+	kbEntityMst EntityDef ON 	Kpi.ENTITYDEFID=EntityDef.ENTITYDEF_ID
+
+	union  
+
+	SELECT 
+	distinct Kpi.ReportConfigurationID,Kpi.SourceTypeID,'KPI' OBJECTTYPE,Kpi.METRICID,Kpi.METRICNAME
+	,Coalesce(MetricColumnAlias ,Sources.SOURCETYPE_NAME||'_'||EntityDef.ENTITY_NAME||'_'||METRICNAME)||'_Condition KPI' TblColumnName
+	,'Varchar(255)' METRICDATATYPE
+	,Kpi.IsEnviDataSrc,Kpi.ENTITYDEFID
+	,VCreated_by,VCreated_by,VActiondate,VActiondate
+	from KPI Kpi
+	JOIN 
+	kbsourceTypemst Sources ON 	Kpi.SourceTypeID=Sources.SOURCETYPE_ID
+	JOIN 
+	kbEntityMst EntityDef ON 	Kpi.ENTITYDEFID=EntityDef.ENTITYDEF_ID
+	) AA
+	Where Not Exists (Select 1 from kbreportsmetadata B where AA.ReportConfigurationID=B.ReportConfigurationID and AA.TblColumnName=B.TABLECOL)	;
+
+	if(VIspivote=1) then
+	Begin 		 
+ 
+	Insert into kbreportsmetadata(ReportConfigurationID,SourceTypeID,OBJECTTYPE,MetricName,TABLECOL,METRICDATATYPE
+	,Createdby,modifiedby,createddate,modifieddate
+	)
+	SElect AA.*
+	from
+	(
+	select VReportConfigurationid ReportConfigurationID,kpiid,'KPI','kpiid'||'_'||cast(kpiid as Varchar)||'_'||cast(sourceid as Varchar),Coalesce(ColumnName,kpiname) TblColumnName
+	,'bigint'  METRICDATATYPE
+	 ,VCreated_by Createdby,VCreated_by ModifiedBy,VActiondate CreatedDate,VActiondate Modifieddate
+	from selectedkpi  
+	UNION
+	select VReportConfigurationid,kpiid,'KPI','kpiname'||'_'||cast(kpiid as Varchar)||'_'||cast(sourceid as Varchar)
+	,Coalesce(ColumnName,kpiname)||'_Condition Name','Varchar(255)'  
+	 ,VCreated_by Createdby,VCreated_by ModifiedBy,VActiondate CreatedDate,VActiondate Modifieddate
+	from selectedkpi  
+  
+	union  
+ 
+	select VReportConfigurationid,kpiid,'KPI','kpistatus'||'_'||cast(kpiid as Varchar)||'_'||cast(sourceid as Varchar),Coalesce(ColumnName,kpiname)||'_Condition Range' TblColumnName
+	,'Varchar(255)' METRICDATATYPE
+	 ,VCreated_by Createdby,VCreated_by ModifiedBy,VActiondate CreatedDate,VActiondate Modifieddate
+	 from selectedkpi  
+	--join kbkpiMst Mst on Coalesce(Mst.OriginalID,Mst.kpi_id)=SK.kpiid
+	union  
+	select VReportConfigurationid,kpiid,'KPI','groupingname'||'_'||cast(kpiid as Varchar)||'_'||cast(sourceid as Varchar),Coalesce(ColumnName,kpiname)||'_Condition KPI' TblColumnName
+	,'Varchar(255)'  METRICDATATYPE
+	 ,VCreated_by Createdby,VCreated_by ModifiedBy,VActiondate CreatedDate,VActiondate Modifieddate
+	from selectedkpi
+	) AA
+	Where Not Exists (Select 1 from kbreportsmetadata B where AA.ReportConfigurationID=B.ReportConfigurationID and Replace(AA.TblColumnName,'__','_') =B.TABLECOL)	
+	  ;
+	
+	
+	Insert into kbreportsmetadata(ReportConfigurationID,SourceTypeID,OBJECTTYPE,MetricName,TABLECOL,METRICDATATYPE
+	,Createdby,modifiedby,createddate,modifieddate
+	)
+	Select AA.*
+	from
+	(
+	select VReportConfigurationid ReportConfigurationID,EventID,'Event' OBJECTTYPE,'eventid_'||cast(EventID as varchar),EventName||'_ID' TblColumnName,'BIGINT' METRICDATATYPE
+	 ,VCreated_by Createdby,VCreated_by ModifiedBy,VActiondate CreatedDate,VActiondate Modifieddate
+	from SelectedEvents
+	) AA
+	Where Not Exists (Select 1 from kbreportsmetadata B where AA.ReportConfigurationID=B.ReportConfigurationID and Replace(AA.TblColumnName,'__','_') =B.TABLECOL)	
+	;
+	END;
+	End if;
+
+	insert into kbreportsmetadata(ReportConfigurationID,SourceTypeID,OBJECTTYPE,MetricName,TABLECOL,METRICDATATYPE,ENTITYDEFID,Createdby,modifiedby,createddate,modifieddate)
+	select distinct VReportConfigurationid ID,EntityID,'Entity','entityid_'||cast(EntityID as varchar),EntityDefName||'_ID','BIGINT',EntityID
+	,VCreated_by Createdby,VCreated_by ModifiedBy,VActiondate CreatedDate,VActiondate Modifieddate
+	from EntitiesTable A  --where newlyadded=1 
+	where not exists (select 1 from kbreportsmetadata B where b.ReportConfigurationID=VReportConfigurationID and B.objecttype='Entity' and B.TABLECOL=EntityDefName||'_ID')
+	;
+
+	/* updating the newlyadded column in the table kbreportsmetadata */
+ 
+	Update kbreportsmetadata set newlyadded=1 where recordid > VDataid and reportconfigurationid=VReportConfigurationID;
+
+	-----
+
+	if(VReportOn=0 )/*correlation*/ Then
+	Begin
+
+		/*Getting the correlationName*/
+		VcorrelationName:=(
+					select CorrelationName 
+					from cbcorrelationMst 
+					where  CorrelationID=cast(VDatasources as int)
+				  );
+
+		VJoinquery:='FROM "DM_DRIVER_'||VcorrelationName||'"' ;
+
+		/*for live data based on corelation*/					 
+		if(VReportType='0' and (VDatasources is NOT null or VDatasources!='') and VREGULARFROMDATE is not null)    Then  
+		Begin
+
+			/*Getting all the source metric tables with sequence columns*/
+			insert into SourceTable(SourceTablecolumn,correlationtablecolumn,Sourcetablename)
+			select distinct '"Fact_'||Mst.Alias||'MetricDetails".SEQ'
+			,'"DM_DRIVER_'||VcorrelationName||'"."'||Mst.Alias||'_SEQ"'
+			,'"Fact_'||Mst.Alias||'MetricDetails"'
+			from kbreportsMetaData MData 
+			join kbsourcetypemst Mst on Mst.SOURCETYPE_ID=MData.SourceTypeID
+			where Objecttype='Source' and MData.ReportConfigurationID=VReportConfigurationID
+			and Mst.SPOKETYPE='0';
+			
+			/*Forming the join query*/ 
+			VCount:=(select count(1) from SourceTable);
+			Vcounter:=1;
+			
+			while(Vcounter<=VCount) Loop
+			
+			VJoinquery:=VJoinquery||
+						(select ' INNER JOIN ' ||Sourcetablename ||' ON ' ||SourceTablecolumn ||'='|| correlationtablecolumn 
+						from SourceTable 
+						where ID=Vcounter);
+			 
+			Vcounter:= Vcounter+1;
+			end loop; 
+
+			/*Getting all the real time data mart source columns excluding the environmental sources*/
+			VReportcols=	(
+						Select String_Agg(tabcol,'')
+						from
+						(
+							select ','||'"'||TableCOL||'"' tabcol
+							from 
+							kbreportsMetaData  MData
+							join kbsourcetypemst Mst on Mst.SOURCETYPE_ID=MData.SourceTypeID
+							where ReportConfigurationID=VReportConfigurationID
+							and Objecttype='Source'  and Mst.SPOKETYPE='0' 
+							Order by Recordid 
+							--for xml path('')
+						)a
+					);
+
+			/*custom dimension cols*/
+			VReportcols:=	VReportcols||Coalesce( 
+								(
+								Select String_Agg(tabcol,'')
+								from
+								(
+									select ','||'"'||TableCOL||'"' tabcol
+									from 
+									kbreportsMetaData  MData
+									JOIN kbreportsconfigurationdetails Det on Det.ReportConfigDetailID=Mdata.ReportConfigDetailID
+									where Mdata.ReportConfigurationID=VReportConfigurationid
+									and  objecttype='Dimension'
+									and Det.dimension_Attribute in ('ID')
+									--Order by Recordid for xml path('') 
+								)a
+								)
+								,'');
+								
+			VReportcols:=	VReportcols||Coalesce( 
+								(
+								Select String_Agg(tabcol,'')
+								from
+								(
+									select ','||'"'||TableCOL||'"' tabcol
+									from 
+									kbreportsMetaData  MData
+									JOIN kbreportsconfigurationdetails Det on Det.ReportConfigDetailID=Mdata.ReportConfigDetailID
+									where Mdata.ReportConfigurationID=VReportConfigurationid
+									and  objecttype='Dimension'
+									and Det.dimension_Attribute in ('TIMEID')
+									--Order by Recordid for xml path('') 
+								)a
+								)
+								,'');
+			VReportcols:=	VReportcols||Coalesce( 
+								(
+								Select String_Agg(tabcol,'')
+								from
+								(
+									select ','||'"'||TableCOL||'"' tabcol
+									from 
+									kbreportsMetaData  MData
+									JOIN kbreportsconfigurationdetails Det on Det.ReportConfigDetailID=Mdata.ReportConfigDetailID
+									where Mdata.ReportConfigurationID=VReportConfigurationid
+									and  objecttype='Dimension'
+									and Det.dimension_Attribute in ('LOCATIONID')
+									--Order by Recordid for xml path('') 
+								)a
+								)
+								,'');
+			/*entity cols*/
+			VReportcols:=	VReportcols||Coalesce( 
+								(
+								Select String_Agg(tabcol,'')
+								from
+								(
+									select ','||'"'||TableCOL||'"' tabcol
+									from 
+									kbreportsMetaData  MData
+									JOIN kbreportsconfigurationdetails Det on Det.ReportConfigDetailID=Mdata.ReportConfigDetailID
+									where Mdata.ReportConfigurationID=VReportConfigurationid
+									and  upper(objecttype)='ENTITY'
+									and MData.METRICNAME LIKE ('%entityid_%')
+									 Order by Recordid
+									--Order by Recordid for xml path('') 
+								)a
+								)
+								,'');
+			VReportcols=Replace(VReportcols,'""','"');
+
+			/*Forming the insert statement*/
+			VReportsql:=('Insert into "RPT_'||VReportConfigurationName||'" ('||VReportcols||')');
+
+			VSrccols:= 'select '|| (
+						Select String_Agg(tabcol,'')
+						from
+						(
+							select ',' ||' "Fact_'||Mst.Alias||'MetricDetails"."'||MetricName||'"' tabcol
+							from 
+							kbreportsMetaData  MData
+							join kbsourcetypemst Mst on Mst.SOURCETYPE_ID=MData.SourceTypeID
+							where ReportConfigurationID=VReportConfigurationID
+							and Objecttype='Source'  and Mst.SPOKETYPE='0' 
+							Order by Recordid 
+							--for xml path('')
+						)a
+						);
+			VSrccols:= VSrccols||Coalesce(
+							(select String_agg(tabcol,'')
+							from
+							(  
+								select',' ||' "Fact_'||Mst.Alias||'MetricDetails"."'||Mst.SOURCETYPE_NAME||'_'||DIM.DimensionName||'_ID'||'"' tabcol
+								from kbsourcetypemst Mst 
+								join kbreportsmetadata Reports on Reports.SourceTypeID=Mst.SOURCETYPE_ID
+								JOIN kbreportsconfigurationdetails Det on Det.ReportConfigDetailID=Reports.ReportConfigDetailID
+								join kb_dim_dimensionMst dim on dim.ID=Det.DimensionID
+								where Objecttype='Dimension' and Reports.ReportConfigurationID=VReportConfigurationID
+								and Det.dimension_Attribute in ('ID')
+								and Mst.SPOKETYPE='0'
+								--Order by Recordid for xml path('')  
+							)a
+							)
+						,'');
+
+			VSrccols:= VSrccols||Coalesce(
+							(select String_agg(tabcol,'')
+							from
+							(  
+								select ',' ||' "Fact_'||Mst.Alias||'MetricDetails"."'||Det.MetricName||'ID"' tabcol
+								from kbsourcetypemst Mst 
+								join kbreportsmetadata Reports on Reports.SourceTypeID=Mst.SOURCETYPE_ID
+								JOIN kbreportsconfigurationdetails Det on Det.ReportConfigDetailID=Reports.ReportConfigDetailID
+								join kb_dim_dimensionMst dim on dim.ID=Det.DimensionID
+								where Objecttype='Dimension' and Reports.ReportConfigurationID=VReportConfigurationID
+								and Det.dimension_Attribute in ('TIMEID')
+								and Mst.SPOKETYPE='0'
+								--Order by Recordid for xml path('')  
+							)a
+							)
+						,'');
+
+			VSrccols:= VSrccols||Coalesce(
+							(select String_agg(tabcol,'')
+							from
+							(  
+								select ',' ||' "Fact_'||Mst.Alias||'MetricDetails"."ENTITYLOCATIONID"' tabcol
+								from kbsourcetypemst Mst 
+								join kbreportsmetadata Reports on Reports.SourceTypeID=Mst.SOURCETYPE_ID
+								JOIN kbreportsconfigurationdetails Det on Det.ReportConfigDetailID=Reports.ReportConfigDetailID
+								join kb_dim_dimensionMst dim on dim.ID=Det.DimensionID
+								where Objecttype='Dimension' and Reports.ReportConfigurationID=VReportConfigurationID
+								and Det.dimension_Attribute in ('LOCATIONID')
+								and Mst.SPOKETYPE='0'
+								--Order by Recordid for xml path('')  
+							)a
+							)
+						,'');	
+			VSrccols:=	VSrccols||Coalesce( 
+								(
+								Select String_Agg(tabcol,'')
+								from
+								(
+									select ',' ||' "Fact_'||Mst.Alias||'MetricDetails"."EntityID"' tabcol
+									from 
+									kbreportsMetaData  MData
+									join kbsourcetypeMst Mst on Mst.SOURCETYPE_ID=MData.SourceTypeID
+									where Objecttype='entity' and MData.ReportConfigurationID=VReportConfigurationID
+									and MData.METRICNAME LIKE ('%entityid_%')
+									Order by Recordid
+									--Order by Recordid for xml path('') 
+								)a
+								)
+								,'');
+			VSrccols=Replace(VSrccols,'""','"');													
+
+			VInsertquery=(select VReportsql||VSrccols||VJoinquery );
+
+			VRes:=
+				(
+					Select Row_to_json(del) as "root"
+					From
+					(
+						select '' "delaytime",'' "uom"
+						,
+						(
+							Select Row_to_json(realt) as "processtype"
+							from
+							(
+								select 1 as "seq",'realtimedatamart' "type"
+								,
+								(
+									Select Row_to_json(que) as "query"
+									from
+									(
+										select 'insert' "type",1 "isquery", VInsertquery   
+										--for xml raw('query') 
+									) as que
+								)
+								--for xml raw('processtype')
+							) as realt
+						)
+						--for xml raw('root')
+					)del	
+				);
+		End;
+		End if;
+	End;
+	Elseif (VReporton=2 and VREGULARFROMDATE is not null ) Then
+	Begin
+
+		
+		select alias,SOURCETYPE_NAME into VsrcName,VSName
+		from kbsourcetypeMst where SOURCETYPE_ID=cast(VDatasources as bigint) and isactive='1';
+				
+		Vsrctable:='from Fact_'||VsrcName||'Metricdetails';
+
+		VVerticastring:=('(select RECORDDATEUTC '|| Vsrctable ||' src join "RPT_'||VReportConfigurationName ||'" rpt on  rpt."'||VSName||'_seq"=src.seq order by RECORDDATEUTC desc   limit 1');
+		VrecordedtaeUtc:=('(select RECORDDATEUTC '|| Vsrctable ||' src join "RPT_'||VReportConfigurationName ||'" rpt on  rpt."'||VSName||'_seq"=src.seq order by RECORDDATEUTC desc limit 1');
+
+		VDateString:=('update Analysiscollectiondimupdatedetails set Lastupdatedtime='||VrecordedtaeUtc||') where ReportconfigurationID='||cast(VReportConfigurationid as varchar)
+			||' and analysistablename=''"RPT_'||VReportConfigurationName ||'"'' and dimensiontablename=''"Fact_'||VsrcName||'Metricdetails"'' and "type"=''singledatasource''');
+				
+		VVerticaupdate:=('update Analysiscollectiondimupdatedetails set Lastupdatedtime='||VVerticastring||') where ReportconfigurationID='||cast(VReportConfigurationid as varchar)
+			||' and analysistablename=''"RPT_'||VReportConfigurationName ||'"'' and dimensiontablename=''"Fact_'||VsrcName||'Metricdetails"'' and "type"=''singledatasource''');
+
+		VPlaceholders:=
+				(
+					Select  Row_to_json(reps) as "replacers"
+					from
+					(
+					Select Row_to_json(rep) as "replace"
+					from
+					(
+					select '#Lastupdatedtime#' as "string",'select Lastupdatedtime from Analysiscollectiondimupdatedetails where ReportconfigurationID='||cast(VReportConfigurationid as varchar)
+					||' and analysistablename=''"RPT_'||VReportConfigurationName ||'"'' and dimensiontablename=''"Fact_'||VsrcName||'Metricdetails"'' and "type"=''singledatasource''' as "selectquery" 
+					,cast(VDateString as varchar(1000)) "updatequery",VVerticaupdate as "updatequery_vertica" 
+					--for xml raw('replace'),root('replacers')
+					)rep
+					)reps
+				);
+
+		VReportcols=	(
+						Select String_Agg(tabcol,'')
+						from
+						(
+							select ','||'"'||TableCOL||'"' tabcol
+							from 
+							kbreportsMetaData  MData
+							join kbsourcetypemst Mst on Mst.SOURCETYPE_ID=MData.SourceTypeID
+							where ReportConfigurationID=VReportConfigurationID
+							and Objecttype='Source'  and Mst.SPOKETYPE='0' 
+							Order by Recordid 
+							--for xml path('')
+						)a
+					);
+
+			/*custom dimension cols*/
+			VReportcols:=	VReportcols||Coalesce( 
+								(
+								Select String_Agg(tabcol,'')
+								from
+								(
+									select ','||'"'||TableCOL||'"' tabcol
+									from 
+									kbreportsMetaData  MData
+									JOIN kbreportsconfigurationdetails Det on Det.ReportConfigDetailID=Mdata.ReportConfigDetailID
+									where Mdata.ReportConfigurationID=VReportConfigurationid
+									and  objecttype='Dimension'
+									and Det.dimension_Attribute in ('ID')
+									--Order by Recordid for xml path('') 
+								)a
+								)
+								,'');
+								
+			VReportcols:=	VReportcols||Coalesce( 
+								(
+								Select String_Agg(tabcol,'')
+								from
+								(
+									select ','||'"'||TableCOL||'"' tabcol
+									from 
+									kbreportsMetaData  MData
+									JOIN kbreportsconfigurationdetails Det on Det.ReportConfigDetailID=Mdata.ReportConfigDetailID
+									where Mdata.ReportConfigurationID=VReportConfigurationid
+									and  objecttype='Dimension'
+									and Det.dimension_Attribute in ('TIMEID')
+									--Order by Recordid for xml path('') 
+								)a
+								)
+								,'');
+			VReportcols:=	VReportcols||Coalesce( 
+								(
+								Select String_Agg(tabcol,'')
+								from
+								(
+									select ','||'"'||TableCOL||'"' tabcol
+									from 
+									kbreportsMetaData  MData
+									JOIN kbreportsconfigurationdetails Det on Det.ReportConfigDetailID=Mdata.ReportConfigDetailID
+									where Mdata.ReportConfigurationID=VReportConfigurationid
+									and  objecttype='Dimension'
+									and Det.dimension_Attribute in ('LOCATIONID')
+									--Order by Recordid for xml path('') 
+								)a
+								)
+								,'');
+			/*entity cols*/
+			VReportcols:=	VReportcols||Coalesce( 
+								(
+								Select String_Agg(tabcol,'')
+								from
+								(
+									select ','||'"'||TableCOL||'"' tabcol
+									from 
+									kbreportsMetaData  MData
+									JOIN kbreportsconfigurationdetails Det on Det.ReportConfigDetailID=Mdata.ReportConfigDetailID
+									where Mdata.ReportConfigurationID=VReportConfigurationid
+									and  upper(objecttype)='ENTITY'
+									and MData.METRICNAME LIKE ('%entityid_%')
+									 Order by Recordid
+									--Order by Recordid for xml path('') 
+								)a
+								)
+								,'');
+			VReportcols=Replace(VReportcols,'""','"');
+
+			/*Forming the insert statement*/
+			VReportsql:=('Insert into "RPT_'||VReportConfigurationName||'" ('||VReportcols||')');
+
+			VSrccols:= 'select '|| (
+						Select String_Agg(tabcol,'')
+						from
+						(
+							select ',' ||' "Fact_'||Mst.Alias||'MetricDetails"."'||MetricName||'"' as tabcol
+							from 
+							kbreportsMetaData  MData
+							join kbsourcetypemst Mst on Mst.SOURCETYPE_ID=MData.SourceTypeID
+							where ReportConfigurationID=VReportConfigurationID
+							and Objecttype='Source'  and Mst.SPOKETYPE='0' 
+							Order by Recordid 
+							--for xml path('')
+						)a
+						);
+			VSrccols:= VSrccols||Coalesce(
+							(select String_agg(tabcol,'')
+							from
+							(  
+								select',' ||' "Fact_'||Mst.Alias||'MetricDetails"."'||Mst.SOURCETYPE_NAME||'_'||DIM.DimensionName||'_ID'||'"' tabcol
+								from kbsourcetypemst Mst 
+								join kbreportsmetadata Reports on Reports.SourceTypeID=Mst.SOURCETYPE_ID
+								JOIN kbreportsconfigurationdetails Det on Det.ReportConfigDetailID=Reports.ReportConfigDetailID
+								join kb_dim_dimensionMst dim on dim.ID=Det.DimensionID
+								where Objecttype='Dimension' and Reports.ReportConfigurationID=VReportConfigurationID
+								and Det.dimension_Attribute in ('ID')
+								and Mst.SPOKETYPE='0'
+								--Order by Recordid for xml path('')  
+							)a
+							)
+						,'');
+
+			VSrccols:= VSrccols||Coalesce(
+							(select String_agg(tabcol,'')
+							from
+							(  
+								select ',' ||' "Fact_'||Mst.Alias||'MetricDetails"."'||Det.MetricName||'ID"' tabcol
+								from kbsourcetypemst Mst 
+								join kbreportsmetadata Reports on Reports.SourceTypeID=Mst.SOURCETYPE_ID
+								JOIN kbreportsconfigurationdetails Det on Det.ReportConfigDetailID=Reports.ReportConfigDetailID
+								join kb_dim_dimensionMst dim on dim.ID=Det.DimensionID
+								where Objecttype='Dimension' and Reports.ReportConfigurationID=VReportConfigurationID
+								and Det.dimension_Attribute in ('TIMEID')
+								and Mst.SPOKETYPE='0'
+								--Order by Recordid for xml path('')  
+							)a
+							)
+						,'');
+
+			VSrccols:= VSrccols||Coalesce(
+							(select String_agg(tabcol,'')
+							from
+							(  
+								select ',' ||' "Fact_'||Mst.Alias||'MetricDetails"."ENTITYLOCATIONID"' tabcol
+								from kbsourcetypemst Mst 
+								join kbreportsmetadata Reports on Reports.SourceTypeID=Mst.SOURCETYPE_ID
+								JOIN kbreportsconfigurationdetails Det on Det.ReportConfigDetailID=Reports.ReportConfigDetailID
+								join kb_dim_dimensionMst dim on dim.ID=Det.DimensionID
+								where Objecttype='Dimension' and Reports.ReportConfigurationID=VReportConfigurationID
+								and Det.dimension_Attribute in ('LOCATIONID')
+								and Mst.SPOKETYPE='0'
+								--Order by Recordid for xml path('')  
+							)a
+							)
+						,'');	
+			VSrccols:=	VSrccols||Coalesce( 
+								(
+								Select String_Agg(tabcol,'')
+								from
+								(  
+									select ',' ||' "Fact_'||Mst.Alias||'MetricDetails"."EntityID"' tabcol
+									from 
+									kbreportsMetaData  MData
+									join kbsourcetypeMst Mst on Mst.SOURCETYPE_ID=MData.SourceTypeID
+									where Objecttype='entity' and MData.ReportConfigurationID=VReportConfigurationID
+									and MData.METRICNAME LIKE ('%entityid_%')
+									Order by Recordid
+									--Order by Recordid for xml path('') 
+								)a
+								)
+								,'');
+			VSrccols:=Replace(VSrccols,'""','"');	
+
+			VRes:=
+				(
+					Select Row_to_json(del) as "root"
+					From
+					(
+						select '' "delaytime",'' "uom"
+						,
+						(
+							Select Row_to_json(realt) as "processtype"
+							from
+							(
+								select 1 as "seq",'singlesourcedatamart' "type",VPlaceholders
+								,
+								(
+									Select Row_to_json(que) as "query"
+									from
+									(
+										select 'insert' "type",1 "isquery", VInsertquery   
+										--for xml raw('query') 
+									) as que
+								)
+								--for xml raw('processtype')
+							) as realt
+						)
+						--for xml raw('root')
+					)del	
+				);
+		
+		
+	end;
+	
+	end if;
+
+	Return(
+		Select Row_to_json(output)
+		from
+		(
+		Select Row_to_json(a) "REPORTDETAILS"
+		from
+		(
+			Select VReportConfigurationID "Reportid",
+			(
+
+				Select row_to_json(tabs) "tablestructure" 
+				from
+				(
+					Select Row_to_json(tab) "table"
+					from
+					(
+					select 'RPT_'|| ReportConfigurationName as "name"
+					,
+					(
+						Select Array_to_json(Array_Agg(Row_to_json(col))) "column"
+						from
+						(
+							select TABLECOL "TABLECOL",METRICDATATYPE "METRICDATATYPE" 
+							from kbreportsmetadata 
+							where ReportconfigurationID=Mst.ReportconfigurationID and newlyadded=1
+							order by Recordid
+							--for xml raw('column')
+						) as col
+					)
+					from KBReportsConfigurationMSt mst
+					where Mst.ReportconfigurationID=VReportconfigurationID
+					--for xml raw('table'),root('tablestructure')
+					) as tab
+				)tabs	
+			)	
+		)a
+		) output
+
+	);
+
+end;
+ELSEIF Lower(VTRAN)='getdetails' then
+BEGIN
+	
+	/* GETDETAILS is used to retrieve the complete details related to an Analysis collection */
+
+	Select cast(ivalue->'REPORTDETAILS'->>'REPORTCONFIGURATIONID' as int)
+	into VReportConfigurationid
+	from temps limit 1;
+	
+
+--------------------------- Implemented Dimensions on 26th ARR 2013----------------
+
+	VSelectedDataSources:=(	 
+					select String_agg(objectid,';')
+					from
+					( 
+					Select  cast(ObjectID  as varchar(50)) ObjectID
+					from KBReportsDataJoiningRules B
+					where ReportConfigurationID=VReportConfigurationID
+					--For xml path('')
+					)as obj
+				);
+
+	Return(
+
+		Select Row_to_json(outputs) 
+		from
+		(
+		Select Row_to_json(rep) as "REPORTDETAILS"
+		from
+		(
+			Select REPORTCONFIGURATIONID "REPORTCONFIGURATIONID"
+			,ReportConfigurationName "NAME"
+			,Coalesce(ConfigDescription,'') "DESCRIPTION"
+			, IsPivote "IsPivote"
+			,ReportType	"ReportType"
+			,PastDataFrom "PastDataFrom"
+			,PastDataFromUOM	"PastDataFromUOM"
+			,DataFetchFrequency "DataFetchFrequency"
+			,DataFetchFrequencyUOM "DataFetchFrequencyUOM"
+			,ReportOn "ReportOn"
+            ,userquery as "USERQUERY"
+			,case when ReportOn=0 then cast(CorrelationID as varchar) else DatasourceId end as "DatasourceId"
+			,	
+			(
+				Select Row_to_json(srcs) "DataJoiningRule"
+				from
+				(
+					select Array_to_json(array_Agg(row_To_json(src))) "DataSource"
+					from
+					(
+					Select ObjectID "DataSourceId"
+					, SelectedObjectID "SelectedDimId"
+					from KBReportsDataJoiningRules JRules 
+					where mst.ReportConfigurationID=JRules.ReportConfigurationID
+					--For XML RAW('DataSource'),Root('DataJoiningRule')
+					)as src
+				) srcs	
+			)
+					
+
+			,
+			(
+				Select Row_to_json(sel) as "DataSources"
+				from
+				(
+					Select VSelectedDataSources "SelectedDatsSources"
+					,
+					(
+						Select Row_to_json(dims) "Dimensions"
+						from
+						(
+							select Array_to_json(array_Agg(row_To_json(dim))) "Dimension"
+							from
+							(
+								Select 
+								DimID "ID",DIMENSIONNAME "DimensionName"
+								From
+								(
+									Select ID DimID
+									,
+									(
+										Select String_Agg(sourceid,';')
+										from
+										(
+											Select SourceId
+											From 
+											(
+												Select ID, cast(Sourceid as varchar(50)) Sourceid
+												From
+												KB_DIM_SOURCELINK A
+												Group By ID,Sourceid
+											) B  
+											where A.id=B.ID  Order by Sourceid 
+											--for xml path('')
+										) as srces
+									) SelectedDataSources
+									from 
+									(
+										Select ID, Sourceid
+										From
+										KB_DIM_SOURCELINK A
+										Group By ID,Sourceid
+									)A
+									Group By A.id
+								) A 
+								Join KB_DIM_DIMENSIONMST B on A.DimID=B.ID
+								Where A.SelectedDataSources=VSelectedDataSources
+								--For XML Path(''),Root('Dimensions') 
+							)as dim
+						) dims	
+					)
+					--For XML Path(''),Root('DataSources')
+			
+				) as sel
+			)
+
+			,
+			(
+				Select row_To_json(ruls) as "Rules"
+				from
+				(
+					Select  Array_to_json(array_Agg(row_To_json(rul))) as  "Rule"
+					from
+					(
+						Select 
+						RecordID "RuleID"
+						, SelectedDataSource "Datasource"
+						, SelectedMetricID "SelectedMetric"
+						, TargetDataSource "TargetDatasource"
+						, TargetMetricID "SelectedTargetMetric"
+						, BufferTime "BufferTime"
+						, BufferTimeUOM "BufferTimeUOM"
+						from KBReportsConfigurationRules ReportRules 
+						where Mst.ReportConfigurationID=Reportrules.ReportConfigurationID
+						--For XML RAW('Rule'),ROOT('Rules')
+					)as rul
+				) ruls
+			)
+			,
+			(
+				Select Array_to_json(array_Agg(row_To_json(config))) as "CONFIGDETAILS"
+				from
+				(
+					Select DataRetentionPeriod "DATARETENTIONPERIOD",DRPUOM "UOM"
+					,ACTIONONHISTORICALDATA "ACTIONONHISTORICALDATA", DATABACKUPPATH "DATABACKUPPATH",CorrelationId "CORRELATIONID"
+					,SNAPSHOTFROMDATE "SNAPSHOTFROMDATE",SNAPSHOTTODATE "SNAPSHOTTODATE",REGULARFROMDATE "REGULARFROMDATE"
+					,STORAGETYPE "STORAGETYPE"
+					,
+					(
+						Select Array_to_json(array_Agg(row_To_json(spk))) as "SPOKE"
+						from
+						(	
+							Select A.SourceTypeID "SPOKEID", Sources.SOURCETYPE_NAME "NAME",IsEnviDataSrc "IsEnviDataSrc"
+							,0 as "NewlyAdded"
+							, 
+							(
+								Select Array_to_json(array_Agg(row_To_json(met))) as "METRIC"
+								from
+								(
+								 
+									Select B.ENTITYDEFID "ENTITYDEFID"
+									, EM.ENTITY_NAME "ENTITYDEFNAME"
+									,0 as "NewlyAdded",B.sourceTypeID "SPOKEID"
+									, MetricID "METRICID"
+									, B.MetricName  "METRICNAME", Mets.METRICDATATYPE "DATATYPE"
+									,Coalesce(B.MetricColumnAlias,'') as "ColumnName" 
+									,
+									(
+										Select row_To_json(atts) as "DimAttributes"
+										from
+										(
+										Select  Array_to_json(array_Agg(row_To_json(att))) as "Attribute"
+										from
+										( 
+											select A."Name" "Name"
+											,  A.DIMENSIONID "DIMENSIONID"
+											, A.DimensionName "DimensionName"
+											, A.ColumnName "ColumnName"
+											, DATATYPE "DATATYPE", PrimaryKey "PrimaryKey"
+											, IsSelected "IsSelected", NewlyAdded "NewlyAdded"
+											from
+											(	
+												select distinct	DIMENSION_ATTRIBUTE "Name",RCD.DIMENSIONID as DimensionId
+												,DIM.dimensionName DimensionName
+												,Coalesce(RCD.DimensionColumnAlias,'') as ColumnName
+												,case when Att.Datatype is null or Att.Datatype='' then 'Bigint' 
+														else Att.Datatype end DATATYPE
+												, Coalesce(Att.Isprimary,'1') PrimaryKey
+												,Case when DIMENSION_ATTRIBUTE ='ID' then 0 else 1 end as IsSelected
+												,0 as NewlyAdded
+												from KBReportsConfigurationDetails RCD
+												JOIN KB_DIM_DIMENSIONMST DIM on DIM.ID=RCD.DimensionId
+												LEFT join dim_dimensionattributes Att on Att.AttributeName=RCD.DIMENSION_ATTRIBUTE
+												where RCD.ReportConfigurationID=B.ReportConfigurationID
+												and RCD.MetricId=B.MetricID
+												and RCD.sourceTypeid=B.SourceTypeid 
+												and RCD.ISDIMENSIOn IS NULL and IsEnviDataSrc=0
+											
+												UNION ALL
+											
+												select distinct	DIMENSION_ATTRIBUTE "Name",RCD.DIMENSIONID as DimensionId
+												,DIM.dimensionName DimensionName,Coalesce(RCD.DimensionColumnAlias,'') as ColumnName
+												,case when Att.Datatype is null or Att.Datatype='' then 'Bigint' else Att.Datatype end DATATYPE
+												, Coalesce(Att.Isprimary,'1') PrimaryKey
+												--,case when Att.Isprimary ='' or Att.Isprimary is null then 1 else  Att.Isprimary end PrimaryKey
+												,Case when DIMENSION_ATTRIBUTE ='ID' then 0 else 1 end as IsSelected
+												--,1 as IsSelected
+												,0 as NewlyAdded
+												from KBReportsConfigurationDetails RCD
+												JOIN KB_DIM_DIMENSIONMST DIM on DIM.ID=RCD.DimensionId
+												LEFT join dim_dimensionattributes Att on /*Att.DimensionId=RCD.DimensionId and*/ Att.AttributeName=RCD.DIMENSION_ATTRIBUTE
+												where RCD.ReportConfigurationID=B.ReportConfigurationID
+												and RCD.MetricId=B.MetricID
+												and RCD.sourceTypeid=B.SourceTypeid --and RCD.dimensionid=B.dimensionId 
+												and RCD.ENTITYDEFID=B.ENTITYDEFID
+												and RCD.ISDIMENSIOn IS NULL and IsEnviDataSrc=1
+											
+												union All
+
+												select distinct	DIMENSION_ATTRIBUTE "Name",RCD.DIMENSIONID as DimensionId
+												,dim.SOURCETYPE_NAME DimensionName
+												,Coalesce(RCD.DimensionColumnAlias,'') as ColumnName
+												,case when Att.METRICDATATYPE is null or Att.METRICDATATYPE='' then 'Bigint' else Att.METRICDATATYPE end DATATYPE
+												, 0 PrimaryKey
+												--,case when Att.Isprimary ='' or Att.Isprimary is null then 1 else  Att.Isprimary end PrimaryKey
+												,Case when DIMENSION_ATTRIBUTE ='ID' then 0 else 1 end as IsSelected
+												--,1 as IsSelected
+												,0 as NewlyAdded
+												from KBReportsConfigurationDetails RCD
+												JOIN KBSourceTypeMst DIM on DIM.SOURCETYPE_ID=RCD.DimensionId
+												LEFT join KBMetricMst Att on /*Att.DimensionId=RCD.DimensionId and*/ Coalesce(att.METRICALIAS,Att.METRICNAME)=RCD.DIMENSION_ATTRIBUTE
+												where RCD.ReportConfigurationID=B.ReportConfigurationID
+												and RCD.MetricId=B.MetricID
+												and RCD.sourceTypeid=B.SourceTypeid --and RCD.dimensionid=B.dimensionId 
+												and Coalesce(RCD.ENTITYDEFID,0)=Coalesce(B.ENTITYDEFID,0)
+												and RCD.ISDIMENSIOn IS NULL and IsEnviDataSrc=0 and subtype='envidatasource'
+											)A
+											--for xml raw('Attribute'),root('DimAttributes')
+										) as att
+										) as atts
+									)   
+									from KBReportsConfigurationDetails B 
+									 Left  JOIn KbmetricMst Mets ON Mets.METRIC_ID=B.MetricID
+									 Left  JOIN KbEntityMst EM ON EM.ENTITYDEF_ID=B.ENTITYDEFID
+									Where A.ReportConfigurationID=B.ReportConfigurationID 
+									and A.sourceTypeid=B.SourceTypeid 
+									and B.ISDIMENSIOn IS NULL    and B.MetricID!=0--and Mets.Template_Id=1
+									Group by B.ENTITYDEFID, B.sourceTypeID  , MetricID  ,B.MetricName   ,ReportConfigurationID,EM.ENTITY_NAME,Mets.METRICDATATYPE,B.MetricColumnAlias--,B.Type
+									--for XML RAW('METRIC')
+								)as met
+							)
+							from 
+							KBReportsConfigurationDetails A
+							Join KBSourceTypeMst Sources on A.SourceTypeID=Sources.SOURCETYPE_ID
+							where ReportConfigurationID=VReportConfigurationid and A.ISDIMENSION IS NULL
+							/*and [type] is null */and   cast(MetricID as varchar) not in ('0','NULL')
+							Group by A.ReportConfigurationID,A.SourceTypeID, Sources.SOURCETYPE_NAME,IsEnviDataSrc 
+							--FOR XML RAW('SPOKE') 
+						)as spk
+					)
+					from KBReportsConfigurationMSt Det
+					where Det.ReportConfigurationID= Mst.ReportConfigurationID
+					--FOR XML RAW('CONFIGDETAILS')
+				)as config
+			)
+			/*Dimensions*/
+			, 
+			(
+				Select row_To_json(dims) as "DIMENSIONS"
+				from
+				(
+					Select  Array_to_json(array_Agg(row_To_json(dim))) as "DIMENSION"
+					from
+					(	
+						Select Coalesce(Mst.ID,0) "ID", Coalesce(Mst.DIMENSIONNAME,'') "NAME" 
+						, 
+						(  
+							Select  Array_to_json(array_Agg(row_To_json(met))) as "METRIC"
+							from
+							(
+								Select B.sourceTypeID "SPOKEID", MetricID "METRICID",MetricName  "METRICNAME"
+								from KBReportsConfigurationDetails B 
+								Where A.ReportConfigurationID=B.ReportConfigurationID 
+								and A.sourceTypeid=B.SourceTypeid and B.ISDIMENSION=1
+								--for XML RAW('METRIC')
+							)as met
+						)
+
+						from 
+						KBReportsConfigurationDetails A
+						JOIN KB_DIM_DIMENSIONMST Mst on Mst.Id=A.SourceTypeID
+						where ReportConfigurationID=VReportConfigurationid and A.ISDIMENSION=1
+						Group by A.ReportConfigurationID,Mst.ID  , Mst.DIMENSIONNAME   ,A.sourceTypeid
+						--FOR XML RAW('DIMENSION') ,ROOT('DIMENSIONS')
+					)as dim			
+				) dims	
+			) 
+			,
+			(
+				Select row_To_json(dims) as "ENTITIES"
+				from
+				(
+					Select  Array_to_json(array_Agg(row_To_json(dim))) as "Entity"
+					from
+					(
+				
+					Select Coalesce(Mst.ENTITYDEF_ID,0) "ID", Coalesce(Mst.ENTITY_NAME,'') "Name" 
+					, 
+					(
+						Select  Array_to_json(array_Agg(row_To_json(att))) as "EntityAttribute"
+						from
+						(
+							Select  B.MetricName  "Name"
+							,Coalesce(B.MetricColumnAlias,'') as "ColumnName"
+							,B.MetricID as "MetricId"
+							,0 as NewlyAdded,case when ControlDataType in ('String','Latitude','Longitude') then 'varchar(255)' 
+								else ControlDataType end as "DATATYPE"
+							,B.DIMENSIONID as "SOURCEID"
+							from KBReportsConfigurationDetails B 
+							Left join KbentityScreenconfigurationMst Screen on Screen.EntityDefID=B.SourceTypeID 
+							Left join KbentityScreenconfigurationDetails ScreenDet on ScreenDet.ScreenID=Screen.ScreenID 
+							where (Screen.ServiceLabel=B.ServiceLabel or ScreenDet.ControlValues=B.MetricName )
+							and A.ReportConfigurationID=B.ReportConfigurationID 
+							and A.sourceTypeid=B.SourceTypeid  and B.ISDIMENSION=2 --and Screen.ObjectType='EntityDefinition'
+							--for XML RAW('EntityAttribute')
+						)as att
+					)
+					from 
+					KBReportsConfigurationDetails A
+					JOIN KBEntityMst Mst on Mst.ENTITYDEF_ID=A.SourceTypeID
+					where ReportConfigurationID=VReportConfigurationid and A.ISDIMENSION=2
+					Group by A.ReportConfigurationID,Mst.ENTITYDEF_ID  ,Mst.ENTITY_NAME   ,A.sourceTypeid
+					--FOR XML RAW('Entity') ,ROOT('ENTITIES')
+					)as dim
+				)dims	
+			)
+			,
+			(
+				Select row_To_json(dims) as "RULES"
+				from
+				(
+					Select  Array_to_json(array_Agg(row_To_json(dim))) as "RULE"
+					from
+					(
+					SELECT ENTITYDEFID "ENTITYDEFID"
+					,FIELDLABEL "FIELDLABEL"
+					,CONDITIONID	"CONDITIONID",VALUE1 "VALUE1"
+					,ENTITYID "ENTITYID"
+					,Coalesce(LOCATIONNAME,'')AS "LOCATIONNAME"
+					,ISENTITY "ISENTITY",VALUE2 "VALUE2","operator" "OPERATOR",TORDER "TORDER" 
+					FROM KBANALYSISCOLLECTIONRULES a
+					WHERE A.REPORTCONFIGURATIONID=Mst.ReportConfigurationID 
+					--FOR XML RAW('RULE'),ROOT('RULES')
+					)AS dim
+				) dims	
+				
+			)
+			,
+			(
+				Select row_To_json(dims) as "EVENTS"
+				from
+				(
+					Select  Array_to_json(array_Agg(row_To_json(dim))) as "EVENT"
+					from
+					(
+						SELECT EVENTIDS as "ID",Mst.EVENT_SD as   "Name",Coalesce(columnalias,'') as "ColumnName" 
+						from  KBANALYSISCOLLECTIONRULESEVENTKPIS a1 
+						join kbeventsMst Mst on Coalesce(cast(Mst.originalID as varchar),cast(Mst.event_ID as varchar))
+								=a1.EVENTIDS
+						where a1.reportconfigurationid=VReportConfigurationid and mst.IsActive='1'
+						--for xml raw('EVENT'),root('EVENTS')	
+					)as dim
+				) dims	
+			)
+			,
+			(
+				Select row_To_json(dims) as "KPIS"
+				from
+				(
+					Select  Array_to_json(array_Agg(row_To_json(dim))) as "KPI"
+					from
+					(
+						select distinct kpiids as "ID",KPIs.kpi_name as "Name",Coalesce(columnalias,'') as "ColumnName"
+						from  KBANALYSISCOLLECTIONRULESEVENTKPIS a 
+						JOIn KbkpiMst KPIs on Cast(a.kpiids as bigint)=Coalesce(kpis.originalid,KPIs.kpi_id)
+						where a.REPORTCONFIGURATIONID=Mst.REPORTCONFIGURATIONID
+						and KPIs.IsActive='1'
+						--for xml raw('KPI'),root('KPIS')
+					)as dim
+				) dims	
+			)
+			from KBReportsConfigurationMSt Mst
+			where Mst.ReportConfigurationID=VReportConfigurationid
+			--FOR XML PATH(''),ROOT('REPORTDETAILS')
+		) rep
+		) outputs	
+	);
+
+END;
+ELSEIF Lower(VTRAN)='gettooltip' then
+BEGIN
+
+	/* GETTOOLTIP is used to retrieve all the created Analysis collections*/
+
+Return(
+
+	Select Row_to_json(outs)
+	from
+	(
+		Select Row_to_json(cond) "REPORTDETAILS"
+		from
+		(
+			Select Array_to_json(Array_Agg(row_to_json(con))) "CONFIGDETAILS"
+			from
+			(
+				Select  REPORTCONFIGURATIONID "REPORTCONFIGURATIONID"
+				,ReportConfigurationName "REPORTCONFIGNAME"
+				,DataRetentionPeriod "DATARETENTIONPERIOD"
+				,DRPUOM "UOM"
+				,Coalesce(ConfigDescription,'') AS "DESCRIPTION"
+				,Reporttype	"REPORTTYPE"
+				,users.USER_NAME "CreatedbBy",
+                cmt.userquery as "USERQUERY"
+				from KBReportsConfigurationMSt cmt
+				Join KBUserMst users on cmt.CreatedBy=users.USER_ID
+				where cmt.isactive=1
+				and exists (Select 1 from users B where CMT.createdby=B.userid)
+				Order by ReportConfigurationName
+				--FOR XML RAW('CONFIGDETAILS'),ROOT('REPORTDETAILS')
+			)con
+		) cond
+	) outs			
+)
+;  
+
+END;
+End if;
+
+End
+
+$function$;
+
+ALTER FUNCTION public.usp_kbreports(json)
+    OWNER TO postgres;
+
+
+

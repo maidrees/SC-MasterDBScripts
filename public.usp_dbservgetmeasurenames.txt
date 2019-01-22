@@ -1,0 +1,55 @@
+-- FUNCTION: public.usp_dbservgetmeasurenamesjson
+
+-- DROP FUNCTION public.usp_dbservgetmeasurenamesjson;
+
+CREATE OR REPLACE FUNCTION public.usp_dbservgetmeasurenames(
+	input json DEFAULT NULL::json)
+RETURNS json
+    LANGUAGE 'plpgsql'
+    COST 100.0
+    VOLATILE 
+AS $function$
+
+Begin
+
+Return( 
+
+	Select Row_To_json(output)
+	From
+	(
+		Select Row_to_json(measdet) "MEASUREDETAILS"
+		From
+		(
+			Select Array_to_json(Array_agg(Row_to_json(meas))) as "MEASURE"
+			From
+			(
+				Select   Replace(Measure_Name,'_Measure','') as "MEASURENAME"
+				,Coalesce(FORMULAMEASURE, Replace(Measure_Name,'_Measure','')) as  "FORMULA"
+				, Coalesce(Formula_Chk,0) as "ISCUSTOMFORMULA"
+				,DataTypeAlias AS "MEASUREUNITNAME"
+				,Coalesce(MEASURE_MINMAX,0) "MEASURE_MINMAX"
+				,MM.TEMPLATE_ID "TEMPLATE_ID"
+				,MM.MEASURE_ID	"MEASURE_ID"
+				,MM.SOURCE_ID as "SOURCEID"
+				from 
+				KBMeasureMst MM 
+				LEFT  OUTER JOIN KBMasterDataTypes MUM on MM.MEASUREUNIT_ID= MUM.DaTaTypeID
+				join kbsourcetypemst sources  on mm.source_id=sources.sourcetype_id
+				join kbkpimeasure kmeas on mm.measure_id=kmeas.measure_id
+				WHERE    kmeas.isactive=1 and
+				--((mm.CREATEDBY=1 and mm.IsActive=1) or (mm.CREATEDBY is null and mm.IsActive in(1,2))) --and mm.ISACTIVE!=0	and 
+				(MM.Template_Id in (select Template_id from KBEntityTemplates) or mm.TEMPLATE_ID=1) and coalesce(masterspokeid,0)=0
+				Order by MM.TEMPLATE_ID
+				--FOR XML PATH('MEASURE'),ROOT('MEASUREDETAILS')
+			)meas
+		)measdet	
+	)output	
+); 
+End
+
+$function$;
+
+ALTER FUNCTION public.usp_dbservgetmeasurenames(json)
+    OWNER TO postgres;
+
+
