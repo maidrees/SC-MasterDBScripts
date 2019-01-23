@@ -70,7 +70,6 @@ DECLARE
     vtodate timestamp without time zone;
     vtype varchar(50);
     vhierarchy varchar(500);
-    
 	
  
 begin
@@ -329,17 +328,18 @@ end if;
 end;
 return VResult;
 end if;
-
+	
 If lower(VTran)='getpullsourceiterationdetails' Then
 Begin
+
 vfromdate:=(NOW() - INTERVAL '30 DAY');
 vdate:=(NOW() - INTERVAL '1 DAY');
-vtodate:= vdate :: date ;
+vtodate:= (vdate :: date );
 VResult:=(
 		Select Array_to_json(Array_agg(row_to_json(datas))) as "SPOKE"
 		From
 		(
-		Select kbenginewisedatafetchinginformation.createddate "PulledDatetime",recordcount "Recordcount",callstatus,
+		Select distinct kbenginewisedatafetchinginformation.createddate "PulledDatetime",recordcount "Recordcount",callstatus,
             (select  count(1) as "errorcount" from nmsspperformancelogger 
              where sourceid=kbenginewisedatafetchinginformation.callstatus 
              and createddate::date=kbenginewisedatafetchinginformation.createddate::date           
@@ -347,10 +347,12 @@ VResult:=(
 		from kbenginewisedatafetchinginformation 
             inner join kbsourceurlmst url on kbenginewisedatafetchinginformation.callstatus=url.sourceid
             where callstatus=VSourcetypeid
-            and (case when url.data_fetch_type='daily' then 
+            and (case when url.data_retrieval_uom='daily' then 
                  (kbenginewisedatafetchinginformation.createddate>=vfromdate)
-                 when url.data_fetch_type='hourly' then 
-                 (kbenginewisedatafetchinginformation.createddate>=vdate)end)
+                 when url.data_retrieval_uom='hourly' then 
+                 (kbenginewisedatafetchinginformation.createddate>=vdate)
+                 when url.data_retrieval_uom='minutes' then 
+                 (kbenginewisedatafetchinginformation.createddate>=vdate )end)
 		and engineinstanceid in (select distinct engineinstanceid from kbenginepagingworktable where lower(enginetype)='pull' )
 		order by kbenginewisedatafetchinginformation.createddate desc
 		
@@ -824,7 +826,8 @@ Begin
 		and InputMetricRulesData.MetricName=B.METRICNAME and B.TEMPLATE_ID=1;
 
 		/* Inserting the Fuzzy rules created on a metric */
-	 
+	 update KBMetricRules
+	 set isactive=null where sourceid=VSourcetypeid;
 	 
 		Insert into KBMetricRules(TEMPLATE_ID,METRIC_ID,RULEID,SOURCEID,VALUE,PRIORITY,ISACTIVE,Torder,TransformationDataType,TransformationDataTypeAlias,CREATEDBY)
 		Select 1 TemplateID, MetricId,RuleID,VSourcetypeid,Value,Priority,'1' IsActive, RecordID,TransformActualDataType,TransformationDataTypeAlias,Vcreated_by CreatedBy
@@ -1060,6 +1063,7 @@ Begin
 		/* Inserting the url's master information. */
 		if(VSource=1)  Then
 		BEGIN
+
 		
 			INSERT INTO KBSOURCEURLMST(SOURCEID,URL,USERNAME,password,DATA_RETRIEVAL_TIME,DATA_RETRIEVAL_UOM,ISACTIVE,DataSourceID,ServerName
 			,DatabaseName,DBQuery,TableQuery,DBAuthType,DATABASETYPE,InitialPullType,InitialPullFromDate,InitialPullToDate,IntialPullTimePeriod
@@ -1079,8 +1083,7 @@ Begin
 			,ivalue->'SPOKE'->'SourceURL'->> 'TableQuery' 	
 			,cast(ivalue->'SPOKE'->'SourceURL'->> 'DBAuthType' as smallint) 		
 			,cast(ivalue->'SPOKE'->'SourceURL'->> 'SelectedDatabaseType' as smallint) 
-			,cast(ivalue->'SPOKE'->'SourceURL'->> 'InitialPullType' as smallint)
-            
+			,cast(ivalue->'SPOKE'->'SourceURL'->> 'InitialPullType' as smallint) 
 			,case when cast(ivalue->'SPOKE'->'SourceURL'->>'InitialPullFromDate' as  timestamp)  is not null						
 						Then Cast(ivalue->'SPOKE'->'SourceURL'->>'InitialPullFromDate' as  timestamp)
 						Else Cast('1900-01-01' as Timestamp) End
@@ -2573,7 +2576,8 @@ then cast(ivalue->'SPOKE'->'SourceURL'->>'LDAPPortNumber' as int) else null end
 
 		/* Inserting the Fuzzy rules created on a metric */
 	 
-	 
+	 update KBMetricRules
+	 set isactive=null where sourceid=VSourcetypeid;
 		Insert into KBMetricRules(TEMPLATE_ID,METRIC_ID,RULEID,SOURCEID,VALUE,PRIORITY,ISACTIVE,Torder,TransformationDataType,TransformationDataTypeAlias,CREATEDBY)
 		Select 1 TemplateID, MetricId,RuleID,VSourcetypeid,Value,Priority,'1' IsActive, RecordID,TransformActualDataType,TransformationDataTypeAlias,Vcreated_by CreatedBy
 		From
@@ -2692,7 +2696,7 @@ then cast(ivalue->'SPOKE'->'SourceURL'->>'LDAPPortNumber' as int) else null end
 			,ivalue->'SPOKE'->'SourceURL'->> 'Database' 	
 			,ivalue->'SPOKE'->'SourceURL'->> 'DBQuery' 	
 			,ivalue->'SPOKE'->'SourceURL'->> 'TableQuery' 	
-			,cast(ivalue->'SPOKE'->'SourceURL'->> 'Source' as smallint) 		
+			,cast(ivalue->'SPOKE'->'SourceURL'->> 'DBAuthType'  as smallint) 		
 			,cast(ivalue->'SPOKE'->'SourceURL'->> 'SelectedDatabaseType' as smallint) 
 			,cast(ivalue->'SPOKE'->'SourceURL'->> 'InitialPullType' as smallint) 
 			,case when cast(ivalue->'SPOKE'->'SourceURL'->>'InitialPullFromDate' as  timestamp)  is not null						
@@ -2792,13 +2796,14 @@ end;
      		END;
 		ELSEIF(VSource=2) or (VSource=10) Then
 		BEGIN
-        
-INSERT INTO KBSOURCEURLMST(SOURCEID,URL,USERNAME,PASSWORD,DATA_RETRIEVAL_TIME,DATA_RETRIEVAL_UOM,ISACTIVE,DataSourceID
+  --return (select (ivalue->'SPOKE'->'SourceURL'->> 'DBAuthType') from temps limit 1);     
+INSERT INTO KBSOURCEURLMST(SOURCEID,dbauthtype,URL,USERNAME,PASSWORD,DATA_RETRIEVAL_TIME,DATA_RETRIEVAL_UOM,ISACTIVE,DataSourceID
 ,WSDLURL,WSDLClassName,WSDLAction,IsRestBased,InitialPullType,InitialPullFromDate,InitialPullToDate,IntialPullTimePeriod,InitialPullTimePeriodUOM,DATA_FETCH_TYPE,ParameterAppender,CREATEDBY,DBIDColumn,DBIDColumnDataType,concatenation_operator,concatenation_rule,uploadtype)
-SELECT VSourcetypeid,ivalue->'SPOKE'->'SourceURL'->> 'URL',ivalue->'SPOKE'->'SourceURL'->>'WSUSERNAME',ivalue->'SPOKE'->'SourceURL'->>'WSPASSWORD'
+SELECT VSourcetypeid,cast(ivalue->'SPOKE'->'SourceURL'->> 'DBAuthType' as smallint),
+ivalue->'SPOKE'->'SourceURL'->> 'URL',ivalue->'SPOKE'->'SourceURL'->>'WSUSERNAME',ivalue->'SPOKE'->'SourceURL'->>'WSPASSWORD'
 ,ivalue->'SPOKE'->'SourceURL'->> 'TIMEPERIOD' 
 ,ivalue->'SPOKE'->'SourceURL'->> 'TIMEPERIODUOM','1'
-,cast(ivalue->'SPOKE'->'SourceURL'->> 'Source' as smallint)
+,cast(ivalue->'SPOKE'->'SourceURL'->> 'Source' as  smallint)
 ,ivalue->'SPOKE'->'SourceURL'->>'WSDLURL'	
 ,ivalue->'SPOKE'->'SourceURL'->>'SelectedWSDLClassName'	
 ,ivalue->'SPOKE'->'SourceURL'->>'SelectedWSDLAction'	
@@ -2831,7 +2836,7 @@ VQuery_MaxRecord=(Select query from queries where id=2);
 if (select cast(ivalue->'SPOKE'->'SourceURL'->'ImportSettingsDetails' ->>'Source' as smallint) From temps limit 1) is not null then
 begin
 insert into KBSOURCEURLMST(SOURCEID,USERNAME,PASSWORD,DATA_RETRIEVAL_TIME,DATA_RETRIEVAL_UOM,DataSourceID,DATABASETYPE,ServerName,DBAuthType,DatabaseName,DBQuery,TableQuery,InitialPullType,IntialPullTimePeriod,InitialPullTimePeriodUOM,DATA_FETCH_TYPE,Parameter,HasPaging,PagingColumn,NoofRecords,CREATEDBY,DBIDColumn,DBIDColumnDataType,Query_Maxrecord,URL,IsRestBased
-,PortNumber,Organisation,"group",wsdlclassname)
+,PortNumber,Organisation,"group",wsdlclassname,wsdlurl,wsdlaction)
 select VSourcetypeid
 ,case when cast(ivalue->'SPOKE'->'SourceURL'->'ImportSettingsDetails'->>'DBUsername' as varchar(255)) IS not null 
 	then cast(ivalue->'SPOKE'->'SourceURL'->'ImportSettingsDetails'->>'DBUsername' as varchar(255))
@@ -2878,6 +2883,8 @@ then cast(ivalue->'SPOKE'->'SourceURL'->>'LDAPPortNumber' as int) else null end
 ,ivalue->'SPOKE'->'SourceURL'->'ImportSettingsDetails' ->>'LDAPOrg'
 ,ivalue->'SPOKE'->'SourceURL'->'ImportSettingsDetails' ->>'LDAPGroup'
 ,ivalue->'SPOKE'->'SourceURL'->'ImportSettingsDetails' ->>'SelectedWSDLClassName'
+,ivalue->'SPOKE'->'SourceURL'->'ImportSettingsDetails' ->>'WSDLURL'
+,ivalue->'SPOKE'->'SourceURL'->'ImportSettingsDetails' ->>'SelectedWSDLAction'
 From temps limit 1;
 				end;
 				end if;
@@ -3606,7 +3613,7 @@ Return(
 						Select Measures.FORMULATITLE  
 						from KBMeasureMst Measures 
 						where Measures.IsActive=1 and KMM.METRICNAME=Measures.MEASURE_NAME 
-						and KMM.TEMPLATE_ID=Measures.TEMPLATE_ID and Measures.TEMPLATE_ID=1  and KMM.SOURCE_ID=Measures.SOURCE_ID limit 1
+						and KMM.TEMPLATE_ID=Measures.TEMPLATE_ID and Measures.TEMPLATE_ID=1  and KMM.SOURCE_ID=Measures.SOURCE_ID
 						--For XML Path('')
 					) "NewFormula"
 					,
@@ -3768,8 +3775,7 @@ Return(
 												,groupname "GroupName"
 												FROM kbsourceurldetails B 
 												WHERE B.SOURCEID=Url.SOURCEID and Url.ID=B.URLID
-												and lower(Url.DATA_FETCH_TYPE)='historicaldata'
-                                                and b.type is null
+												and lower(Url.DATA_FETCH_TYPE)='historicaldata' and B.type is null
 												
 												--FOR XML RAW('PARAMETER'),ROOT('PARAMETERS')
 											) AS pars
@@ -3813,8 +3819,7 @@ Return(
 												,groupname "GroupName"
 												FROM kbsourceurldetails B 
 												WHERE B.SOURCEID=A.SOURCEID and A.ID=B.URLID
-												and lower(A.DATA_FETCH_TYPE)='currentdata'
-                                                and b.type is null
+												and lower(A.DATA_FETCH_TYPE)='currentdata' and B.type is null
 												--FOR XML RAW('PARAMETER'),ROOT('PARAMETERS')
 											) AS pars
 										) params
@@ -4088,6 +4093,3 @@ $function$;
 
 ALTER FUNCTION public.usp_kbspoke(json)
     OWNER TO postgres;
-
-
-

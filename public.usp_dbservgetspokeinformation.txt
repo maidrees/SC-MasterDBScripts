@@ -1,14 +1,10 @@
--- FUNCTION: public.usp_dbservgetspokeinformationjson
+-- Function: usp_dbservgetspokeinformation(json)
 
--- DROP FUNCTION public.usp_dbservgetspokeinformationjson;
+-- DROP FUNCTION usp_dbservgetspokeinformation(json);
 
-CREATE OR REPLACE FUNCTION public.usp_dbservgetspokeinformation(
-	input json)
-RETURNS json
-    LANGUAGE 'plpgsql'
-    COST 100.0
-    VOLATILE 
-AS $function$
+CREATE OR REPLACE FUNCTION usp_dbservgetspokeinformation(input json)
+  RETURNS json AS
+$BODY$
 
 DECLARE 
 	VTRAN		VARCHAR(30);
@@ -152,11 +148,11 @@ Begin
 											Select row_to_json(inp) "Input"
 											from
 											(
-											Select distinct VALUE  "Value",'Value' "Attribute_list" From KBMetricRules MRules1 
+                                                Select distinct VALUE  "Value",'Value' "Attribute_list" From KBMetricRules MRules1 
 												Where MRules.Metric_id=MRules1.Metric_ID and MRules.SourceID=MRules1.SourceID
 												and MRules1.SourceID=VSOURCEID
-												and MRules.RULEID=MRules1.RULEID
-											--For XML RAW('Input'),Root('Values')
+												and MRules.RULEID=MRules1.RULEID    limit 1                   
+											
 											)inp
 										) as Val
 									)
@@ -165,7 +161,7 @@ Begin
 									Left outer Join CBFuzzyLogicRulesMst Rules on MRules.RuleID=Rules.RuleID
 									where SpokesConfig.METRICNAME=Metrics.METRICNAME and SpokesConfig.SOURCETYPEID=Metrics.SOURCE_ID and Metrics.TEMPLATE_ID=1
 									Group By MRules.Metric_id,Metrics.METRICNAME,MRules.RULEID,MRules.SourceID,PRIORITY,Rules.RuleTitle
-								--FOR XML RAW('Rule'),Root('FuzzyLogic')
+								
 									)Ruls
 								)log
 							)
@@ -239,7 +235,7 @@ Begin
 					, (
 						Select licensekeyid 
 						from kblicensedetails Maps 
-						where Customerid= (Select CustomerId from kbusercustomermapping where userid= Sources.CreatedBy)
+						where Customerid= (Select CustomerId from kbusercustomermapping where userid= Sources.CreatedBy) limit 1
 					) "VID"
 					,'ID,NAME,SPOKETYPE,TIMEZONEID,TIMEZONENAME,UTCOFFSET,DATAFORMAT,PRIMARYKEY,SPOKEPLACEHOLDERS,TYPE,NLEGS,NMACHINES,ISCONTAINER,ISOTHER'
 					||'SPOKECHARACTERISTICS,VID,MASTERSPOKEID' "Attribute_list"
@@ -493,7 +489,7 @@ Begin
 					, (
 						Select licensekeyid 
 						from kblicensedetails Maps 
-						where Customerid= (Select CustomerId from kbusercustomermapping where userid= Sources.CreatedBy)
+						where Customerid= (Select CustomerId from kbusercustomermapping where userid= Sources.CreatedBy) limit 1
 					) "VID"
 					,'ID,NAME,SPOKETYPE,TIMEZONEID,TIMEZONENAME,UTCOFFSET,DATAFORMAT,PRIMARYKEY,SPOKEPLACEHOLDERS,TYPE,NLEGS,NMACHINES,ISCONTAINER,ISOTHER'
 					||'SPOKECHARACTERISTICS,VID,MASTERSPOKEID' "Attribute_list"
@@ -771,9 +767,9 @@ End if;
 
 End
 
-$function$;
-
-ALTER FUNCTION public.usp_dbservgetspokeinformation(json)
-    OWNER TO postgres;
-
+$BODY$
+  LANGUAGE plpgsql VOLATILE
+  COST 100;
+ALTER FUNCTION usp_dbservgetspokeinformation(json)
+  OWNER TO postgres;
 
