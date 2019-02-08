@@ -1,0 +1,207 @@
+CREATE PROCEDURE [dbo].[usp_kbcustomers]
+@input NVARCHAR (MAX)
+AS
+BEGIN
+    DECLARE @VTRAN AS VARCHAR (30), @VCreated_By AS INT, @VCustomerId AS INT, @VCustomerName AS VARCHAR (255), @VCustomerKey AS VARCHAR (255), @VCacheName AS VARCHAR (255), @VCachePort AS VARCHAR (255), @VCacheDb AS VARCHAR (255), @VServerName AS VARCHAR (255), @VAuthenticationType AS INT, @VUserName AS VARCHAR (255), @VPassword AS VARCHAR (255), @VConnectionType AS VARCHAR (255), @Vdb_name AS VARCHAR (255), @VID AS INT, @VLicenseid AS INT, @Vopcode AS SMALLINT, @Vcustomerlevel AS SMALLINT, @VActiondate AS DATETIME, @vresult AS NVARCHAR (MAX), @json AS NVARCHAR (MAX);
+    SET @VTRAN = JSON_VALUE(@input, '$.MetaDataInformation.TRANSTYPE');
+    SET @VCreated_By = JSON_VALUE(@input, '$.MetaDataInformation.LoginId');
+    SET @VCustomerName = JSON_VALUE(@input, '$.MetaDataInformation.CustomerName');
+    SET @VCustomerKey = JSON_VALUE(@input, '$.MetaDataInformation.CustomerKey');
+    SET @VCacheName = JSON_VALUE(@input, '$.MetaDataInformation.CacheName');
+    SET @VCachePort = JSON_VALUE(@input, '$.MetaDataInformation.CachePort');
+    SET @VCacheDb = JSON_VALUE(@input, '$.MetaDataInformation.CacheDb');
+    SET @VServerName = JSON_VALUE(@input, '$.MetaDataInformation.ServerName');
+    SET @VAuthenticationType = JSON_VALUE(@input, '$.MetaDataInformation.AuthenticationType');
+    SET @VUserName = JSON_VALUE(@input, '$.MetaDataInformation.UserName');
+    SET @VPassword = JSON_VALUE(@input, '$.MetaDataInformation.Password');
+    SET @VConnectionType = JSON_VALUE(@input, '$.MetaDataInformation.CreatedBy');
+    SET @Vcustomerlevel = JSON_VALUE(@input, '$.MetaDataInformation.HierarchyLevel');
+    SET @VCustomerId = JSON_VALUE(@input, '$.MetaDataInformation.customerId');
+    SET @VActiondate = GetUtcDate();
+    BEGIN
+        DECLARE @temps TABLE (
+            ID     INT            IDENTITY (1, 1),
+            ivalue NVARCHAR (MAX));
+        DECLARE @users TABLE (
+            RecordID INT            IDENTITY (1, 1),
+            ID       INT           ,
+            userid   NVARCHAR (MAX));
+        INSERT INTO @users (userid)
+        SELECT userid
+        FROM   KBUserCustomerMapping AS A
+               INNER JOIN
+               (SELECT customerid
+                FROM   KBUserCustomerMapping
+                WHERE  userid = @VCreated_By) AS B
+               ON A.customerid = B.customerid
+        WHERE  userid != 1;
+        IF (@VTRAN) = 'create'
+            BEGIN					
+                INSERT INTO kbcustomersmst (customername, isactive, [hierarchy_level], [createdby], [modifiedby],createddate)
+                SELECT @VCustomerName,
+                       '1',
+                       @Vcustomerlevel,
+                       @VCreated_By,
+                       @VCreated_By,
+					   @VActiondate;
+                SET @VCustomerId = (SELECT kbcustomersmst.customerid
+                                    FROM   kbcustomersmst
+                                    WHERE  customerid = (SELECT   TOP 1 customerid
+                                                         FROM     kbcustomersmst
+                                                         ORDER BY createddate DESC));
+
+                INSERT INTO KBUserCustomerMapping (UserID, CustomerID, CreatedBy, CreatedDate, ModifiedDate, ModifiedBy, IsActive)
+                SELECT 1,
+                       @VCustomerId,
+                       @VCreated_By,
+                       @VActiondate,
+                       @VActiondate,
+                       @VCreated_By,
+                       1 AS isactive
+                UNION
+                SELECT @VCreated_By,
+                       @VCustomerId,
+                       @VCreated_By,
+                       @VActiondate,
+                       @VActiondate,
+                       @VCreated_By,
+                       1;
+
+                INSERT INTO KBLicenseDetails (LicenceKey, CustomerId, customername, createdby)
+                SELECT @VCustomerKey AS LicenseKey,
+                       @VCustomerId,
+                       @VCustomerName,
+                       @VCreated_By;
+                SET @VLicenseid = (SELECT KBLicenseDetails.licensekeyid
+                                   FROM   KBLicenseDetails
+                                   WHERE  licensekeyid = (SELECT IDENT_CURRENT('KBLicenseDetails')));
+
+                INSERT INTO NMSMetadata (ServerType, DatabaseName, ServerName, ScaleType, Spokename, Time_Start_ID, Time_End_ID, Customer_Start_ID, location_id, authenticationtype, username, "password", CreatedBy, Time_Start, Time_End, SpokeID, IsServiceBrokerEnabled, SBPrefix, OPCode, Bcolumn, CreatedDate, ModifiedBy, ConnectionType, IsActive, CollectionName, CacheServerName, CachePort, CacheDbName)
+                SELECT 'Child',
+                       'datamart' + lower(@VDB_Name),
+                       @VServerName,
+                       'Database',
+                       'Datamart',
+                       NULL,
+                       NULL,
+                       @VCustomerid,
+                       NULL,
+                       @VAuthenticationType,
+                       @VUsername,
+                       @VPassword,
+                       @VCreated_By,
+                       NULL AS From_Date,
+                       NULL AS TED,
+                       @VLicenseid,
+                       NULL,
+                       @Vdb_name,
+                       CASE WHEN @Vopcode = 0 THEN NULL ELSE @Vopcode END,
+                       NULL AS VMDFPath,
+                       @VActiondate,
+                       1,
+                       @VConnectionType,
+                       '1',
+                       'DATAMART',
+                       @VCacheName,
+                       @VCachePort,
+                       @VCacheDb;
+
+                SET @vresult = (SELECT 1 AS "Customer.Result",
+                                       0 AS "Customer.ErrorMessage",
+                                       0 AS "Customer.ErrorCode",
+                                       @VLicenseid AS "Customer.CustomerID"
+                                FOR    JSON PATH, WITHOUT_ARRAY_WRAPPER);
+                SELECT @vresult;
+            END
+        ELSE
+            IF lower(@VTRAN) = 'gettooltip'
+                BEGIN
+                    IF @VCreated_By = 1
+                        BEGIN
+                            SET @vresult = (SELECT customerid AS "CustomerID",
+                                                   customername AS "CustomerName",
+                                                   users.user_name AS "CreatedBy",
+                                                   customers.createddate AS "CreatedDate",
+                                                   musers.user_name AS "ModifiedBy",
+                                                   customers.Modifieddate AS "ModifiedDate",
+                                                   customers.hierarchy_level AS "Customer_Level",
+                                                   CASE WHEN users.user_id = 1 THEN 0 ELSE users.hierarchy_level END AS "CreatedByUser_Level"
+                                            FROM   kbcustomersmst AS customers
+                                                   INNER JOIN
+                                                   kbusermst AS users
+                                                   ON customers.createdby = users.user_id
+                                                   LEFT OUTER JOIN
+                                                   kbusermst AS musers
+                                                   ON customers.modifiedby = musers.user_id
+                                            WHERE  customerid != 1
+                                            FOR    JSON PATH, ROOT ('Customer'));
+                            --PRINT @vresult;
+                            select  @vresult;
+                        END
+                    ELSE
+                        BEGIN
+                            SET @vresult = (SELECT customerid AS "CustomerID",
+                                                   customername AS "CustomerName",
+                                                   users.user_name AS "CreatedBy",
+                                                   customers.createddate AS "CreatedDate",
+                                                   musers.user_name AS "ModifiedBy",
+                                                   customers.Modifieddate AS "ModifiedDate"
+                                            FROM   kbcustomersmst AS customers
+                                                   INNER JOIN
+                                                   kbusermst AS users
+                                                   ON customers.createdby = users.user_id
+                                                   LEFT OUTER JOIN
+                                                   kbusermst AS musers
+                                                   ON customers.modifiedby = musers.user_id
+                                            WHERE  customerid != 1
+                                                   AND EXISTS (SELECT 1
+                                                               FROM   kbusercustomermapping AS B
+                                                               WHERE  customers.customerid = B.customerid
+                                                                      AND b.userid = @vcreated_by)
+                                            FOR    JSON PATH, ROOT ('Customer'));
+                            --PRINT @vresult;
+                            SELECT @vresult;
+                        END
+                END
+            ELSE
+                IF @VTRAN = 'Getdetails'
+                    BEGIN
+                        SET @vresult = (SELECT customers.customerid AS "CustomerID",
+                                               customers.customername AS "CustomerName",
+                                               licencekey AS "CustomerKey",
+                                               ServerName AS "ServerName",
+                                               metadata.CacheServerName AS CacheName,
+                                               metadata.CachePort AS CachePort,
+                                               metadata.CacheDbName AS CacheDb,
+                                               authenticationtype AS "AuthenticationType",
+                                               username AS "UserName",
+                                               metadata.password AS "Password",
+                                               ConnectionType AS "Type",
+                                               users.user_name AS "CreatedBy",
+                                               customers.createddate AS "CreatedDate",
+                                               musers.user_name AS "ModifiedBy",
+                                               customers.Modifieddate AS "ModifiedDate"
+                                        FROM   kbcustomersmst AS customers
+                                               inner JOIN
+                                               kbusermst AS users
+                                               ON customers.createdby = users.user_id
+                                               inner JOIN
+                                               NMSMetadata AS metadata
+                                               ON customers.customerid = metadata.Customer_Start_ID
+                                               inner JOIN
+                                               KBLicenseDetails AS license
+                                               ON customers.customerid = license.customerid
+                                               LEFT OUTER JOIN
+                                               kbusermst AS musers
+                                               ON customers.modifiedby = musers.user_id
+                                        WHERE  customers.customerid != 1
+                                        FOR    JSON PATH, ROOT ('Customer'));
+                        --PRINT @vresult;
+                        SELECT @vresult;
+                    END
+    END
+END
+
+GO
+
+

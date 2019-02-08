@@ -1,0 +1,65 @@
+create   procedure [dbo].[usp_getmetadatainformation] AS
+Begin
+	DECLARE
+	@VResult nvarchar(max),@VSOURCEKPIMAPPING nvarchar(max),@Voutput nvarchar(max),
+	@VSOURCEIDNAMEMAPPING nvarchar(max),@VTEMPLATESOURCEIDMAPPING nvarchar(max)
+
+begin try
+
+SET @VResult =(SELECT ID "ID",SERVERTYPE "SERVERTYPE",DATABASENAME "DATABASENAME", SERVERNAME "SERVERNAME",isnull(SCALETYPE,'') "SCALETYPE",SPOKENAME "SPOKENAME"
+			,TIME_START_ID "TIME_START_ID", TIME_END_ID "TIME_END_ID",CUSTOMER_START_ID "CUSTOMER_START_ID",CUSTOMER_END_ID "CUSTOMER_END_ID",LOCATION_ID "LOCATION_ID"
+			,AUTHENTICATIONTYPE "AUTHENTICATIONTYPE",USERNAME "USERNAME",PASSWORD "PASSWORD",CREATEDBY "CREATEDBY",CREATEDDATE "CREATEDDATE"
+			,MODIFIEDBY "MODIFIEDBY",MODIFIEDDATE "MODIFIEDDATE",BCOLUMN "BCOLUMN", TIME_START "TIME_START",TIME_END "TIME_END",SPOKEID "SPOKEID"
+			,ConnectionType "CONNECTIONTYPE",CollectionName "COLLECTIONNAME",isnull(SpokeID,0) "VID"
+	FROM dbo.NMSMetadata (nolock) where isactive=1 --and IsDefault=1
+	FOR json PATH ,root('SERVERS')) 
+
+set @VSOURCEKPIMAPPING = (select KPI_ID AS KPIID, 
+							KPI_NAME as KPINAME, 
+							k.SOURCE_ID as SOURCEID, 
+							s.SOURCETYPE_NAME AS SOURCENAME 
+							from dbo.KBSourceTypeMst s (nolock)
+							Left outer  join  dbo.KBKpiMst k (nolock) on k.SOURCE_ID = s.SOURCETYPE_ID
+							FOR json PATH ,root('SOURCEKPIMAPPINGS')) 
+
+set @VSOURCEIDNAMEMAPPING = (select SOURCETYPE_ID as SOURCEID, SOURCETYPE_NAME as SOURCENAME from KBSourceTypeMst (nolock)
+								for json PATH, root('SOURCEIDNAMEMAPPINGS')) 	
+
+SET @VTEMPLATESOURCEIDMAPPING = (
+	Select TEMPLATE_ID TEMPLATEID,SPOKEID SOURCEID from dbo.KBTEMPLATESPOKES  where SPOKESELECTED=1
+	FOR json PATH ,root('TEMPLATESOURCEIDMAPPINGS'))
+
+set @Voutput = (SELECT CAST(@VResult  as nvarchar(max))"SERVER",
+					CAST(@vSOURCEKPIMAPPING as nvarchar(max))"SOURCEKPIMAPPING", 
+					CAST(@vSOURCEIDNAMEMAPPING as nvarchar(max))"SOURCEIDNAMEMAPPINGS", 
+					CAST(@vTEMPLATESOURCEIDMAPPING  as nvarchar(max))"TEMPLATESOURCEIDMAPPINGS"
+					for json PATH,ROOT('Details'))
+
+if(@voutput is null or @voutput='')
+Begin
+SET @voutput = null
+END 
+
+SELECT @voutput
+RETURN 
+end try
+BEGIN CATCH
+
+INSERT INTO dbo.NMS_SBQueueTracking
+        ( Messag ,
+          Message_body ,
+          Conversation_Handles ,
+          logtimestamp
+        )
+
+SELECT ERROR_MESSAGE() as msg,N'[Usp_GetMetaDataInformation]',NULL,GETDATE() as "date"
+
+	SET @vResult = ( SELECT ERROR_MESSAGE() as msg FOR json PATH,root('EXCEPTION')) 
+	SELECT @vResult
+RETURN
+END CATCH 
+
+END
+GO
+
+

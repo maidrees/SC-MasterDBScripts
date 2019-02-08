@@ -1,0 +1,404 @@
+CREATE   PROCEDURE [dbo].[USP_KBUsers]
+@input NVARCHAR (MAX)
+AS
+BEGIN
+    SET NOCOUNT ON;
+    DECLARE @USER_ID AS BIGINT, @username AS NVARCHAR (1000), @tran AS NVARCHAR (30), @createdby AS INT, @password AS NVARCHAR (50), @emailid AS NVARCHAR (255), @UserType AS INT, @Role AS NVARCHAR (1000), @UserAlias AS NVARCHAR (255), @Actiondate AS DATETIME, @Roles AS NVARCHAR (MAX), @Customers AS NVARCHAR (MAX), @CustomerId AS INT, @VID AS INT, @userlevel AS SMALLINT, @Token AS NVARCHAR (255), @result AS NVARCHAR (MAX), @json AS NVARCHAR (MAX);
+    SET @Actiondate = GetUtcDate();
+    DROP TABLE IF EXISTS temps;
+    DROP TABLE IF EXISTS TEMPTABLE;
+    DROP TABLE IF EXISTS users;
+    CREATE TABLE #temps (
+        id     INT            IDENTITY (1, 1),
+        ivalue NVARCHAR (MAX)
+    );
+    CREATE TABLE #TEMPTABLE (
+        id     INT    IDENTITY (1, 1),
+        RoleId BIGINT
+    );
+    CREATE TABLE #users (
+        id     INT IDENTITY (1, 1),
+        userid INT
+    );
+    SET @createdby = JSON_VALUE(@input, '$.User.LoginId');
+    SET @TRAN = JSON_VALUE(@input, '$.User.TransType');
+    SET @username = JSON_VALUE(@input, '$.User.UserName');
+    SET @password = JSON_VALUE(@input, '$.User.Password');
+    SET @Role = JSON_VALUE(@input, '$.User.Role');
+    SET @emailid = JSON_VALUE(@input, '$.User.EmailId');
+    SET @UserAlias = JSON_VALUE(@input, '$.User.UserAlias');
+    SET @USER_ID = JSON_VALUE(@input, '$.User.UserId');
+    SET @CustomerId = JSON_VALUE(@input, '$.User.CustomerId');
+    SET @VID = JSON_VALUE(@input, '$.User.VID');
+    SET @userlevel = JSON_VALUE(@input, '$.User.HierarchyLevel');
+    IF @createdby = 1
+        BEGIN
+            INSERT INTO #users (userid)
+            SELECT userid
+            FROM   KBUserCustomerMapping AS A
+                   INNER JOIN
+                   (SELECT customerid
+                    FROM   KBUserCustomerMapping
+                    WHERE  userid = @createdby) AS B
+                   ON A.customerid = B.customerid;
+        END
+    ELSE
+        BEGIN
+            INSERT INTO #users (userid)
+            SELECT userid
+            FROM   KBUserCustomerMapping AS A
+                   INNER JOIN
+                   (SELECT customerid
+                    FROM   KBUserCustomerMapping
+                    WHERE  userid = @createdby) AS B
+                   ON A.customerid = B.customerid
+            WHERE  a.userid != 1;
+        END
+    IF Lower(@tran) = 'checkname'
+        BEGIN
+            IF EXISTS (SELECT 1
+                       FROM   kbusermst
+                       WHERE  lower(user_name) = @username)
+                BEGIN
+                    SET @result = (SELECT 1 AS 'User.code'
+                                   FOR    JSON PATH, WITHOUT_ARRAY_WRAPPER);
+                    SELECT @result;
+                END
+            ELSE
+                BEGIN
+                set @result=    (SELECT -1 AS 'User.code'
+                    FOR    JSON PATH, WITHOUT_ARRAY_WRAPPER);
+					select @result;
+                END
+
+        END
+    ELSE
+        IF Lower(@tran) = 'getlogin'
+            BEGIN
+                SET @result = (SELECT   1 AS "data.Result",null as "data.roles",
+                                        USER_ID AS "data.LoginId",
+                                        USER_NAME AS "data.UserName",
+                                        EMAILID AS "data.EmailId",
+                                        USERALIAS AS "data.UserAlias",
+                                        USERTYPE AS "data.USERTYPE",
+                                        2 AS "data.max_hierarchylevel",
+                                        hierarchy_level AS "data.HierarchyLevel",
+                                        CASE WHEN USER_ID = 1 THEN 1 ELSE (SELECT TOP 1 LICENSEKEYID
+                                                                           FROM   KBUSERCUSTOMERMAPPING AS B
+                                                                                  INNER JOIN
+                                                                                  KBLICENSEDETAILS AS LICENSE
+                                                                                  ON B.CUSTOMERID = LICENSE.CUSTOMERID
+                                                                           WHERE  USERS.USER_ID = B.USERID) END AS "data.VID",
+                                        CreatedBy AS "data.CreatedBy",
+                                        FirstName AS "data.FirstName",
+                                        LastName AS "data.LastName",
+                                        CreatedBy AS "data.Role",
+                                        CreatedDate AS "data.CreatedDate",
+                                        CreatedBy AS "data.ImageUrl",
+                                        CreatedBy AS "data.Age",
+                                        CreatedBy AS "data.UserDescription",
+                                        CreatedBy AS "data.NoOfChildren",
+                                        CreatedBy AS "data.Address",
+                                        CreatedBy AS "data.City",
+                                        CreatedBy AS "data.State",
+                                        CreatedBy AS "data.Country",
+                                        CreatedBy AS "data.Pincode",
+                                        CreatedBy AS "data.Latitude",
+                                        CreatedBy AS "data.Longitude",
+                                        CreatedBy AS "data.Phoneno"
+										
+                                       /* (SELECT   urole.role_id AS roleid,
+                                                  rolmst.role_name AS "name",
+                                                  (SELECT scrmst.screen_id,
+                                                          scrmst.screen_name,
+                                                          rolfeat."create" AS "cancreate",
+                                                          rolfeat."update" AS "canupdate",
+                                                          rolfeat."delete" AS "candelete",
+                                                          rolfeat."read_only" AS "canread"
+                                                   FROM   kbrolefeatures AS rolfeat
+                                                          INNER JOIN
+                                                          kbscreensmst AS scrmst
+                                                          ON rolfeat.screen_id = scrmst.screen_id
+                                                   WHERE  urole.role_id = rolfeat.role_id
+                                                   FOR    JSON PATH,include_null_values) AS Screendetails
+                                         FROM     kbuserrole AS urole
+                                                  INNER JOIN
+                                                  kbrolemst AS rolmst
+                                                  ON urole.role_id = rolmst.role_id
+                                         WHERE    urole.user_id = users.user_id
+                                         GROUP BY urole.role_id, rolmst.role_name, rolmst.Role_id
+                                         FOR      JSON PATH ,include_null_values) AS role*/
+                               FROM     KBUSERMST AS USERS
+                               WHERE    USER_NAME = @username
+                                        AND PASSWORD = @password
+                               ORDER BY USER_ID
+                               FOR      JSON PATH, WITHOUT_ARRAY_WRAPPER,include_null_values);
+                SELECT @result;
+            END
+        ELSE
+            IF Lower(@tran) = 'create'
+                BEGIN
+                    INSERT INTO KBUSERMST (USER_NAME, EMAILID, PASSWORD, USERALIAS, USERTYPE, createdby, MODIFIEDBY, createddate, modifieddate, isactive, hierarchy_level)
+                    SELECT @username AS USER_NAME,
+                           @emailid AS EMAILID,
+                           @password AS "PASSWORD",
+                           @UserAlias AS USERALIAS,
+                           @UserType AS USERTYPE,
+                           @createdby,
+                           @createdby,
+                           @Actiondate,
+                           @Actiondate,
+                           1 AS isactive,
+                           @userlevel
+                    WHERE  NOT EXISTS (SELECT 1
+                                       FROM   kbusermst AS users
+                                       WHERE  users.user_name = @username
+                                              AND isactive = 1);
+                    SET @USER_ID = (SELECT user_id
+                                    FROM   kbusermst
+                                    WHERE  user_name = @username
+                                           AND isactive = 1);
+                    INSERT  INTO KBUserCustomerMapping (UserID, CustomerID, CreatedBy, CreatedDate, ModifiedDate, ModifiedBy, IsActive)
+                    VALUES                            (@USER_ID, @CustomerId, @createdby, @Actiondate, @Actiondate, @createdby, '1');
+                    INSERT INTO kbuserrole (user_id, role_id, isactive, createddate, createdby, modifieddate, modifiedby)
+                    SELECT @USER_ID,
+                           RoleId,
+                           '1',
+                           @Actiondate,
+                           @createdby,
+                           @Actiondate,
+                           @createdby
+                    FROM   #TEMPTABLE AS a
+                    WHERE  NOT EXISTS (SELECT 1
+                                       FROM   kbuserrole AS roles
+                                       WHERE  roles.user_Id = @USER_ID
+                                              AND roles.role_id = a.roleid
+                                              AND isactive = 1);
+                    SET @result = (SELECT @username AS "UserName",
+                                          @password AS "Password",
+                                          @UserAlias AS "UserAlias",
+                                          @emailid AS "EmailId",
+                                          @UserType AS "UserType",
+                                          @Role AS "Role"
+                                   FOR    JSON PATH);
+                    SELECT @result;
+                END
+            ELSE
+                IF (@tran) = 'Metadata'
+                    BEGIN
+					 IF @VID = 1
+                            BEGIN
+                                SET @VID = NULL;
+                            END
+                        SET @result = (select (SELECT top 1 role_id AS "Id",
+                                             role_name AS "Name"
+                                      FROM   kbrolemst AS a
+                                      WHERE  isactive = 1
+                                             AND EXISTS (SELECT 1
+                                                         FROM   #users AS b
+                                                        WHERE  a.createdby = b.userid)order by createddate desc
+                                      FOR    JSON PATH,include_null_values) as vroles,
+									  (SELECT   cust.customerid AS "Id",
+                                                 cust.customername AS "Name"
+                                          FROM   kbcustomersmst AS cust
+                                                 INNER JOIN
+                                                 kblicensedetails AS lic
+                                                 ON cust.customerid = lic.customerid
+                                          WHERE  cust.customerid != 1
+                                                 AND isactive = '1'
+                                                 AND (lic.licensekeyid = isnull(@VID, lic.licensekeyid)
+                                                      OR cust.createdby = @createdby)
+                                          FOR    JSON PATH,include_null_values) as vcustomers
+										  for json path,include_null_values)
+
+                      /*  IF @VID = 1
+                            BEGIN
+                                SET @VID = NULL;
+                            END
+                        SET @Customers = (SELECT  top 1 cust.customerid AS "Id",
+                                                 cust.customername AS "Name"
+                                          FROM   kbcustomersmst AS cust
+                                                 INNER JOIN
+                                                 kblicensedetails AS lic
+                                                 ON cust.customerid = lic.customerid
+                                          WHERE  cust.customerid != 1
+                                                 AND isactive = '1'
+                                                 AND (lic.licensekeyid = isnull(@VID, lic.licensekeyid)
+                                                      OR cust.createdby = @createdby) order by cust.createddate desc
+                                          FOR    JSON PATH);
+                        
+                        SET @result = (SELECT @Roles  as 'vroles',
+                                              @Customers  as 'vcustomers'
+											  for json path);
+                                      -- FOR    JSON path,root('vroles'),root('vcustomers'),include_null_values);*/
+                        SELECT @result;
+                    END
+                ELSE
+                    IF Lower(@tran) = 'viewall'
+                        BEGIN
+                            SET @result = (select 'User'=(SELECT   A.user_id AS "UserId",
+                                                    A.user_name AS "UserName",
+                                                    A.emailid AS "EmailId",
+                                                    A.isactive AS "Active",
+                                                    B.user_name AS "CreatedBy",
+                                                    CASE WHEN A.user_id = 1 THEN 0 ELSE A.hierarchy_level END AS "User_Level",
+                                                    CASE WHEN B.user_id = 1 THEN 0 ELSE B.hierarchy_level END AS "CreatedByUser_Level",
+                                                    A.usertype AS "UserType",
+                                                    B.usertype AS "CreatedBy_UserType"
+                                           FROM     kbusermst AS A
+                                                    INNER JOIN
+                                                    kbusermst AS B
+                                                    ON A.createdby = B.user_id
+                                           ORDER BY A.user_id
+                                           FOR      JSON PATH,INCLUDE_NULL_VALUES) for json path);
+                            SELECT @result;
+                        END
+
+Else If Lower(@tran)='view' 
+begin
+
+set @result=(
+Select user_id "UserId",user_name as "UserName",Password "Password", emailid as "EmailId", usertype as "UserType", users.isactive as "Active" , UserAlias as "UserAlias" 
+, custsmap.customerid as "CustomerId"
+,null as "Role"
+from 
+kbusermst users
+Join kbusercustomermapping custsmap on users.user_id=custsmap.userid
+where user_id=@USER_ID for json path);
+
+select @result;
+ 
+End
+
+                    ELSE
+                        IF Lower(@TRAN) = 'update'
+                            BEGIN
+							
+                                UPDATE kbusermst
+                                SET    password  = @password,
+                                       useralias = @UserAlias,
+                                       usertype  = @UserType,
+                                       emailid   = @emailid
+                                WHERE  user_id = @USER_ID;
+                                INSERT INTO #TEMPTABLE (RoleId)
+                                SELECT *
+                                FROM   fnSplit(@Role, ',');
+                                UPDATE kbuserrole
+                                SET    isactive = 0
+                                WHERE  user_id = @USER_ID
+                                       AND NOT EXISTS (SELECT 1
+                                                       FROM   #TEMPTABLE AS b
+                                                       WHERE  kbuserrole.role_id = b.roleid);
+                                INSERT INTO kbuserrole (user_id, role_id, isactive, createddate, createdby, modifieddate, modifiedby)
+                                SELECT @USER_ID,
+                                       RoleId,
+                                       '1',
+                                       @Actiondate,
+                                       @CreatedBy,
+                                       @Actiondate,
+                                       @CreatedBy
+                                FROM   #TEMPTABLE AS a
+                                WHERE  NOT EXISTS (SELECT 1
+                                                   FROM   kbuserrole AS roles
+                                                   WHERE  roles.user_Id = @USER_ID
+                                                          AND roles.role_id = a.roleid
+                                                          AND isactive = 1);
+                                SET @result = (SELECT user_id AS "UserId",
+                                                      user_name AS "UserName",
+                                                      Password AS "Password",
+                                                      emailid AS "EmailId",
+                                                      usertype AS "UserType",
+                                                      isactive AS "Active",
+                                                      (SELECT   role_id
+                                                       FROM     kbuserrole AS roles
+                                                       WHERE    roles.user_id = users.user_id
+                                                                AND isactive = 1
+                                                       GROUP BY roles.role_id) AS "Role"
+                                               FROM   kbusermst AS users
+                                               WHERE  user_id = @USER_ID
+                                               FOR    JSON PATH, ROOT ('User'));
+                                SELECT @result;
+                            END
+                        ELSE
+                            IF Lower(@TRAN) = 'delete'
+                                BEGIN
+                                    UPDATE kbuserrole
+                                    SET    isactive = 2
+                                    WHERE  user_id = @USER_ID;
+                                    UPDATE kbusermst
+                                    SET    isactive  = 2,
+                                           isdeleted = '1'
+                                    WHERE  user_id = @USER_ID;
+                                    SET @result = (SELECT '1' AS "Result"
+                                                   FOR    JSON PATH, ROOT ('Result'));
+                                    SELECT @result;
+                                END
+                            ELSE
+                                IF Lower(@tran) = 'forgotpassword'
+                                    BEGIN
+                                        SET @Token = JSON_VALUE(@input, '$.User.Token');
+                                        SET @emailid = JSON_VALUE(@input, '$.User.Emailid');
+                                        IF EXISTS (SELECT 1
+                                                   FROM   kbusermst
+                                                   WHERE  emailid = @EmailId)
+                                            BEGIN
+                                                INSERT INTO kbuser_passwordtokens (token, userid, createddate, createdby, modifieddate, modifiedby, isactive)
+                                                SELECT @Token,
+                                                       (SELECT user_id
+                                                        FROM   kbusermst
+                                                        WHERE  emailid = @emailid),
+                                                       @Actiondate,
+                                                       @CreatedBy,
+                                                       @Actiondate,
+                                                       @CreatedBy,
+                                                       '1';
+                                                SELECT @result;
+                                            END
+                                        ELSE
+                                            BEGIN
+                                                SET @result = (SELECT 500 AS "code",
+                                                                      'error' AS "message"
+                                                               FOR    JSON PATH, WITHOUT_ARRAY_WRAPPER);
+                                                SELECT @result;
+                                            END
+                                    END
+                                ELSE
+                                    IF Lower(@tran) = 'resetpassword'
+                                        BEGIN
+                                            SET @Token = JSON_VALUE(@input, '$.User.Token');
+                                            SET @password = JSON_VALUE(@input, '$.User.password');
+                                            IF EXISTS (SELECT 1
+                                                       FROM   kbuser_passwordtokens
+                                                       WHERE  token = @Token
+                                                              AND isactive = '1')
+                                                BEGIN
+                                                    UPDATE kbusermst
+                                                    SET    password     = @password,
+                                                           modifieddate = @Actiondate,
+                                                           Modifiedby   = @createdby
+                                                    WHERE  user_id = (SELECT userid
+                                                                      FROM   kbuser_passwordtokens
+                                                                      WHERE  token = @Token
+                                                                             AND isactive = '1');
+                                                    UPDATE kbuser_passwordtokens
+                                                    SET    isactive = '0'
+                                                    WHERE  token = @Token
+                                                           AND isactive = '1';
+                                                    SET @result = (SELECT 200 AS "code",
+                                                                          'success' AS "message"
+                                                                   FOR    JSON PATH, WITHOUT_ARRAY_WRAPPER);
+                                                    SELECT @result;
+                                                END
+                                            ELSE
+                                                BEGIN
+                                                    SET @result = (SELECT 500 AS "code",
+                                                                          'error' AS "message"
+                                                                   FOR    JSON PATH, WITHOUT_ARRAY_WRAPPER);
+                                                    SELECT @result;
+                                                END
+                                        END
+END
+
+GO
+
+
