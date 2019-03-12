@@ -176,6 +176,73 @@ Vresult:=(
 Return(VResult);	
 
 end;
+elseif Lower(VTran)='updatedatalakestore' then
+begin
+
+vfromdate:=(NOW() - INTERVAL '1 DAY');
+Vsliceendtime:=(vfromdate::date);
+vtodate:= Vsliceendtime :: date ||' '||'23:59:59';
+RAISE NOTICE 'Calling % ', Vsliceendtime;
+RAISE NOTICE 'Calling % ', vtodate;
+
+select ivalue->'INPUT'->> 'path',
+ivalue->'INPUT'->> 'size',
+ivalue->'INPUT'->> 'filename',
+ivalue->'INPUT'->> 'lastmodifieddate',
+ivalue->'INPUT'->> 'sqlcount',
+ivalue->'INPUT'->> 'SOURCEID',
+ivalue->'INPUT'->> 'id'
+
+into 
+VEngineInstanceID,VMasterInstanceID,VInstanceID,Vipaddress,Vlastdata,VSourceid,
+VEngineCount	
+from temps limit 1;
+
+update kbenginewisedatafetchinginformation
+set path=VEngineInstanceID,size=VMasterInstanceID,folder=VInstanceID,datalakemodifieddate =VInstanceID,
+sqlcount=Vlastdata
+where callstatus=VSourceid
+and id =VEngineCount;
+Vresult:=(
+		
+			Select Row_to_json(a) as "OUTPUT"
+			from
+			(
+			Select VSourceid   "SPOKEID",'SUCCESSFULLY UPDATED'  "MESSAGE"
+			)a
+		
+	);
+Return(VResult);
+end;
+
+elseif Lower(VTran)=lower('ADDSOURCEDYNAMICPARAMETERS')
+then
+begin
+VMasterInstanceID:=(select param_value  from kbsourceurldetails where sourceid=vSourceid and lower(param_value)=Vlastdata limit 1);
+Vsource:=(select id from kbsourceurlmst where sourceid=vSourceid and data_fetch_type='CurrentData' limit 1);
+VInstanceID:=(select param_name from kbsourceurldetails where sourceid=vSourceid and urlid=Vsource limit 1);
+
+if (VMasterInstanceID is null or VMasterInstanceID='')
+then 
+begin
+insert into kbsourceurldetails(urlid,param_name,param_value,param_type,sourceid,createdby,param_valuetype,operator,
+                               concatenator,type)
+select Vsource,VInstanceID,Vlastdata,'Dynamic',vSourceid,1619,
+'{"source":"datasource","sourcename":"DSjobadders_jobs","sourcemetric":"jobId"}','/','&','bulk' ;
+end;
+end if;
+Vresult:=(
+		
+			Select Row_to_json(a) as "OUTPUT"
+			from
+			(
+			Select vSourceid   "SPOKEID", case when VMasterInstanceID is null then 'SUCCESSFULLY INSERTED'  
+                else 'ID Exists in Table' end "MESSAGE"
+			)a
+		
+	);
+Return(VResult);
+end;
 
 ElseIf lower(VTran)='pullerror' and vfromdate is null Then
 
@@ -191,8 +258,19 @@ Vresult:=(
 	
 	Select Array_to_json(Array_agg(Row_to_json(a))) as "OUTPUT"
 	from(	 
-   select distinct callstatus,callinput,lastdata,callstatusmessage,aa.createddate from kbenginewisedatafetchinginformation aa    
-	inner join kbenginepagingworktable bb on aa.engineinstanceid=bb.engineinstanceid 	
+   select distinct callstatus,callinput,lastdata,callstatusmessage,aa.createddate 
+        ,(case 
+	when timespan=1 then 'Pull Engine'
+	when timespan=2 then 'Stream processing Engine'
+	when timespan=4 then 'Datamart Engine'
+	when timespan=3 then 'Correlation Engine' 
+	when timespan in (1,2,3,4)  then 'all'
+	end)as "enginetype"
+        from kbenginewisedatafetchinginformation aa    
+	inner join kbenginepagingworktable bb on aa.engineinstanceid=bb.engineinstanceid 
+        inner join kbsourcetypemst c on aa.callstatus=c.sourcetype_id
+        inner join kbsourceurlmst url on aa.callstatus=url.sourceid
+        left join nmsspperformancelogger b  on  aa.callstatus=b.sourceid
 	where callstatus=VSourceid --and callstatusmessage='1'              
 	)a
 		
@@ -211,26 +289,27 @@ select ivalue->'INPUT'->> 'TransType'
 into
 VTRAN,VSourceid from temps limit 1;
 vtodate=vfromdate:: date || ' 23:59:59';
+
 Vresult:=(
 	
 			Select Array_to_json(Array_agg(Row_to_json(a))) as "OUTPUT"
 			from(	 
-   select distinct callstatus,callinput,lastdata,callstatusmessage,a.createddate,
+   select distinct on (b.createddate) callstatus,callinput,lastdata,callstatusmessage,b.createddate,
                  b.sinput,b.errormesssage,b.sourceid,b.status,b.id,
 		(case 
 	when timespan=1 then 'Pull Engine'
 	when timespan=2 then 'Stream processing Engine'
 	when timespan=4 then 'Datamart Engine'
 	when timespan=3 then 'Correlation Engine' 
-	--when timespan in (1,2,3,4)  then 'all'
+	when timespan in (1,2,3,4)  then 'all'
 	end)as "enginetype",
 	b.timespan
 	--b.sourcetype_name as sourcename 
                 from kbenginewisedatafetchinginformation a    
-	inner join kbenginepagingworktable bb on a.engineinstanceid=bb.engineinstanceid 
+--	inner join kbenginepagingworktable bb on a.engineinstanceid=bb.engineinstanceid 
      inner join nmsspperformancelogger b  on  a.callstatus=b.sourceid        
-	where callstatus=VSourceid --and callstatusmessage='1'
-	and (a.createddate>=vfromdate and a.createddate<=vtodate)                 
+	where a.callstatus=VSourceid --and callstatusmessage='1'
+	and (b.createddate>=vfromdate and b.createddate<=vtodate)  order by b.createddate desc               
 	)a
 		
 	);	
@@ -307,7 +386,7 @@ ivalue->'INPUT'->> 'pagesize'
 ,ivalue->'INPUT'->> 'VID'
 into
 VConfigid,VEngineCount,Vsource,Vcallstatus,VID from temps limit 1;
-vfromdate:=(NOW() - INTERVAL '1 DAY');
+vfromdate:=( NOW() - INTERVAL '1 DAY');
 vtodate:= vfromdate :: date ;
 
 if(VConfigid=0 or VConfigid is null) then
@@ -339,33 +418,36 @@ if(VEngineCount is null or VEngineCount=0) then
 			SELECT 
             SOURCETYPE_NAME as "SPOKENAME"
             ,mst.CREATEDBY as "CREATEDBY"
-			,SOURCETYPE_ID as "SOURCEID"
-            ,(select  count(sourceid) as "ERRORCOUNT" from nmsspperformancelogger where sourceid=SOURCETYPE_ID and createddate>=vtodate) 
-			,(select data_retrieval_time as "LASTITERATIONTIME" from kbsourceurlmst where sourceid=SOURCETYPE_ID and data_fetch_type='CurrentData' limit 1)
-            ,(select data_retrieval_uom as "LASTITERATIONTYPE" from kbsourceurlmst where sourceid=SOURCETYPE_ID and data_fetch_type='CurrentData' limit 1)
+			,mst.SOURCETYPE_ID as "SOURCEID"
+			,(select  count(sourceid) as "ERRORCOUNT" from nmsspperformancelogger where sourceid=mst.SOURCETYPE_ID and createddate>=vtodate) 
+			,(select data_retrieval_time as "LASTITERATIONTIME" from kbsourceurlmst where sourceid=mst.SOURCETYPE_ID and data_fetch_type='CurrentData' limit 1)
+            ,(select data_retrieval_uom as "LASTITERATIONTYPE" from kbsourceurlmst where sourceid=mst.SOURCETYPE_ID and data_fetch_type='CurrentData' limit 1)
             ,(select uploadtype as "EXACTTIME" from kbsourceurlmst where sourceid=SOURCETYPE_ID and data_fetch_type='CurrentData' limit 1)
 			,				(
 							
 								( Select Array_to_json(Array_agg(row_to_json(pull))) "pull" From (
-										Select  distinct recordcount ,a.createddate,a.engineinstanceid  
+										Select  distinct coalesce(a.id,0) as "id",recordcount ,a.createddate,a.engineinstanceid,a.size,
+                                    a.folder as filename,a.datalakemodifieddate,a.sqlcount as datamartcount,a.path  
 										from  kbenginewisedatafetchinginformation a inner join KBEnginePagingWorkTable b 
 										on a.engineinstanceid=b.engineinstanceid and b.enginetype='pull'
-										where a.callstatus=mst.sourcetype_id and (a.createddate>=vtodate /*between vtodate and (vtodate||' '||'23:59:59')*/)
+										where a.callstatus=mst.sourcetype_id and (a.createddate>=vtodate)
                                     order by a.createddate desc	) pull
                                 ),
 								(Select Array_to_json(Array_agg(row_to_json(cep))) "cep" From (
-									   Select  distinct recordcount,a.createddate,a.engineinstanceid  
+									   Select  distinct coalesce(a.id,0) as "id",recordcount ,a.createddate,a.engineinstanceid,a.size,
+                                    a.folder as filename,a.datalakemodifieddate,a.sqlcount as datamartcount,a.path  
 										from  kbenginewisedatafetchinginformation a inner join KBEnginePagingWorkTable b 
 										on a.engineinstanceid=b.engineinstanceid and b.enginetype='cep'
-										where a.callstatus=mst.sourcetype_id and (a.createddate>=vtodate /*between vtodate and (vtodate||' '||'23:59:59')*/)
-                                    order by a.createddate desc ) cep
+										where a.callstatus=mst.sourcetype_id and (a.createddate>=vtodate)
+                                    order by a.createddate desc) cep
                                  ), 
 								(Select Array_to_json(Array_agg(row_to_json(publish))) "publish" From (
-                                    Select distinct recordcount,a.createddate,a.engineinstanceid  
+                                    Select  distinct coalesce(a.id,0) as "id",recordcount ,a.createddate,a.engineinstanceid,a.size,
+                                    a.folder as filename,a.datalakemodifieddate,a.sqlcount as datamartcount,a.path  
 									from  kbenginewisedatafetchinginformation a inner join KBEnginePagingWorkTable b 
 									on a.engineinstanceid=b.engineinstanceid and b.enginetype='publish'
-									where a.callstatus=mst.sourcetype_id and (a.createddate>=vtodate /*between vtodate and (vtodate||' '||'23:59:59')*/)
-                                    order by a.createddate desc 	) publish 
+									where a.callstatus=mst.sourcetype_id and (a.createddate>=vtodate)
+                                    order by a.createddate desc	) publish 
                                  )    
 						) engines
 		FROM KBsourcetypemst mst
@@ -404,23 +486,17 @@ Vresult:=(
 Return(VResult);
 
 end;
-/*
-select usp_dbservgetsourcecommonurl('{"INPUT":{"TransType":"geterrors","VID":40,"LoginId":1628,
-                                      "filter":"datamart","pagesize":10,"lastid":0,"sourceid":8587}}')
-                                      
-                                      select * from nmsspperformancelogger  limit 1where timespan='4'
-                                      
-                                    
-*/
+
 elseif Lower(VTran)='geterrors' Then
 begin
 insert into temps(ivalue)
-select input;													 
+select input;
+														 
 select ivalue->'INPUT'->> 'filter'
 ,ivalue->'INPUT'->> 'pagesize'
 ,ivalue->'INPUT'->> 'lastid'
 ,ivalue->'INPUT'->> 'firstid'
-,ivalue->'INPUT'->> 'sourceid'
+,ivalue->'INPUT'->> 'SOURCEID'
 
 into
 VInstanceID,VConfigid,VEngineCount,Vsource,Vcallstatus from temps limit 1;
@@ -453,39 +529,40 @@ return ( Select Array_to_json(Array_agg(row_to_json(outs))) as "SPOKE"
 	when timespan=2 then 'Stream processing Engine'
 	when timespan=4 then 'Datamart Engine'
 	when timespan=3 then 'Correlation Engine' 
-	--when timespan in (1,2,3,4)  then 'all'
+	when timespan in (1,2,3,4)  then 'all'
 	end)as "enginetype",
 	a.timespan,
 	b.sourcetype_name as sourcename
-         ,a.createddate,
+        ,
+	d.connectiontype ,a.createddate,
       (select  count(sourceid) as "errorcount" from nmsspperformancelogger where sourceid=a.sourceid) 
 	from nmsspperformancelogger a
 	inner join kbsourcetypemst b on a.sourceid=b.sourcetype_id	
-	--left join KBUserCustomerMapping c on b.createdby=c.userid	
-	--left join nmsmetadata d on c.customerid=d.customer_start_id 
+	left join KBUserCustomerMapping c on b.createdby=c.userid	
+	left join nmsmetadata d on c.customerid=d.customer_start_id 
 		where 
-		(case when VInstanceID='pull' then a.timespan=1 
-	     when VInstanceID='cep' then a.timespan=2
- 	     when VInstanceID='process' then a.timespan=3 
-    	 when (VInstanceID='datamart' and Vcallstatus is null) then a.timespan=4 
-	  when VInstanceID='all'  then a.timespan in (1,2,3,4)
-      when (Vcallstatus is not null and VInstanceID='datamart')  then (a.sourceid=Vcallstatus and a.timespan=4 )
+		(case when (Vcallstatus  is null and VInstanceID='pull') then a.timespan=1 
+	     when (Vcallstatus is  null and VInstanceID='cep') then a.timespan=2
+ 	     when (Vcallstatus  is null and VInstanceID='process') then a.timespan=3 
+    	 when (Vcallstatus  is null and VInstanceID='datamart') then a.timespan=4 
+	  when (Vcallstatus  is null and VInstanceID='all')  then a.timespan in (1,2,3,4)
+          when (Vcallstatus is not null and VInstanceID='datamart')  then (a.sourceid=Vcallstatus and a.timespan=4 )
       when (Vcallstatus is not null and VInstanceID='pull')  then (a.sourceid=Vcallstatus and a.timespan=1 )
       when (Vcallstatus is not null and VInstanceID='cep')  then (a.sourceid=Vcallstatus and a.timespan=2 )
       when (Vcallstatus is not null and VInstanceID='all')  then (a.sourceid=Vcallstatus and a.timespan in (1,2,3,4 ) )   
-      when (Vcallstatus is not null and VInstanceID='process')  then (a.sourceid=Vcallstatus and a.timespan=3)     
+      when (Vcallstatus is not null and VInstanceID='process')  then (a.sourceid=Vcallstatus and a.timespan=3)   
          end
         )
         and
   ((a.id >  VEngineCount )or
     (a.id  <  Vsource ) )
-	 order by a.id  limit VConfigid
+	 order by a.id desc  limit VConfigid
 	) outs
 	);
 	
  end;
  
--- select usp_dbservgetsourcecommonurl('{"INPUT":{"TransType":"geterrors","VID":40,"LoginId":1628,"filter":"all","pagesize":10,"lastid":0,"sourceid":"9371"}}')
+ 
 elseif Lower(VTran)='inserterrors' Then
 begin
 
@@ -1225,11 +1302,10 @@ Elseif Lower(VTran)='getdynamicparamval' Then
 begin  
 
 insert into DynamicParameters(iKey,iValue,groupname,operator,ptype,format)
-SELECT distinct Param_Name ,Param_Value ,groupname,operator,PARAM_TYPE,format
+select Param_Name ,Param_Value ,groupname,operator,PARAM_TYPE,format from (
+SELECT distinct Param_Name ,Param_Value ,groupname,operator,PARAM_TYPE,format,urldetailsid
 FROM KBSOURCEURLDETAILS 
-where 
-PARAM_TYPE in ('Dynamic' ,'Formula')
-and SOURCEID=VSourceid and urlid=vURLID;
+where PARAM_TYPE in ('Dynamic' ,'Formula','Entity') and SOURCEID=VSourceid and urlid=vURLID and type!='bulk' order by urldetailsid) A;
  
 VResult:= (
 		Select Array_to_json(Array_agg(row_to_json(params))) as "ParameterValue"
@@ -1246,7 +1322,7 @@ VResult:= (
           ) createddate
 		,'id,Key,Value,group,Operator,ptype,lastdata,createddate,format' "Attribute_list"	
 		 from DynamicParameters dyn
-		 order by iKey 
+		 order by id 
 		 )params
 		 --FOR XML RAW('ParameterValue')
  );
@@ -1347,8 +1423,8 @@ VResult:=(
     ,(select count(engineinstanceid) as "ProcessCount" from kbenginewisedatafetchinginformation
       where engineinstanceid=n.engineinstanceid )
 	,(select count(sourceid) as "ErrorCount" from nmsspperformancelogger
-      where case when N.engineinstanceid='79069d37-953b-4d00-a344-bdd896d6e6b2' then 'E25907C2-6C64-4F39-9CDC-BEF4D4ADF52C' else 
-      engineinstanceid=n.engineinstanceid end),			         
+     -- where case when n.engineinstanceid='79069d37-953b-4d00-a344-bdd896d6e6b2' then 'E25907C2-6C64-4F39-9CDC-BEF4D4ADF52C' else 
+      where spname=n.engineinstanceid),-- end),			         
       (case when enginemode='start' then N.createddate else N.modifieddate end) as "EngineTime"
         from    KBEnginePagingWorkTable N LEFT JOIN tempsInstance T ON N.EngineInstanceID=T.EngineInstanceID
          	--inner join kbenginewisedatafetchinginformation kbe on T.EngineInstanceID=kbe.EngineInstanceID
@@ -1830,8 +1906,8 @@ delete from pullengineconfigdetails;
 							Select distinct urldetailsid,PARAM_NAME "Key",PARAM_VALUE "Value" ,PARAM_TYPE "Type" ,FORMULA "Formula",LocationDimId "GroupID",Operator "Operator"
 							,'urldetailsid,Key,Value,Type,Formula,GroupID,Operator'	"Attribute_list"
 						From KBSOURCEURLDETAILS UrlDetails where Sources.SOURCETYPE_ID=UrlDetails.SOURCEID 
-				and urls.id=UrlDetails.urlid and lower(UrlDetails.PARAM_TYPE) in ('static','entity')  order by UrlDetails.urldetailsid
-						
+				and urls.id=UrlDetails.urlid and lower(UrlDetails.PARAM_TYPE)='static'  order by UrlDetails.urldetailsid
+							
 							)param
 						) params
 					)
@@ -1916,7 +1992,7 @@ Begin
 						,URL 			"NAME"
 						,MainSeparator		"MainSeparator"
 						,SubSeparator		"SubSeparator"
-						, '&' 			"CONCATS"
+						,ParameterAppender			"CONCATS"
 						,Sources.SOURCETYPE_ID  "SOURCEID"
 						,Sources.SOURCETYPE_NAME "SOURCENAME"
 						,TIMEOFFSETS.TIMEZONENAME "TIMEZONENAME"
@@ -1966,13 +2042,14 @@ Begin
 								where  Sources.SOURCETYPE_ID=UrlDetails.SOURCEID 
 								and urls.id=UrlDetails.urlid
 								and 
-								lower(UrlDetails.PARAM_TYPE) in ('static','entity')  order by 	UrlDetails.urldetailsid
+								lower(UrlDetails.PARAM_TYPE)='static'  order by 	UrlDetails.urldetailsid
 								--For XML RAW('PARAMETER'),ROOT('PARAMETERS')
 								)param
 							) params
 						)
 						,USERNAME	"USERNAME"
 						,PASSWORD	"PASSWORD"
+                        ,DBAUTHTYPE  "TOKENAUTH"    
 						,
 						(	
 							Select Row_to_json(metdet) as "METRICDETAILS"
@@ -2002,8 +2079,8 @@ select Metric.METRIC_ID "METRIC_ID",Metric.METRICNAME "METRICNAME",Metric.CONSTA
 						,DBIDColumnDataType		"DBIDColumnDataType"
 						,case when coalesce(Sources.masterspokeid,0) > 0 then Sources.masterspokeid when coalesce(Sources.masterspokeid,0)=0 then sources.sourcetype_id end "MASTERSPOKEID",
 						urls.objecttype "OBJECTTYPE"
-						
-						,'PRIMARYKEYCOLUMNS,DATASOURCENAME,Configid,SPOKETYPE,URLID,NAME,MainSeparator,SubSeparator,CONCATS,SOURCEID,SOURCENAME,TIMEZONENAME,UTCOFFSET'
+						,Sources.priority "PRIORITY"
+						,'PRIORITY,PRIMARYKEYCOLUMNS,DATASOURCENAME,Configid,SPOKETYPE,URLID,NAME,MainSeparator,SubSeparator,CONCATS,SOURCEID,SOURCENAME,TIMEZONENAME,UTCOFFSET'
 						||',TIMEZONEID,DATA_FETCH_TYPE,DATABASETYPE,PORTNUMBER,TIMEINTERVAL,UOM,TYPE,WSDLURL,WSDLClassName,WSDLAction,IsRestBased,USERNAME'
 						||',PASSWORD,VID,DBIDColumn,DBIDColumnDataType,RECORDTYPE,TOKENAUTH,MASTERSPOKEID,OBJECTTYPE,EXACTTIMECHECKED' as "Attribute_list"	
 						FROM  
@@ -2089,13 +2166,14 @@ select Metric.METRIC_ID "METRIC_ID",Metric.METRICNAME "METRICNAME",Metric.CONSTA
 								Select distinct urldetailsid,PARAM_NAME "Key",PARAM_VALUE "Value" ,PARAM_TYPE "Type" ,FORMULA "Formula",LocationDimId "GroupID",operator "Operator"
 								,'urldetailsid,Key,Value,Type,Formula,GroupID,Operator'	"Attribute_list"
 From KBSOURCEURLDETAILS UrlDetails where  urls.SOURCEID=UrlDetails.SOURCEID and urls.id=UrlDetails.urlid
-and lower(UrlDetails.PARAM_TYPE) in ('static','entity')  order by 	UrlDetails.urldetailsid
+and lower(UrlDetails.PARAM_TYPE)='static'  order by 	UrlDetails.urldetailsid
 								--For XML RAW('PARAMETER'),ROOT('PARAMETERS')
 								)param
 							) params
 						)
 						,USERNAME	"USERNAME"
 						,PASSWORD	"PASSWORD"
+                        ,DBAUTHTYPE "TOKENAUTH"    
 						,
 						(	
 							Select Row_to_json(metdet) as "METRICDETAILS"
@@ -2137,7 +2215,8 @@ where Metric.SOURCE_ID=urls.entitysourceid and Metric.TEMPLATE_ID=1
                          urls.entitydataformatmainseparator,
                          urls.entitydataformatobject,
                          urls.entitysourcepk
-					,'PRIMARYKEYCOLUMNS,DATASOURCENAME,CONCATS,URLID,MainSeparator,SPOKETYPE,SubSeparator,SOURCEID,SOURCENAME,TIMEZONENAME,UTCOFFSET,TIMEZONEID,DATA_FETCH_TYPE'
+                         ,'' "PRIORITY"
+					,'PRIORITY,PRIMARYKEYCOLUMNS,DATASOURCENAME,CONCATS,URLID,MainSeparator,SPOKETYPE,SubSeparator,SOURCEID,SOURCENAME,TIMEZONENAME,UTCOFFSET,TIMEZONEID,DATA_FETCH_TYPE'
 					||',DATABASETYPE,TIMEINTERVAL,UOM,TYPE,USERNAME,PASSWORD,SERVERNAME,PORTNUMBER,DATABASENAME,DBQUERY,METRICQUERY'
 					||',HASPAGING,PAGINGCOLUMN,NOOFRECORDS,VID,DBIDColumn,DBIDColumnDataType,TOKENAUTH,RECORDTYPE,MASTERSPOKEID,OBJECTTYPE,EXACTTIMECHECKED' as "Attribute_list"	
 					From kbentitymst Sources
@@ -2213,7 +2292,7 @@ Group BY Sources.ENTITY_NAME,DataSourceName,DATA_RETRIEVAL_TIME,DATA_RETRIEVAL_U
 							From KBSOURCEURLDETAILS UrlDetails 
 							where  Sources.SOURCETYPE_ID=UrlDetails.SOURCEID 
 							and urls.id=UrlDetails.urlid
-							and lower(UrlDetails.PARAM_TYPE) in ('static','entity')  order by UrlDetails.urldetailsid
+							and lower(UrlDetails.PARAM_TYPE)='static'  order by UrlDetails.urldetailsid
 							--For XML RAW('PARAMETER'),ROOT('PARAMETERS')
 							)param
 						) params
@@ -2260,7 +2339,8 @@ Group BY Sources.ENTITY_NAME,DataSourceName,DATA_RETRIEVAL_TIME,DATA_RETRIEVAL_U
 					,case when coalesce(Sources.masterspokeid,0) > 0 then Sources.masterspokeid when coalesce(Sources.masterspokeid,0)=0 then sources.sourcetype_id end "MASTERSPOKEID",urls.objecttype "OBJECTTYPE"
 					,urls.concatenation_operator "URLPATH"
 					,urls.concatenation_rule "SHEETNAME"
-,'PRIMARYKEYCOLUMNS,DATASOURCENAME,CONCATS,URLID,MainSeparator,SPOKETYPE,SubSeparator,SOURCEID,SOURCENAME,TIMEZONENAME,UTCOFFSET,TIMEZONEID,DATA_FETCH_TYPE'||',DATABASETYPE,TIMEINTERVAL,UOM,TYPE,USERNAME,PASSWORD,SERVERNAME,PORTNUMBER,DATABASENAME,DBQUERY,METRICQUERY'
+					,Sources.priority "PRIORITY"
+					,'PRIORITY,PRIMARYKEYCOLUMNS,DATASOURCENAME,CONCATS,URLID,MainSeparator,SPOKETYPE,SubSeparator,SOURCEID,SOURCENAME,TIMEZONENAME,UTCOFFSET,TIMEZONEID,DATA_FETCH_TYPE'||',DATABASETYPE,TIMEINTERVAL,UOM,TYPE,USERNAME,PASSWORD,SERVERNAME,PORTNUMBER,DATABASENAME,DBQUERY,METRICQUERY'
 ||',HASPAGING,PAGINGCOLUMN,NOOFRECORDS,VID,DBIDColumn,DBIDColumnDataType,TOKENAUTH,RECORDTYPE,MASTERSPOKEID,OBJECTTYPE,URLPATH,SHEETNAME,EXACTTIMECHECKED' as "Attribute_list"		
 					FROM  
 					kbsourcetypemst Sources
@@ -2344,7 +2424,7 @@ Group BY Sources.ENTITY_NAME,DataSourceName,DATA_RETRIEVAL_TIME,DATA_RETRIEVAL_U
 							From KBSOURCEURLDETAILS UrlDetails 
 							where  Sources.SOURCETYPE_ID=UrlDetails.SOURCEID 
 							and urls.id=UrlDetails.urlid
-							and lower(UrlDetails.PARAM_TYPE) in ('static','entity')  order by UrlDetails.urldetailsid
+							and lower(UrlDetails.PARAM_TYPE)='static'  order by UrlDetails.urldetailsid
 							--For XML RAW('PARAMETER'),ROOT('PARAMETERS')
 							)param
 						) params
@@ -2391,7 +2471,8 @@ Group BY Sources.ENTITY_NAME,DataSourceName,DATA_RETRIEVAL_TIME,DATA_RETRIEVAL_U
 					,MainSeparator		"RECORDTYPE"
 					,case when coalesce(Sources.masterspokeid,0) > 0 then Sources.masterspokeid when coalesce(Sources.masterspokeid,0)=0 then sources.sourcetype_id end "MASTERSPOKEID",
 					urls.objecttype "OBJECTTYPE"
-					,'PRIMARYKEYCOLUMNS,DATASOURCENAME,CONCATS,URLID,MainSeparator,SPOKETYPE,SubSeparator,SOURCEID,SOURCENAME,TIMEZONENAME,UTCOFFSET,TIMEZONEID,DATA_FETCH_TYPE'
+					,Sources.priority "PRIORITY"
+					,'PRIORITY,PRIMARYKEYCOLUMNS,DATASOURCENAME,CONCATS,URLID,MainSeparator,SPOKETYPE,SubSeparator,SOURCEID,SOURCENAME,TIMEZONENAME,UTCOFFSET,TIMEZONEID,DATA_FETCH_TYPE'
 					||',DATABASETYPE,TIMEINTERVAL,UOM,TYPE,USERNAME,PASSWORD,SERVERNAME,PORTNUMBER,DATABASENAME,DBQUERY,METRICQUERY'
 					||',HASPAGING,PAGINGCOLUMN,NOOFRECORDS,VID,DBIDColumn,DBIDColumnDataType,TOKENAUTH,RECORDTYPE,MASTERSPOKEID,OBJECTTYPE,EXACTTIMECHECKED' as "Attribute_list"	
 					FROM  
@@ -2479,7 +2560,7 @@ Group BY Sources.ENTITY_NAME,DataSourceName,DATA_RETRIEVAL_TIME,DATA_RETRIEVAL_U
 							From KBSOURCEURLDETAILS UrlDetails 
 							where  Sources.SOURCETYPE_ID=UrlDetails.SOURCEID 
 							and urls.id=UrlDetails.urlid
-							and lower(UrlDetails.PARAM_TYPE) in ('static','entity')  order by UrlDetails.urldetailsid
+							and lower(UrlDetails.PARAM_TYPE)='static'  order by UrlDetails.urldetailsid
 							--For XML RAW('PARAMETER'),ROOT('PARAMETERS')
 							)param
 						) params
@@ -2524,7 +2605,8 @@ Group BY Sources.ENTITY_NAME,DataSourceName,DATA_RETRIEVAL_TIME,DATA_RETRIEVAL_U
 					,MainSeparator		"RECORDTYPE"
 					,case when coalesce(Sources.masterspokeid,0) > 0 then Sources.masterspokeid when coalesce(Sources.masterspokeid,0)=0 then sources.sourcetype_id end "MASTERSPOKEID",
 					urls.objecttype "OBJECTTYPE"
-					,'PRIMARYKEYCOLUMNS,DATASOURCENAME,CONCATS,URLID,MainSeparator,SPOKETYPE,SubSeparator,SOURCEID,SOURCENAME,TIMEZONENAME,UTCOFFSET,TIMEZONEID,DATA_FETCH_TYPE'
+					,Sources.priority "PRIORITY"
+					,'PRIORITY,PRIMARYKEYCOLUMNS,DATASOURCENAME,CONCATS,URLID,MainSeparator,SPOKETYPE,SubSeparator,SOURCEID,SOURCENAME,TIMEZONENAME,UTCOFFSET,TIMEZONEID,DATA_FETCH_TYPE'
 					||',DATABASETYPE,TIMEINTERVAL,UOM,TYPE,USERNAME,PASSWORD,SERVERNAME,PORTNUMBER,DATABASENAME,DBQUERY,METRICQUERY'
 					||',HASPAGING,PAGINGCOLUMN,NOOFRECORDS,VID,DBIDColumn,DBIDColumnDataType,TOKENAUTH,RECORDTYPE,MASTERSPOKEID,OBJECTTYPE,EXACTTIMECHECKED' as "Attribute_list"	
 					FROM  
@@ -2606,7 +2688,7 @@ Group BY Sources.ENTITY_NAME,DataSourceName,DATA_RETRIEVAL_TIME,DATA_RETRIEVAL_U
 							From KBSOURCEURLDETAILS UrlDetails 
 							where  Sources.SOURCETYPE_ID=UrlDetails.SOURCEID 
 							and urls.id=UrlDetails.urlid
-							and lower(UrlDetails.PARAM_TYPE) in ('static','entity')  order by UrlDetails.urldetailsid
+							and lower(UrlDetails.PARAM_TYPE)='static'  order by UrlDetails.urldetailsid
 							--For XML RAW('PARAMETER'),ROOT('PARAMETERS')
 							)param
 						) params
@@ -2650,8 +2732,10 @@ Group BY Sources.ENTITY_NAME,DataSourceName,DATA_RETRIEVAL_TIME,DATA_RETRIEVAL_U
 					,DBIDColumnDataType			"DBIDColumnDataType"
 					,custom_authenticationtype "TOKENAUTH"
 					,MainSeparator		"RECORDTYPE"
-					,case when coalesce(Sources.masterspokeid,0) > 0 then Sources.masterspokeid when coalesce(Sources.masterspokeid,0)=0 then sources.sourcetype_id end "MASTERSPOKEID",urls.objecttype "OBJECTTYPE"
-					,'PRIMARYKEYCOLUMNS,DATASOURCENAME,CONCATS,URLID,MainSeparator,SPOKETYPE,SubSeparator,SOURCEID,SOURCENAME,TIMEZONENAME,UTCOFFSET,TIMEZONEID,DATA_FETCH_TYPE'
+					,case when coalesce(Sources.masterspokeid,0) > 0 then Sources.masterspokeid when coalesce(Sources.masterspokeid,0)=0 then sources.sourcetype_id end "MASTERSPOKEID"
+					,urls.objecttype "OBJECTTYPE"
+					,Sources.priority "PRIORITY"
+					,'PRIORITY,PRIMARYKEYCOLUMNS,DATASOURCENAME,CONCATS,URLID,MainSeparator,SPOKETYPE,SubSeparator,SOURCEID,SOURCENAME,TIMEZONENAME,UTCOFFSET,TIMEZONEID,DATA_FETCH_TYPE'
 					||',DATABASETYPE,TIMEINTERVAL,UOM,TYPE,USERNAME,PASSWORD,SERVERNAME,PORTNUMBER,DATABASENAME,DBQUERY,METRICQUERY'
 					||',HASPAGING,PAGINGCOLUMN,NOOFRECORDS,VID,DBIDColumn,DBIDColumnDataType,TOKENAUTH,RECORDTYPE,MASTERSPOKEID,OBJECTTYPE,EXACTTIMECHECKED' as "Attribute_list"	
 					FROM  
@@ -2729,7 +2813,7 @@ Group BY Sources.ENTITY_NAME,DataSourceName,DATA_RETRIEVAL_TIME,DATA_RETRIEVAL_U
 							From KBSOURCEURLDETAILS UrlDetails 
 							where  Sources.SOURCETYPE_ID=UrlDetails.SOURCEID 
 							and urls.id=UrlDetails.urlid
-							and lower(UrlDetails.PARAM_TYPE) in ('static','entity')  order by UrlDetails.urldetailsid
+							and lower(UrlDetails.PARAM_TYPE)='static'  order by UrlDetails.urldetailsid
 							--For XML RAW('PARAMETER'),ROOT('PARAMETERS')
 							)param
 						) params
@@ -2749,8 +2833,10 @@ Group BY Sources.ENTITY_NAME,DataSourceName,DATA_RETRIEVAL_TIME,DATA_RETRIEVAL_U
 					) 	"VID"
 					,custom_authenticationtype "TOKENAUTH"
 					,MainSeparator		"RECORDTYPE"
-					,case when coalesce(Sources.masterspokeid,0) > 0 then Sources.masterspokeid when coalesce(Sources.masterspokeid,0)=0 then sources.sourcetype_id end "MASTERSPOKEID",urls.objecttype "OBJECTTYPE"
-					,'PRIMARYKEYCOLUMNS,DATASOURCENAME,CONCATS,URLID,MainSeparator,SPOKETYPE,SubSeparator,SOURCEID,SOURCENAME,TIMEZONENAME,UTCOFFSET,TIMEZONEID,DATA_FETCH_TYPE'
+					,case when coalesce(Sources.masterspokeid,0) > 0 then Sources.masterspokeid when coalesce(Sources.masterspokeid,0)=0 then sources.sourcetype_id end "MASTERSPOKEID"
+					,urls.objecttype "OBJECTTYPE"
+					,Sources.priority "PRIORITY"
+					,'PRIORITY,PRIMARYKEYCOLUMNS,DATASOURCENAME,CONCATS,URLID,MainSeparator,SPOKETYPE,SubSeparator,SOURCEID,SOURCENAME,TIMEZONENAME,UTCOFFSET,TIMEZONEID,DATA_FETCH_TYPE'
 						 ||',DATABASETYPE,TIMEINTERVAL,UOM,TYPE,USERNAME,PASSWORD,SERVERNAME,PORTNUMBER,ORGANISATION,GROUP,VID,TOKENAUTH,RECORDTYPE,MASTERSPOKEID,OBJECTTYPE,EXACTTIMECHECKED' as "Attribute_list"				
 					FROM  
 					kbsourcetypemst Sources
@@ -2786,9 +2872,9 @@ VResult:=	(
 		,(select VResultftp as "URL")
 		,(select VResultsh as "URL")
 		,(select VResultLDAP as "URL")
-        ,(select VResultdbentity as "URL")
+       /* ,(select VResultdbentity as "URL")
 		,(select VResultshentity as "URL")
-        ,(select VResultFTPentity as "URL")    
+        ,(select VResultFTPentity as "URL")    */
 		)a
 		)
 		;
@@ -2816,5 +2902,3 @@ $function$;
 
 ALTER FUNCTION public.usp_dbservgetsourcecommonurl(json)
     OWNER TO postgres;
-
-
