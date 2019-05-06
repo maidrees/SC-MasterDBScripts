@@ -1,0 +1,560 @@
+--
+-- PostgreSQL database dump
+--
+
+-- Dumped from database version 9.3.5
+-- Dumped by pg_dump version 9.3.25
+-- Started on 2019-05-06 15:16:52
+
+SET statement_timeout = 0;
+SET lock_timeout = 0;
+SET client_encoding = 'UTF8';
+SET standard_conforming_strings = on;
+SELECT pg_catalog.set_config('search_path', '', false);
+SET check_function_bodies = false;
+SET client_min_messages = warning;
+
+SET default_tablespace = '';
+
+SET default_with_oids = false;
+
+--
+-- TOC entry 755 (class 1259 OID 765766)
+-- Name: kbtimezoneoffsets; Type: TABLE; Schema: public; Owner: postgres; Tablespace: 
+--
+
+CREATE TABLE public.kbtimezoneoffsets (
+    timezoneid integer NOT NULL,
+    timezonename character varying(128),
+    timezoneabbr character varying(5) NOT NULL,
+    utcoffset numeric(9,2) NOT NULL,
+    isvisible bit(1),
+    createdby bigint,
+    createddate timestamp without time zone DEFAULT timezone('utc'::text, now()),
+    utcdurationinminutes bigint,
+    modifieddate timestamp without time zone DEFAULT timezone('utc'::text, now()),
+    modifiedby bigint,
+    timezonedesc character varying(250)
+);
+
+
+ALTER TABLE public.kbtimezoneoffsets OWNER TO postgres;
+
+--
+-- TOC entry 3839 (class 0 OID 765766)
+-- Dependencies: 755
+-- Data for Name: kbtimezoneoffsets; Type: TABLE DATA; Schema: public; Owner: postgres
+--
+
+INSERT INTO public.kbtimezoneoffsets (timezoneid, timezonename, timezoneabbr, utcoffset, isvisible, createdby, createddate, utcdurationinminutes, modifieddate, modifiedby, timezonedesc) VALUES (1, 'Greenwich Mean Time', 'GMT', 0.00, B'1', NULL, '2015-09-03 08:29:22.6', 0, '2015-09-03 08:29:22.6', NULL, NULL);
+INSERT INTO public.kbtimezoneoffsets (timezoneid, timezonename, timezoneabbr, utcoffset, isvisible, createdby, createddate, utcdurationinminutes, modifieddate, modifiedby, timezonedesc) VALUES (2, 'West Africa Time', 'WAT', -1.00, B'1', NULL, '2015-09-03 08:29:22.6', -60, '2015-09-03 08:29:22.6', NULL, NULL);
+INSERT INTO public.kbtimezoneoffsets (timezoneid, timezonename, timezoneabbr, utcoffset, isvisible, createdby, createddate, utcdurationinminutes, modifieddate, modifiedby, timezonedesc) VALUES (3, 'Azores Time', 'AT', -2.00, B'1', NULL, '2015-09-03 08:29:22.61', -120, '2015-09-03 08:29:22.61', NULL, NULL);
+INSERT INTO public.kbtimezoneoffsets (timezoneid, timezonename, timezoneabbr, utcoffset, isvisible, createdby, createddate, utcdurationinminutes, modifieddate, modifiedby, timezonedesc) VALUES (4, 'Atlantic Standard Time', 'AST', -4.00, B'1', NULL, '2015-09-03 08:29:22.62', -240, '2015-09-03 08:29:22.62', NULL, NULL);
+INSERT INTO public.kbtimezoneoffsets (timezoneid, timezonename, timezoneabbr, utcoffset, isvisible, createdby, createddate, utcdurationinminutes, modifieddate, modifiedby, timezonedesc) VALUES (5, 'Eastern Standard Time', 'EST', -5.00, B'1', NULL, '2015-09-03 08:29:22.627', -300, '2015-09-03 08:29:22.627', NULL, NULL);
+INSERT INTO public.kbtimezoneoffsets (timezoneid, timezonename, timezoneabbr, utcoffset, isvisible, createdby, createddate, utcdurationinminutes, modifieddate, modifiedby, timezonedesc) VALUES (6, 'Central Standard Time', 'CST', -6.00, B'1', NULL, '2015-09-03 08:29:22.633', -360, '2015-09-03 08:29:22.633', NULL, NULL);
+INSERT INTO public.kbtimezoneoffsets (timezoneid, timezonename, timezoneabbr, utcoffset, isvisible, createdby, createddate, utcdurationinminutes, modifieddate, modifiedby, timezonedesc) VALUES (7, 'Mountain Standard Time(USA&CANADA)', 'MST', -7.00, B'1', NULL, '2015-09-03 08:29:22.643', -420, '2015-09-03 08:29:22.643', NULL, NULL);
+INSERT INTO public.kbtimezoneoffsets (timezoneid, timezonename, timezoneabbr, utcoffset, isvisible, createdby, createddate, utcdurationinminutes, modifieddate, modifiedby, timezonedesc) VALUES (8, 'Pacific Standard Time', 'PST', -8.00, B'1', NULL, '2015-09-03 08:29:22.65', -480, '2015-09-03 08:29:22.65', NULL, NULL);
+INSERT INTO public.kbtimezoneoffsets (timezoneid, timezonename, timezoneabbr, utcoffset, isvisible, createdby, createddate, utcdurationinminutes, modifieddate, modifiedby, timezonedesc) VALUES (9, 'Alaska Standard Time', 'AKST', -9.00, B'1', NULL, '2015-09-03 08:29:22.66', -540, '2015-09-03 08:29:22.66', NULL, NULL);
+INSERT INTO public.kbtimezoneoffsets (timezoneid, timezonename, timezoneabbr, utcoffset, isvisible, createdby, createddate, utcdurationinminutes, modifieddate, modifiedby, timezonedesc) VALUES (10, 'Yukon Standard Time (Canada)', 'YST', -9.00, B'1', NULL, '2015-09-03 08:29:22.667', -540, '2015-09-03 08:29:22.667', NULL, NULL);
+INSERT INTO public.kbtimezoneoffsets (timezoneid, timezonename, timezoneabbr, utcoffset, isvisible, createdby, createddate, utcdurationinminutes, modifieddate, modifiedby, timezonedesc) VALUES (11, 'Hawaii Standard Time', 'HST', -10.00, B'1', NULL, '2015-09-03 08:29:22.677', -600, '2015-09-03 08:29:22.677', NULL, NULL);
+INSERT INTO public.kbtimezoneoffsets (timezoneid, timezonename, timezoneabbr, utcoffset, isvisible, createdby, createddate, utcdurationinminutes, modifieddate, modifiedby, timezonedesc) VALUES (12, 'Hawaii-Aleutian Standard Time (USA)', 'HAST', -10.00, B'1', NULL, '2015-09-03 08:29:22.683', -600, '2015-09-03 08:29:22.683', NULL, NULL);
+INSERT INTO public.kbtimezoneoffsets (timezoneid, timezonename, timezoneabbr, utcoffset, isvisible, createdby, createddate, utcdurationinminutes, modifieddate, modifiedby, timezonedesc) VALUES (13, 'Alaska-Hawaii Standard Time (obs)', 'AHST', -10.00, B'1', NULL, '2015-09-03 08:29:22.693', -600, '2015-09-03 08:29:22.693', NULL, NULL);
+INSERT INTO public.kbtimezoneoffsets (timezoneid, timezonename, timezoneabbr, utcoffset, isvisible, createdby, createddate, utcdurationinminutes, modifieddate, modifiedby, timezonedesc) VALUES (14, 'Central Alaska Time', 'CAT', -10.00, B'1', NULL, '2015-09-03 08:29:22.697', -600, '2015-09-03 08:29:22.697', NULL, NULL);
+INSERT INTO public.kbtimezoneoffsets (timezoneid, timezonename, timezoneabbr, utcoffset, isvisible, createdby, createddate, utcdurationinminutes, modifieddate, modifiedby, timezonedesc) VALUES (15, 'Nome Time', 'NT', -11.00, B'1', NULL, '2015-09-03 08:29:22.707', -660, '2015-09-03 08:29:22.707', NULL, NULL);
+INSERT INTO public.kbtimezoneoffsets (timezoneid, timezonename, timezoneabbr, utcoffset, isvisible, createdby, createddate, utcdurationinminutes, modifieddate, modifiedby, timezonedesc) VALUES (16, 'International Date Line West', 'IDLW', -12.00, B'1', NULL, '2015-09-03 08:29:22.713', -720, '2015-09-03 08:29:22.713', NULL, NULL);
+INSERT INTO public.kbtimezoneoffsets (timezoneid, timezonename, timezoneabbr, utcoffset, isvisible, createdby, createddate, utcdurationinminutes, modifieddate, modifiedby, timezonedesc) VALUES (17, 'Central Europe Standard Time', 'CET', 1.00, B'1', NULL, '2015-09-03 08:29:22.723', 60, '2015-09-03 08:29:22.723', NULL, NULL);
+INSERT INTO public.kbtimezoneoffsets (timezoneid, timezonename, timezoneabbr, utcoffset, isvisible, createdby, createddate, utcdurationinminutes, modifieddate, modifiedby, timezonedesc) VALUES (18, 'French Winter Time (France)', 'FWT', 1.00, B'1', NULL, '2015-09-03 08:29:22.73', 60, '2015-09-03 08:29:22.73', NULL, NULL);
+INSERT INTO public.kbtimezoneoffsets (timezoneid, timezonename, timezoneabbr, utcoffset, isvisible, createdby, createddate, utcdurationinminutes, modifieddate, modifiedby, timezonedesc) VALUES (19, 'Middle European Time', 'MET', 1.00, B'1', NULL, '2015-09-03 08:29:22.74', 60, '2015-09-03 08:29:22.74', NULL, NULL);
+INSERT INTO public.kbtimezoneoffsets (timezoneid, timezonename, timezoneabbr, utcoffset, isvisible, createdby, createddate, utcdurationinminutes, modifieddate, modifiedby, timezonedesc) VALUES (20, 'Middle European Winter Time', 'MEWT', 1.00, B'1', NULL, '2015-09-03 08:29:22.76', 60, '2015-09-03 08:29:22.76', NULL, NULL);
+INSERT INTO public.kbtimezoneoffsets (timezoneid, timezonename, timezoneabbr, utcoffset, isvisible, createdby, createddate, utcdurationinminutes, modifieddate, modifiedby, timezonedesc) VALUES (21, 'Swedish Winter Time (Sweden)', 'SWT', 1.00, B'1', NULL, '2015-09-03 08:29:22.763', 60, '2015-09-03 08:29:22.763', NULL, NULL);
+INSERT INTO public.kbtimezoneoffsets (timezoneid, timezonename, timezoneabbr, utcoffset, isvisible, createdby, createddate, utcdurationinminutes, modifieddate, modifiedby, timezonedesc) VALUES (22, 'Eastern European Time, USSR Zone 1', 'EET', 2.00, B'1', NULL, '2015-09-03 08:29:22.773', 120, '2015-09-03 08:29:22.773', NULL, NULL);
+INSERT INTO public.kbtimezoneoffsets (timezoneid, timezonename, timezoneabbr, utcoffset, isvisible, createdby, createddate, utcdurationinminutes, modifieddate, modifiedby, timezonedesc) VALUES (23, 'Baghdad Time, USSR Zone 2', 'BT', 3.00, B'1', NULL, '2015-09-03 08:29:22.78', 180, '2015-09-03 08:29:22.78', NULL, NULL);
+INSERT INTO public.kbtimezoneoffsets (timezoneid, timezonename, timezoneabbr, utcoffset, isvisible, createdby, createddate, utcdurationinminutes, modifieddate, modifiedby, timezonedesc) VALUES (24, 'USSR Zone 3', 'ZP4', 4.00, B'1', NULL, '2015-09-03 08:29:22.79', 240, '2015-09-03 08:29:22.79', NULL, NULL);
+INSERT INTO public.kbtimezoneoffsets (timezoneid, timezonename, timezoneabbr, utcoffset, isvisible, createdby, createddate, utcdurationinminutes, modifieddate, modifiedby, timezonedesc) VALUES (25, 'USSR Zone 4', 'ZP5', 5.00, B'1', NULL, '2015-09-03 08:29:22.797', 300, '2015-09-03 08:29:22.797', NULL, NULL);
+INSERT INTO public.kbtimezoneoffsets (timezoneid, timezonename, timezoneabbr, utcoffset, isvisible, createdby, createddate, utcdurationinminutes, modifieddate, modifiedby, timezonedesc) VALUES (26, 'USSR Zone 5', 'ZP6', 6.00, B'1', NULL, '2015-09-03 08:29:22.863', 360, '2015-09-03 08:29:22.863', NULL, NULL);
+INSERT INTO public.kbtimezoneoffsets (timezoneid, timezonename, timezoneabbr, utcoffset, isvisible, createdby, createddate, utcdurationinminutes, modifieddate, modifiedby, timezonedesc) VALUES (27, 'Christmas Island Time (Australia)', 'CXT', 7.00, B'1', NULL, '2015-09-03 08:29:22.87', 420, '2015-09-03 08:29:22.87', NULL, NULL);
+INSERT INTO public.kbtimezoneoffsets (timezoneid, timezonename, timezoneabbr, utcoffset, isvisible, createdby, createddate, utcdurationinminutes, modifieddate, modifiedby, timezonedesc) VALUES (28, 'China Coast Time, USSR Zone 7', 'CCT', 8.00, B'1', NULL, '2015-09-03 08:29:22.88', 480, '2015-09-03 08:29:22.88', NULL, NULL);
+INSERT INTO public.kbtimezoneoffsets (timezoneid, timezonename, timezoneabbr, utcoffset, isvisible, createdby, createddate, utcdurationinminutes, modifieddate, modifiedby, timezonedesc) VALUES (29, 'Australian Western Standard Time', 'AWST', 8.00, B'1', NULL, '2015-09-03 08:29:22.887', 480, '2015-09-03 08:29:22.887', NULL, NULL);
+INSERT INTO public.kbtimezoneoffsets (timezoneid, timezonename, timezoneabbr, utcoffset, isvisible, createdby, createddate, utcdurationinminutes, modifieddate, modifiedby, timezonedesc) VALUES (30, 'Western Standard Time (Australia)', 'WST', 8.00, B'1', NULL, '2015-09-03 08:29:22.897', 480, '2015-09-03 08:29:22.897', NULL, NULL);
+INSERT INTO public.kbtimezoneoffsets (timezoneid, timezonename, timezoneabbr, utcoffset, isvisible, createdby, createddate, utcdurationinminutes, modifieddate, modifiedby, timezonedesc) VALUES (31, 'Japan Standard Time, USSR Zone 8', 'JST', 9.00, B'1', NULL, '2015-09-03 08:29:22.937', 540, '2015-09-03 08:29:22.937', NULL, NULL);
+INSERT INTO public.kbtimezoneoffsets (timezoneid, timezonename, timezoneabbr, utcoffset, isvisible, createdby, createddate, utcdurationinminutes, modifieddate, modifiedby, timezonedesc) VALUES (32, 'East Australian Standard Time', 'EAST', 10.00, B'1', NULL, '2015-09-03 08:29:22.947', 600, '2015-09-03 08:29:22.947', NULL, NULL);
+INSERT INTO public.kbtimezoneoffsets (timezoneid, timezonename, timezoneabbr, utcoffset, isvisible, createdby, createddate, utcdurationinminutes, modifieddate, modifiedby, timezonedesc) VALUES (33, 'Eastern Standard Time (Australia)', 'EST', 10.00, B'1', NULL, '2015-09-03 08:29:22.963', 600, '2015-09-03 08:29:22.963', NULL, NULL);
+INSERT INTO public.kbtimezoneoffsets (timezoneid, timezonename, timezoneabbr, utcoffset, isvisible, createdby, createddate, utcdurationinminutes, modifieddate, modifiedby, timezonedesc) VALUES (34, 'Guam Standard Time, USSR Zone 9', 'GST', 10.00, B'1', NULL, '2015-09-03 08:29:22.97', -600, '2015-09-03 08:29:22.97', NULL, NULL);
+INSERT INTO public.kbtimezoneoffsets (timezoneid, timezonename, timezoneabbr, utcoffset, isvisible, createdby, createddate, utcdurationinminutes, modifieddate, modifiedby, timezonedesc) VALUES (35, 'International Date Line East', 'IDLE', 12.00, B'1', NULL, '2015-09-03 08:29:22.98', 720, '2015-09-03 08:29:22.98', NULL, NULL);
+INSERT INTO public.kbtimezoneoffsets (timezoneid, timezonename, timezoneabbr, utcoffset, isvisible, createdby, createddate, utcdurationinminutes, modifieddate, modifiedby, timezonedesc) VALUES (36, 'New Zealand Standard Time', 'NZST', 12.00, B'1', NULL, '2015-09-03 08:29:22.987', 720, '2015-09-03 08:29:22.987', NULL, NULL);
+INSERT INTO public.kbtimezoneoffsets (timezoneid, timezonename, timezoneabbr, utcoffset, isvisible, createdby, createddate, utcdurationinminutes, modifieddate, modifiedby, timezonedesc) VALUES (37, 'New Zealand Time', 'NZT', 12.00, B'1', NULL, '2015-09-03 08:29:22.993', 720, '2015-09-03 08:29:22.993', NULL, NULL);
+INSERT INTO public.kbtimezoneoffsets (timezoneid, timezonename, timezoneabbr, utcoffset, isvisible, createdby, createddate, utcdurationinminutes, modifieddate, modifiedby, timezonedesc) VALUES (38, 'India Standard Time', 'IST', 5.30, B'1', NULL, '2015-09-03 08:29:23.003', 330, '2015-09-03 08:29:23.003', NULL, NULL);
+INSERT INTO public.kbtimezoneoffsets (timezoneid, timezonename, timezoneabbr, utcoffset, isvisible, createdby, createddate, utcdurationinminutes, modifieddate, modifiedby, timezonedesc) VALUES (39, 'British Summer Time', 'BST', 1.00, B'1', NULL, '2015-09-03 08:29:23.01', 60, '2015-09-03 08:29:23.01', NULL, NULL);
+
+
+--
+-- TOC entry 3731 (class 2606 OID 766859)
+-- Name: pk_time_zone_offsets; Type: CONSTRAINT; Schema: public; Owner: postgres; Tablespace: 
+--
+
+ALTER TABLE ONLY public.kbtimezoneoffsets
+    ADD CONSTRAINT pk_time_zone_offsets PRIMARY KEY (timezoneid);
+
+
+-- Completed on 2019-05-06 15:17:05
+
+--
+-- PostgreSQL database dump complete
+--
+
+
+
+----------------------------------------------------------------------
+
+
+--
+-- PostgreSQL database dump
+--
+
+-- Dumped from database version 9.3.5
+-- Dumped by pg_dump version 9.3.25
+-- Started on 2019-05-06 15:15:59
+
+SET statement_timeout = 0;
+SET lock_timeout = 0;
+SET client_encoding = 'UTF8';
+SET standard_conforming_strings = on;
+SELECT pg_catalog.set_config('search_path', '', false);
+SET check_function_bodies = false;
+SET client_min_messages = warning;
+
+SET default_tablespace = '';
+
+SET default_with_oids = false;
+
+--
+-- TOC entry 714 (class 1259 OID 765628)
+-- Name: kbspokedataformats; Type: TABLE; Schema: public; Owner: postgres; Tablespace: 
+--
+
+CREATE TABLE public.kbspokedataformats (
+    id integer NOT NULL,
+    formattype character varying(100),
+    createddate timestamp without time zone DEFAULT now(),
+    createdby integer,
+    modifieddate timestamp without time zone DEFAULT now(),
+    modifiedby integer
+);
+
+
+ALTER TABLE public.kbspokedataformats OWNER TO postgres;
+
+--
+-- TOC entry 715 (class 1259 OID 765633)
+-- Name: kbspokedataformats_id_seq; Type: SEQUENCE; Schema: public; Owner: postgres
+--
+
+CREATE SEQUENCE public.kbspokedataformats_id_seq
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1;
+
+
+ALTER TABLE public.kbspokedataformats_id_seq OWNER TO postgres;
+
+--
+-- TOC entry 3845 (class 0 OID 0)
+-- Dependencies: 715
+-- Name: kbspokedataformats_id_seq; Type: SEQUENCE OWNED BY; Schema: public; Owner: postgres
+--
+
+ALTER SEQUENCE public.kbspokedataformats_id_seq OWNED BY public.kbspokedataformats.id;
+
+
+--
+-- TOC entry 3730 (class 2604 OID 766102)
+-- Name: id; Type: DEFAULT; Schema: public; Owner: postgres
+--
+
+ALTER TABLE ONLY public.kbspokedataformats ALTER COLUMN id SET DEFAULT nextval('public.kbspokedataformats_id_seq'::regclass);
+
+
+--
+-- TOC entry 3838 (class 0 OID 765628)
+-- Dependencies: 714
+-- Data for Name: kbspokedataformats; Type: TABLE DATA; Schema: public; Owner: postgres
+--
+
+INSERT INTO public.kbspokedataformats (id, formattype, createddate, createdby, modifieddate, modifiedby) VALUES (1, 'XML', '2013-02-04 12:15:12.503', 1, '2013-02-04 12:15:12.503', 1);
+INSERT INTO public.kbspokedataformats (id, formattype, createddate, createdby, modifieddate, modifiedby) VALUES (2, 'JSON', '2013-02-04 12:15:12.503', 1, '2013-02-04 12:15:12.503', 1);
+INSERT INTO public.kbspokedataformats (id, formattype, createddate, createdby, modifieddate, modifiedby) VALUES (3, 'String', '2013-02-04 12:15:12.503', 1, '2013-02-04 12:15:12.503', 1);
+
+
+--
+-- TOC entry 3846 (class 0 OID 0)
+-- Dependencies: 715
+-- Name: kbspokedataformats_id_seq; Type: SEQUENCE SET; Schema: public; Owner: postgres
+--
+
+SELECT pg_catalog.setval('public.kbspokedataformats_id_seq', 1, false);
+
+
+-- Completed on 2019-05-06 15:16:12
+
+--
+-- PostgreSQL database dump complete
+--
+
+
+
+
+---------------------------------------------------------------------
+
+
+
+--
+-- PostgreSQL database dump
+--
+
+-- Dumped from database version 9.3.5
+-- Dumped by pg_dump version 9.3.25
+-- Started on 2019-05-06 15:13:54
+
+SET statement_timeout = 0;
+SET lock_timeout = 0;
+SET client_encoding = 'UTF8';
+SET standard_conforming_strings = on;
+SELECT pg_catalog.set_config('search_path', '', false);
+SET check_function_bodies = false;
+SET client_min_messages = warning;
+
+SET default_tablespace = '';
+
+SET default_with_oids = false;
+
+--
+-- TOC entry 499 (class 1259 OID 764740)
+-- Name: kbdatasourcemst; Type: TABLE; Schema: public; Owner: postgres; Tablespace: 
+--
+
+CREATE TABLE public.kbdatasourcemst (
+    datasourceid integer NOT NULL,
+    datasourcename character varying(100),
+    isactive bit(1),
+    createddate timestamp without time zone DEFAULT timezone('utc'::text, now()),
+    createdby integer,
+    modifieddate timestamp without time zone DEFAULT timezone('utc'::text, now()),
+    modifiedby integer,
+    torder integer
+);
+
+
+ALTER TABLE public.kbdatasourcemst OWNER TO postgres;
+
+--
+-- TOC entry 500 (class 1259 OID 764745)
+-- Name: kbdatasourcemst_datasourceid_seq; Type: SEQUENCE; Schema: public; Owner: postgres
+--
+
+CREATE SEQUENCE public.kbdatasourcemst_datasourceid_seq
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1;
+
+
+ALTER TABLE public.kbdatasourcemst_datasourceid_seq OWNER TO postgres;
+
+--
+-- TOC entry 3845 (class 0 OID 0)
+-- Dependencies: 500
+-- Name: kbdatasourcemst_datasourceid_seq; Type: SEQUENCE OWNED BY; Schema: public; Owner: postgres
+--
+
+ALTER SEQUENCE public.kbdatasourcemst_datasourceid_seq OWNED BY public.kbdatasourcemst.datasourceid;
+
+
+--
+-- TOC entry 3730 (class 2604 OID 766004)
+-- Name: datasourceid; Type: DEFAULT; Schema: public; Owner: postgres
+--
+
+ALTER TABLE ONLY public.kbdatasourcemst ALTER COLUMN datasourceid SET DEFAULT nextval('public.kbdatasourcemst_datasourceid_seq'::regclass);
+
+
+--
+-- TOC entry 3838 (class 0 OID 764740)
+-- Dependencies: 499
+-- Data for Name: kbdatasourcemst; Type: TABLE DATA; Schema: public; Owner: postgres
+--
+
+INSERT INTO public.kbdatasourcemst (datasourceid, datasourcename, isactive, createddate, createdby, modifieddate, modifiedby, torder) VALUES (1, 'Database', B'1', '2013-05-22 10:27:43.893', 1, '2013-05-22 10:27:43.893', 1, 2);
+INSERT INTO public.kbdatasourcemst (datasourceid, datasourcename, isactive, createddate, createdby, modifieddate, modifiedby, torder) VALUES (2, 'Web Service', B'1', '2013-05-22 10:27:43.893', 1, '2013-05-22 10:27:43.893', 1, 3);
+INSERT INTO public.kbdatasourcemst (datasourceid, datasourcename, isactive, createddate, createdby, modifieddate, modifiedby, torder) VALUES (3, 'LDAP', B'1', '2013-05-22 10:27:43.893', 1, '2013-05-22 10:27:43.893', 1, 4);
+INSERT INTO public.kbdatasourcemst (datasourceid, datasourcename, isactive, createddate, createdby, modifieddate, modifiedby, torder) VALUES (4, 'Excel File', B'1', '2013-05-22 10:27:43.893', 1, '2013-05-22 10:27:43.893', 1, 5);
+INSERT INTO public.kbdatasourcemst (datasourceid, datasourcename, isactive, createddate, createdby, modifieddate, modifiedby, torder) VALUES (5, 'Add Manually', B'1', '2013-05-22 10:27:43.893', 1, '2013-05-22 10:27:43.893', 1, 1);
+INSERT INTO public.kbdatasourcemst (datasourceid, datasourcename, isactive, createddate, createdby, modifieddate, modifiedby, torder) VALUES (6, 'FTP', B'1', '2013-05-22 10:27:43.893', 1, '2013-05-22 10:27:43.893', 1, 6);
+INSERT INTO public.kbdatasourcemst (datasourceid, datasourcename, isactive, createddate, createdby, modifieddate, modifiedby, torder) VALUES (7, 'Shared File', B'1', '2013-05-22 10:27:43.893', 1, '2013-05-22 10:27:43.893', 1, 7);
+INSERT INTO public.kbdatasourcemst (datasourceid, datasourcename, isactive, createddate, createdby, modifieddate, modifiedby, torder) VALUES (9, 'Share Point', B'1', '2017-10-17 16:36:51.80232', 1, '2017-10-17 16:36:51.80232', 1, 9);
+INSERT INTO public.kbdatasourcemst (datasourceid, datasourcename, isactive, createddate, createdby, modifieddate, modifiedby, torder) VALUES (10, 'Microsoft Dynamic CRM', B'1', '2018-09-27 16:36:51.80232', 1, '2018-09-27 16:36:51.80232', 1, 10);
+INSERT INTO public.kbdatasourcemst (datasourceid, datasourcename, isactive, createddate, createdby, modifieddate, modifiedby, torder) VALUES (11, 'Mongo Db', B'1', '2019-04-05 08:32:22.563', 1, '2019-04-05 08:32:22.563', 1, 11);
+INSERT INTO public.kbdatasourcemst (datasourceid, datasourcename, isactive, createddate, createdby, modifieddate, modifiedby, torder) VALUES (12, 'File Copy', B'1', '2019-04-05 08:32:36.235', 1, '2019-04-05 08:32:36.235', 1, 12);
+
+
+--
+-- TOC entry 3846 (class 0 OID 0)
+-- Dependencies: 500
+-- Name: kbdatasourcemst_datasourceid_seq; Type: SEQUENCE SET; Schema: public; Owner: postgres
+--
+
+SELECT pg_catalog.setval('public.kbdatasourcemst_datasourceid_seq', 1, true);
+
+
+-- Completed on 2019-05-06 15:14:07
+
+--
+-- PostgreSQL database dump complete
+--
+
+
+
+
+-------------------------------------------------------
+
+
+
+
+--
+-- PostgreSQL database dump
+--
+
+-- Dumped from database version 9.3.5
+-- Dumped by pg_dump version 9.3.25
+-- Started on 2019-05-06 15:11:46
+
+SET statement_timeout = 0;
+SET lock_timeout = 0;
+SET client_encoding = 'UTF8';
+SET standard_conforming_strings = on;
+SELECT pg_catalog.set_config('search_path', '', false);
+SET check_function_bodies = false;
+SET client_min_messages = warning;
+
+SET default_tablespace = '';
+
+SET default_with_oids = false;
+
+--
+-- TOC entry 633 (class 1259 OID 765273)
+-- Name: kbmasterdatatypes; Type: TABLE; Schema: public; Owner: postgres; Tablespace: 
+--
+
+CREATE TABLE public.kbmasterdatatypes (
+    datatypeid integer NOT NULL,
+    datatypename character varying(64),
+    datatypealias character varying(100),
+    dlength smallint,
+    createdby integer,
+    createddate timestamp without time zone DEFAULT timezone('utc'::text, now()),
+    isactive bit(1)
+);
+
+
+ALTER TABLE public.kbmasterdatatypes OWNER TO postgres;
+
+--
+-- TOC entry 634 (class 1259 OID 765277)
+-- Name: kbmasterdatatypes_datatypeid_seq; Type: SEQUENCE; Schema: public; Owner: postgres
+--
+
+CREATE SEQUENCE public.kbmasterdatatypes_datatypeid_seq
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1;
+
+
+ALTER TABLE public.kbmasterdatatypes_datatypeid_seq OWNER TO postgres;
+
+--
+-- TOC entry 3844 (class 0 OID 0)
+-- Dependencies: 634
+-- Name: kbmasterdatatypes_datatypeid_seq; Type: SEQUENCE OWNED BY; Schema: public; Owner: postgres
+--
+
+ALTER SEQUENCE public.kbmasterdatatypes_datatypeid_seq OWNED BY public.kbmasterdatatypes.datatypeid;
+
+
+--
+-- TOC entry 3728 (class 2604 OID 766067)
+-- Name: datatypeid; Type: DEFAULT; Schema: public; Owner: postgres
+--
+
+ALTER TABLE ONLY public.kbmasterdatatypes ALTER COLUMN datatypeid SET DEFAULT nextval('public.kbmasterdatatypes_datatypeid_seq'::regclass);
+
+
+--
+-- TOC entry 3837 (class 0 OID 765273)
+-- Dependencies: 633
+-- Data for Name: kbmasterdatatypes; Type: TABLE DATA; Schema: public; Owner: postgres
+--
+
+INSERT INTO public.kbmasterdatatypes (datatypeid, datatypename, datatypealias, dlength, createdby, createddate, isactive) VALUES (1, 'Bigint', 'INT', NULL, 1, '2012-09-18 08:43:18.377', B'1');
+INSERT INTO public.kbmasterdatatypes (datatypeid, datatypename, datatypealias, dlength, createdby, createddate, isactive) VALUES (3, 'NVarchar(100)', 'String(1,100)', NULL, 1, '2012-09-18 08:43:28.76', B'1');
+INSERT INTO public.kbmasterdatatypes (datatypeid, datatypename, datatypealias, dlength, createdby, createddate, isactive) VALUES (4, 'BIT', 'BIT', NULL, 1, '2012-09-18 08:43:40.85', B'1');
+INSERT INTO public.kbmasterdatatypes (datatypeid, datatypename, datatypealias, dlength, createdby, createddate, isactive) VALUES (5, 'Decimal(13,5)', 'Decimal', NULL, 1, '2012-09-18 08:47:15.38', B'1');
+INSERT INTO public.kbmasterdatatypes (datatypeid, datatypename, datatypealias, dlength, createdby, createddate, isactive) VALUES (6, 'NVarchar(500)', 'String(1,500)', NULL, NULL, '2012-09-18 09:13:53.42', B'1');
+INSERT INTO public.kbmasterdatatypes (datatypeid, datatypename, datatypealias, dlength, createdby, createddate, isactive) VALUES (7, 'NVarchar(1000)', 'String(1,1000)', NULL, NULL, '2012-09-18 09:13:58.813', B'1');
+INSERT INTO public.kbmasterdatatypes (datatypeid, datatypename, datatypealias, dlength, createdby, createddate, isactive) VALUES (8, 'NVarchar(50)', 'String(1,50)', NULL, NULL, '2012-09-18 09:14:05.513', B'1');
+INSERT INTO public.kbmasterdatatypes (datatypeid, datatypename, datatypealias, dlength, createdby, createddate, isactive) VALUES (9, 'Bigint', 'Year', NULL, NULL, '2013-04-15 05:34:55.37', B'0');
+INSERT INTO public.kbmasterdatatypes (datatypeid, datatypename, datatypealias, dlength, createdby, createddate, isactive) VALUES (10, 'BIGINT', 'Month', NULL, NULL, '2013-04-15 05:35:43.057', B'0');
+INSERT INTO public.kbmasterdatatypes (datatypeid, datatypename, datatypealias, dlength, createdby, createddate, isactive) VALUES (11, 'BIGINT', 'Week', NULL, NULL, '2013-04-15 05:35:53.353', B'0');
+INSERT INTO public.kbmasterdatatypes (datatypeid, datatypename, datatypealias, dlength, createdby, createddate, isactive) VALUES (23, 'Bigint', 'Bigint', NULL, 1, '2013-05-01 09:01:25.027', B'1');
+INSERT INTO public.kbmasterdatatypes (datatypeid, datatypename, datatypealias, dlength, createdby, createddate, isactive) VALUES (12, 'BIGINT', 'Day of week', NULL, NULL, '2013-04-15 05:36:02.9', B'0');
+INSERT INTO public.kbmasterdatatypes (datatypeid, datatypename, datatypealias, dlength, createdby, createddate, isactive) VALUES (14, 'Date', 'Date', NULL, NULL, '2013-04-15 05:37:55.78', B'0');
+INSERT INTO public.kbmasterdatatypes (datatypeid, datatypename, datatypealias, dlength, createdby, createddate, isactive) VALUES (15, 'BIGINT', 'Hour', NULL, NULL, '2013-04-15 05:38:01.787', B'0');
+INSERT INTO public.kbmasterdatatypes (datatypeid, datatypename, datatypealias, dlength, createdby, createddate, isactive) VALUES (16, 'Nvarchar(100)', 'Country', NULL, NULL, '2013-04-15 05:39:03.423', B'0');
+INSERT INTO public.kbmasterdatatypes (datatypeid, datatypename, datatypealias, dlength, createdby, createddate, isactive) VALUES (17, 'char(10)', 'State code', NULL, NULL, '2013-04-15 05:39:07.463', B'0');
+INSERT INTO public.kbmasterdatatypes (datatypeid, datatypename, datatypealias, dlength, createdby, createddate, isactive) VALUES (18, 'Nvarchar(100)', 'State name', NULL, NULL, '2013-04-15 05:51:17.327', B'0');
+INSERT INTO public.kbmasterdatatypes (datatypeid, datatypename, datatypealias, dlength, createdby, createddate, isactive) VALUES (19, 'Nvarchar(100)', 'City', NULL, NULL, '2013-04-15 05:51:27.2', B'0');
+INSERT INTO public.kbmasterdatatypes (datatypeid, datatypename, datatypealias, dlength, createdby, createddate, isactive) VALUES (20, 'Nvarchar(100)', 'Post code', NULL, NULL, '2013-04-15 05:51:34.69', B'0');
+INSERT INTO public.kbmasterdatatypes (datatypeid, datatypename, datatypealias, dlength, createdby, createddate, isactive) VALUES (21, 'nvarchar(100)', 'Latitude', NULL, NULL, '2013-04-15 05:51:44.69', B'0');
+INSERT INTO public.kbmasterdatatypes (datatypeid, datatypename, datatypealias, dlength, createdby, createddate, isactive) VALUES (22, 'nvarchar(100)', 'Longitude', NULL, NULL, '2013-04-15 05:51:54.737', B'0');
+INSERT INTO public.kbmasterdatatypes (datatypeid, datatypename, datatypealias, dlength, createdby, createddate, isactive) VALUES (2, 'Datetime', 'Date time', NULL, 1, '2012-09-18 08:43:22.947', B'1');
+INSERT INTO public.kbmasterdatatypes (datatypeid, datatypename, datatypealias, dlength, createdby, createddate, isactive) VALUES (13, 'Datetime', 'Time', NULL, NULL, '2013-04-15 05:37:44.12', B'0');
+INSERT INTO public.kbmasterdatatypes (datatypeid, datatypename, datatypealias, dlength, createdby, createddate, isactive) VALUES (24, 'Datetime', 'UnixDatetime', NULL, NULL, '2013-04-15 05:51:54.737', B'1');
+INSERT INTO public.kbmasterdatatypes (datatypeid, datatypename, datatypealias, dlength, createdby, createddate, isactive) VALUES (25, 'Nvarchar(1000)', 'json array', NULL, NULL, '2016-02-16 07:27:32.812', B'1');
+INSERT INTO public.kbmasterdatatypes (datatypeid, datatypename, datatypealias, dlength, createdby, createddate, isactive) VALUES (26, 'Nvarchar(1000)', 'json element', NULL, NULL, '2016-02-16 07:27:32.812', B'1');
+INSERT INTO public.kbmasterdatatypes (datatypeid, datatypename, datatypealias, dlength, createdby, createddate, isactive) VALUES (27, 'Nvarchar(100)', 'latitudelongitude', NULL, NULL, '2013-04-15 05:51:54.737', B'1');
+INSERT INTO public.kbmasterdatatypes (datatypeid, datatypename, datatypealias, dlength, createdby, createddate, isactive) VALUES (28, 'Nvarchar(1000)', 'json join', 1, 1, '2016-02-17 14:28:51.139', B'1');
+INSERT INTO public.kbmasterdatatypes (datatypeid, datatypename, datatypealias, dlength, createdby, createddate, isactive) VALUES (29, 'Nvarchar(max)', 'String(max)', 1, 1, '2018-05-03 14:44:07.734796', B'1');
+INSERT INTO public.kbmasterdatatypes (datatypeid, datatypename, datatypealias, dlength, createdby, createddate, isactive) VALUES (30, 'image', 'image', 1, 1, '2018-05-04 07:05:16.391312', B'1');
+INSERT INTO public.kbmasterdatatypes (datatypeid, datatypename, datatypealias, dlength, createdby, createddate, isactive) VALUES (31, 'NVarchar(500)', 'street', NULL, 1, '2018-12-20 11:11:16.391312', B'1');
+
+
+--
+-- TOC entry 3845 (class 0 OID 0)
+-- Dependencies: 634
+-- Name: kbmasterdatatypes_datatypeid_seq; Type: SEQUENCE SET; Schema: public; Owner: postgres
+--
+
+SELECT pg_catalog.setval('public.kbmasterdatatypes_datatypeid_seq', 27, false);
+
+
+-- Completed on 2019-05-06 15:12:00
+
+--
+-- PostgreSQL database dump complete
+--
+
+
+
+-------------------------
+
+
+--
+-- PostgreSQL database dump
+--
+
+-- Dumped from database version 9.3.5
+-- Dumped by pg_dump version 9.3.25
+-- Started on 2019-05-06 15:07:42
+
+SET statement_timeout = 0;
+SET lock_timeout = 0;
+SET client_encoding = 'UTF8';
+SET standard_conforming_strings = on;
+SELECT pg_catalog.set_config('search_path', '', false);
+SET check_function_bodies = false;
+SET client_min_messages = warning;
+
+SET default_tablespace = '';
+
+SET default_with_oids = false;
+
+--
+-- TOC entry 493 (class 1259 OID 764720)
+-- Name: kbdatasourceattributedetails; Type: TABLE; Schema: public; Owner: postgres; Tablespace: 
+--
+
+CREATE TABLE public.kbdatasourceattributedetails (
+    dsattributedetailid integer NOT NULL,
+    dsattributeid integer,
+    dsadetailname character varying(200),
+    isactive bit(1),
+    torder integer,
+    createddate timestamp without time zone DEFAULT timezone('utc'::text, now()),
+    createdby integer,
+    modifieddate timestamp without time zone DEFAULT timezone('utc'::text, now()),
+    modifiedby integer
+);
+
+
+ALTER TABLE public.kbdatasourceattributedetails OWNER TO postgres;
+
+--
+-- TOC entry 494 (class 1259 OID 764725)
+-- Name: kbdatasourceattributedetails_dsattributedetailid_seq; Type: SEQUENCE; Schema: public; Owner: postgres
+--
+
+CREATE SEQUENCE public.kbdatasourceattributedetails_dsattributedetailid_seq
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1;
+
+
+ALTER TABLE public.kbdatasourceattributedetails_dsattributedetailid_seq OWNER TO postgres;
+
+--
+-- TOC entry 3845 (class 0 OID 0)
+-- Dependencies: 494
+-- Name: kbdatasourceattributedetails_dsattributedetailid_seq; Type: SEQUENCE OWNED BY; Schema: public; Owner: postgres
+--
+
+ALTER SEQUENCE public.kbdatasourceattributedetails_dsattributedetailid_seq OWNED BY public.kbdatasourceattributedetails.dsattributedetailid;
+
+
+--
+-- TOC entry 3730 (class 2604 OID 766001)
+-- Name: dsattributedetailid; Type: DEFAULT; Schema: public; Owner: postgres
+--
+
+ALTER TABLE ONLY public.kbdatasourceattributedetails ALTER COLUMN dsattributedetailid SET DEFAULT nextval('public.kbdatasourceattributedetails_dsattributedetailid_seq'::regclass);
+
+
+--
+-- TOC entry 3838 (class 0 OID 764720)
+-- Dependencies: 493
+-- Data for Name: kbdatasourceattributedetails; Type: TABLE DATA; Schema: public; Owner: postgres
+--
+
+INSERT INTO public.kbdatasourceattributedetails (dsattributedetailid, dsattributeid, dsadetailname, isactive, torder, createddate, createdby, modifieddate, modifiedby) VALUES (1, 1, 'ORACLE', B'1', 1, '2013-05-22 10:32:07.397', 1, '2013-05-22 10:32:07.397', 1);
+INSERT INTO public.kbdatasourceattributedetails (dsattributedetailid, dsattributeid, dsadetailname, isactive, torder, createddate, createdby, modifieddate, modifiedby) VALUES (2, 1, 'SQL Server', B'1', 2, '2013-05-22 10:32:07.397', 1, '2013-05-22 10:32:07.397', 1);
+INSERT INTO public.kbdatasourceattributedetails (dsattributedetailid, dsattributeid, dsadetailname, isactive, torder, createddate, createdby, modifieddate, modifiedby) VALUES (3, 1, 'MySQL', B'1', 3, '2013-05-22 10:32:07.397', 1, '2013-05-22 10:32:07.397', 1);
+INSERT INTO public.kbdatasourceattributedetails (dsattributedetailid, dsattributeid, dsadetailname, isactive, torder, createddate, createdby, modifieddate, modifiedby) VALUES (6, 1, 'FOXPRO', B'1', 4, '2013-05-22 10:32:07.397', 1, '2013-05-22 10:32:07.397', 1);
+INSERT INTO public.kbdatasourceattributedetails (dsattributedetailid, dsattributeid, dsadetailname, isactive, torder, createddate, createdby, modifieddate, modifiedby) VALUES (7, 21, 'SOAP', B'1', 1, '2015-09-03 08:29:30.823', NULL, '2015-09-03 08:29:30.823', NULL);
+INSERT INTO public.kbdatasourceattributedetails (dsattributedetailid, dsattributeid, dsadetailname, isactive, torder, createddate, createdby, modifieddate, modifiedby) VALUES (8, 21, 'REST', B'1', 2, '2015-09-03 08:29:30.823', NULL, '2015-09-03 08:29:30.823', NULL);
+INSERT INTO public.kbdatasourceattributedetails (dsattributedetailid, dsattributeid, dsadetailname, isactive, torder, createddate, createdby, modifieddate, modifiedby) VALUES (9, 1, 'Share Point', B'1', NULL, '2017-10-17 16:38:05.019435', 1, '2017-10-17 16:38:05.019435', 1);
+INSERT INTO public.kbdatasourceattributedetails (dsattributedetailid, dsattributeid, dsadetailname, isactive, torder, createddate, createdby, modifieddate, modifiedby) VALUES (11, 1, 'Mongo Db', B'1', 3, '2019-01-23 13:33:11.463', 1, '2019-01-23 13:33:11.463', 1);
+INSERT INTO public.kbdatasourceattributedetails (dsattributedetailid, dsattributeid, dsadetailname, isactive, torder, createddate, createdby, modifieddate, modifiedby) VALUES (5, 1, 'Progress', B'1', 3, '2019-01-23 13:34:55.101', 1, '2019-01-23 13:34:55.101', 1);
+INSERT INTO public.kbdatasourceattributedetails (dsattributedetailid, dsattributeid, dsadetailname, isactive, torder, createddate, createdby, modifieddate, modifiedby) VALUES (4, 1, 'Postgres', B'1', 3, '2019-01-23 13:34:57.93', 1, '2019-01-23 13:34:57.93', 1);
+INSERT INTO public.kbdatasourceattributedetails (dsattributedetailid, dsattributeid, dsadetailname, isactive, torder, createddate, createdby, modifieddate, modifiedby) VALUES (12, 1, 'File Copy', B'1', 3, '2019-04-05 08:33:00.69', 1, '2019-04-05 08:33:00.69', 1);
+INSERT INTO public.kbdatasourceattributedetails (dsattributedetailid, dsattributeid, dsadetailname, isactive, torder, createddate, createdby, modifieddate, modifiedby) VALUES (13, 1, 'RabbitMQ', B'1', 1, '2019-04-05 08:33:00.69', 1, '2019-04-05 08:33:00.69', 1);
+
+
+--
+-- TOC entry 3846 (class 0 OID 0)
+-- Dependencies: 494
+-- Name: kbdatasourceattributedetails_dsattributedetailid_seq; Type: SEQUENCE SET; Schema: public; Owner: postgres
+--
+
+SELECT pg_catalog.setval('public.kbdatasourceattributedetails_dsattributedetailid_seq', 1, false);
+
+
+-- Completed on 2019-05-06 15:07:56
+
+--
+-- PostgreSQL database dump complete
+--
+
