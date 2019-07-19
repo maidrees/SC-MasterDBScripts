@@ -1,14 +1,14 @@
--- FUNCTION: public.usp_dbservgetsourcecommonurljson
+-- FUNCTION: public.usp_dbservgetsourcecommonurl(json)
 
--- DROP FUNCTION public.usp_dbservgetsourcecommonurljson;
+-- DROP FUNCTION public.usp_dbservgetsourcecommonurl(json);
 
 CREATE OR REPLACE FUNCTION public.usp_dbservgetsourcecommonurl(
 	input json)
 RETURNS json
     LANGUAGE 'plpgsql'
-    COST 100.0
+    COST 100
     VOLATILE 
-AS $function$
+AS $BODY$
 
  /*added limit 1 on 29-09-2018 search with added this on */  
 
@@ -58,6 +58,10 @@ DECLARE
     vtime int;
     vfromdate timestamp without time zone;
     vtodate timestamp without time zone;
+    vparam_name varchar(255);
+    vdata varchar(500);
+	vdate timestamp without time zone;
+	vdateto timestamp without time zone;
     
 	
 Begin
@@ -68,14 +72,16 @@ drop table if exists UrlTemp;
 drop table if exists DynamicParameters;
 drop table if exists EnginePaginDetails;
 drop table if exists tempsInstance;
+drop table if exists sourcedynamicparameters;
 
 create temp table temps(id serial,ivalue json);
 create temp table users (id serial,userid int);
 Create temp table UrlTemp(id serial,Configid varchar(255), UrlId bigint,SourceId bigint,DataFetchType varchar(50));
 Create temp table DynamicParameters( id serial,iKey varchar(1000),iValue varchar(1000),groupname varchar(255),operator varchar(100),ptype varchar(100),format varchar(255));
 Create temp table EnginePaginDetails(ID Serial,EngineInstanceID varchar(200),CurrentRangeStart int, CurrentRangeEnd int);
-
 create temp table tempsInstance(EngineInstanceID varchar(200));
+create temp table sourcedynamicparameters(id serial,param_name varchar(255),param_type varchar(255),
+                                          param_valuetype varchar(4000),sourceid int, urlid int);
 
 insert into temps(ivalue)
 select input;
@@ -199,7 +205,7 @@ VEngineCount
 from temps limit 1;
 
 update kbenginewisedatafetchinginformation
-set path=VEngineInstanceID,size=VMasterInstanceID,folder=VInstanceID,datalakemodifieddate =VInstanceID,
+set path=VEngineInstanceID,size=VMasterInstanceID,folder=VInstanceID,datalakemodifieddate =Vipaddress,
 sqlcount=Vlastdata
 where callstatus=VSourceid
 and id =VEngineCount;
@@ -218,18 +224,38 @@ end;
 elseif Lower(VTran)=lower('ADDSOURCEDYNAMICPARAMETERS')
 then
 begin
-VMasterInstanceID:=(select param_value  from kbsourceurldetails where sourceid=vSourceid and lower(param_value)=Vlastdata limit 1);
-Vsource:=(select id from kbsourceurlmst where sourceid=vSourceid and data_fetch_type='CurrentData' limit 1);
-VInstanceID:=(select param_name from kbsourceurldetails where sourceid=vSourceid and urlid=Vsource limit 1);
+VEngineInstanceID:=(select sourcetype_name from kbsourcetypemst where sourcetype_id=vSourceid limit 1);
 
-if (VMasterInstanceID is null or VMasterInstanceID='')
-then 
-begin
-insert into kbsourceurldetails(urlid,param_name,param_value,param_type,sourceid,createdby,param_valuetype,operator,
-                               concatenator,type)
-select Vsource,VInstanceID,Vlastdata,'Dynamic',vSourceid,1619,
-'{"source":"datasource","sourcename":"DSjobadders_jobs","sourcemetric":"jobId"}','/','&','bulk' ;
-end;
+insert into sourcedynamicparameters(param_name,param_type,param_valuetype,sourceid,urlid)
+select distinct param_name,param_type,param_valuetype,sourceid,urlid from kbsourceurldetails 
+where param_valuetype like '%'||VEngineInstanceID||'%'  and sourceid!=vSourceid;
+--return (select count(1) from sourcedynamicparameters);
+VProfileid:=(select count(1) from sourcedynamicparameters);
+/*
+return (Select Array_to_json(Array_agg(Row_to_json(a))) as "OUTPUT"
+	from(select count(1) from sourcedynamicparameters)a);*/
+if (select count(1) from sourcedynamicparameters ) >0 then
+
+    LOOP 
+EXIT WHEN VProfileid = 0 ;
+select sourceid,urlid into Vsource,VCreated_By
+from sourcedynamicparameters where id=VProfileid limit 1; 
+
+    insert into kbsourceurldetails (urlid,param_name,param_value,param_type,sourceid,createdby,param_valuetype,operator,
+                               concatenator,type,createddate)
+	select  urlid,param_name,Vlastdata,param_type,sourceid,createdby,param_valuetype,operator,
+                               concatenator,type,VActiondate  from kbsourceurldetails
+							where 
+                               lower(param_type)='dynamic' and sourceid=Vsource 
+                               and urlid=VCreated_By and
+							 not exists (
+    select 1 from kbsourceurldetails where param_value=Vlastdata and sourceid=Vsource 
+                               and urlid=VCreated_By )             
+							limit 1;
+  VProfileid = VProfileid - 1;                             
+end loop;                               
+        
+
 end if;
 Vresult:=(
 		
@@ -242,7 +268,7 @@ Vresult:=(
 		
 	);
 Return(VResult);
-end;
+end;  
 
 ElseIf lower(VTran)='pullerror' and vfromdate is null Then
 
@@ -386,8 +412,10 @@ ivalue->'INPUT'->> 'pagesize'
 ,ivalue->'INPUT'->> 'VID'
 into
 VConfigid,VEngineCount,Vsource,Vcallstatus,VID from temps limit 1;
-vfromdate:=( NOW() - INTERVAL '1 DAY');
+vfromdate:=(NOW() - INTERVAL '1 DAY');
 vtodate:= vfromdate :: date ;
+vdate:=(now()); 
+vdateto:=vdate :: date;
 
 if(VConfigid=0 or VConfigid is null) then
  begin
@@ -421,24 +449,41 @@ if(VEngineCount is null or VEngineCount=0) then
 			,mst.SOURCETYPE_ID as "SOURCEID"
 			,(select  count(sourceid) as "ERRORCOUNT" from nmsspperformancelogger where sourceid=mst.SOURCETYPE_ID and createddate>=vtodate) 
 			,(select data_retrieval_time as "LASTITERATIONTIME" from kbsourceurlmst where sourceid=mst.SOURCETYPE_ID and data_fetch_type='CurrentData' limit 1)
+			,(select distinct errormesssage as "ERRORMESSAGE" from  nmsspperformancelogger where sourceid=mst.SOURCETYPE_ID and status=3 limit 1)  
             ,(select data_retrieval_uom as "LASTITERATIONTYPE" from kbsourceurlmst where sourceid=mst.SOURCETYPE_ID and data_fetch_type='CurrentData' limit 1)
             ,(select uploadtype as "EXACTTIME" from kbsourceurlmst where sourceid=SOURCETYPE_ID and data_fetch_type='CurrentData' limit 1)
 			,				(
 							
 								( Select Array_to_json(Array_agg(row_to_json(pull))) "pull" From (
-										Select  distinct coalesce(a.id,0) as "id",recordcount ,a.createddate,a.engineinstanceid,a.size,
-                                    a.folder as filename,a.datalakemodifieddate,a.sqlcount as datamartcount,a.path  
+										Select  distinct coalesce(a.id,0) as "id",recordcount ,a.createddate,a.engineinstanceid                                    
 										from  kbenginewisedatafetchinginformation a inner join KBEnginePagingWorkTable b 
 										on a.engineinstanceid=b.engineinstanceid and b.enginetype='pull'
-										where a.callstatus=mst.sourcetype_id and (a.createddate>=vtodate)
+										inner join kbsourceurlmst url on a.callstatus=url.sourceid
+                                    	-- left join kbdldetails dl on a.callstatus=dl.sourceid 
+										where a.callstatus=mst.sourcetype_id and 
+                                    case when lower(data_retrieval_uom)='daily' then (a.createddate>=vtodate)
+                                    when lower(data_retrieval_uom)='weekly' then (a.createddate>=a.createddate - INTERVAL '7 DAY')
+                                    when lower(data_retrieval_uom)='minutes' then (a.createddate>=a.createddate - INTERVAL '30 min')
+                                   else (a.createddate>=vtodate)
+                                    end
                                     order by a.createddate desc	) pull
+                                                                       
                                 ),
+
+				
+
+                                
 								(Select Array_to_json(Array_agg(row_to_json(cep))) "cep" From (
 									   Select  distinct coalesce(a.id,0) as "id",recordcount ,a.createddate,a.engineinstanceid,a.size,
                                     a.folder as filename,a.datalakemodifieddate,a.sqlcount as datamartcount,a.path  
 										from  kbenginewisedatafetchinginformation a inner join KBEnginePagingWorkTable b 
 										on a.engineinstanceid=b.engineinstanceid and b.enginetype='cep'
-										where a.callstatus=mst.sourcetype_id and (a.createddate>=vtodate)
+										inner join kbsourceurlmst url on a.callstatus=url.sourceid
+										where a.callstatus=mst.sourcetype_id and 
+                                    case when lower(data_retrieval_uom)='daily' then (a.createddate>=vtodate)
+                                    when lower(data_retrieval_uom)='weekly' then (a.createddate>=a.createddate - INTERVAL '7 DAY')
+                                    when lower(data_retrieval_uom)='minutes' then (a.createddate>=a.createddate - INTERVAL '30 min')
+                                    else (a.createddate>=vtodate) end
                                     order by a.createddate desc) cep
                                  ), 
 								(Select Array_to_json(Array_agg(row_to_json(publish))) "publish" From (
@@ -446,9 +491,29 @@ if(VEngineCount is null or VEngineCount=0) then
                                     a.folder as filename,a.datalakemodifieddate,a.sqlcount as datamartcount,a.path  
 									from  kbenginewisedatafetchinginformation a inner join KBEnginePagingWorkTable b 
 									on a.engineinstanceid=b.engineinstanceid and b.enginetype='publish'
-									where a.callstatus=mst.sourcetype_id and (a.createddate>=vtodate)
+									inner join kbsourceurlmst url on a.callstatus=url.sourceid
+										where a.callstatus=mst.sourcetype_id and 
+                                    case when lower(data_retrieval_uom)='daily' then (a.createddate>=vtodate)
+                                    when lower(data_retrieval_uom)='weekly' then (a.createddate>=a.createddate - INTERVAL '7 DAY')
+                                    when lower(data_retrieval_uom)='minutes' then (a.createddate>=a.createddate - INTERVAL '30 min')
+                                    else (a.createddate>=vtodate) end
                                     order by a.createddate desc	) publish 
                                  )    
+					,(Select Array_to_json(Array_agg(row_to_json(ADLAInformation))) "ADLAInformation" From (
+									   Select  distinct a.datalakemodifieddate,a.folder as filename,a.sqlcount as datamartcount,a.size,
+									   a.path,a.createddate
+										from  kbdldetails a inner join kbsourceurlmst url on a.sourceid=url.sourceid
+										where a.sourceid=mst.sourcetype_id and a.adlaid is not null and
+                                    case when lower(data_retrieval_uom)='daily' then (a.createddate>=vdateto)
+                                    when lower(data_retrieval_uom)='weekly' then (a.createddate>=a.createddate - INTERVAL '7 DAY')
+                                    when lower(data_retrieval_uom)='minutes' then (a.createddate>=a.createddate - INTERVAL '30 min')
+                                    else (a.createddate>=vdateto) end
+                                    order by a.createddate desc) ADLAInformation
+                                    
+                                    
+                                )
+
+                                 
 						) engines
 		FROM KBsourcetypemst mst
             inner join KBUSERCUSTOMERMAPPING b on mst.createdby=b.userid 
@@ -568,8 +633,8 @@ begin
 
 --select * from nmsspperformancelogger
 --return input;
-	Insert into nmsspperformancelogger(sourceid,spname,sinput,errormesssage,timespan)
-	select Vsource,VEngineInstanceID,Vcallinput,Vcallstatusmessage,vURLID;
+	Insert into nmsspperformancelogger(sourceid,spname,sinput,errormesssage,timespan,status)
+	select Vsource,VEngineInstanceID,Vcallinput,Vcallstatusmessage,vURLID,VSTATUS;
 
 	
 Vresult:=(
@@ -646,7 +711,7 @@ end if ;
 
 	update kbsourceurlmst
     set isactive=null where sourceid=cast(Vcallstatus as int) 
-    and data_fetch_type='HistoricalData';
+    and data_fetch_type='HistoricalData' and portnumber is null;
 	end if;
 
 	if exists(select 1 from kbsourceurlmst where rerun=1) then 
@@ -1305,7 +1370,7 @@ insert into DynamicParameters(iKey,iValue,groupname,operator,ptype,format)
 select Param_Name ,Param_Value ,groupname,operator,PARAM_TYPE,format from (
 SELECT distinct Param_Name ,Param_Value ,groupname,operator,PARAM_TYPE,format,urldetailsid
 FROM KBSOURCEURLDETAILS 
-where PARAM_TYPE in ('Dynamic' ,'Formula','Entity') and SOURCEID=VSourceid and urlid=vURLID and type!='bulk' order by urldetailsid) A;
+where PARAM_TYPE in ('Dynamic' ,'Formula','Entity') and SOURCEID=VSourceid and urlid=vURLID and Param_Value!='bulk' order by urldetailsid) A;
  
 VResult:= (
 		Select Array_to_json(Array_agg(row_to_json(params))) as "ParameterValue"
@@ -1871,6 +1936,7 @@ delete from pullengineconfigdetails;
 					,TIMEOFFSETS.UTCDurationinMinutes as "UTCOFFSET"
 					,TIMEOFFSETS.TIMEZONEID AS 	"TIMEZONEID"
 					,DATA_FETCH_TYPE		"DATA_FETCH_TYPE"
+					,portnumber
 					--,urls.databasetype as "DATABASETYPE"
 					 ,(Case  
  					when urls.databasetype =1 THEN 'oracle'
@@ -2000,7 +2066,7 @@ Begin
 						,TIMEOFFSETS.TIMEZONEID AS "TIMEZONEID"
 						,Coalesce(DATA_FETCH_TYPE,'CurrentData') "DATA_FETCH_TYPE"
 						,'' 			"DATABASETYPE"
-						,'' 			"PORTNUMBER"
+						,portnumber as  			"PORTNUMBER"
 						,custom_authenticationtype "TOKENAUTH"
 						,MainSeparator		"RECORDTYPE"
 						,DATA_RETRIEVAL_TIME as "TIMEINTERVAL"
@@ -2129,7 +2195,7 @@ select Metric.METRIC_ID "METRIC_ID",Metric.METRICNAME "METRICNAME",Metric.CONSTA
 						,1  AS "TIMEZONEID"
 						,Coalesce(DATA_FETCH_TYPE,'CurrentData') "DATA_FETCH_TYPE"
 						,'' 			"DATABASETYPE"
-						,'' 			"PORTNUMBER"
+						,portnumber as 			"PORTNUMBER"
 						,custom_authenticationtype "TOKENAUTH"
 						,''		"RECORDTYPE"
 						,DATA_RETRIEVAL_TIME as "TIMEINTERVAL"
@@ -2262,7 +2328,7 @@ Group BY Sources.ENTITY_NAME,DataSourceName,DATA_RETRIEVAL_TIME,DATA_RETRIEVAL_U
 					,DATA_RETRIEVAL_TIME as "TIMEINTERVAL"
 					,DATA_RETRIEVAL_UOM   as "UOM"
 					,UPLOADTYPE   as "EXACTTIMECHECKED"
-					
+					,portnumber
 					,ksdf.FORMATTYPE as 		"TYPE"
 					,(
 						Select Array_to_json(Array_agg(row_to_json(cust))) "CUSTOMER"
@@ -2352,8 +2418,9 @@ Group BY Sources.ENTITY_NAME,DataSourceName,DATA_RETRIEVAL_TIME,DATA_RETRIEVAL_U
 					--Inner join KBDataSourceAttributes dsatt on dsatt.DataSourceID=DataSources.DataSourceID   --newlyadded
 					---Inner join KBDataSourceAttributeDetails dsdetails on dsatt.DSAttributeID=dsdetails.DSAttributeID 
 					--and   (dsdetails.DSAttributeDetailID=urls.DATABASETYPE or dsdetails.DSAttributeDetailID=urls.DataSourceID) --newlyadded
-					Inner join KBDataSourceAttributeDetails dsdetails on dsdetails.DSAttributeDetailID=urls.databasetype 
-					where Sources.SOURCETYPE=1 and urls.DataSourceID in (1,9) /*(1,6)*/  and Lower(ObjectType)='source' 
+					-- Inner join KBDataSourceAttributeDetails dsdetails on dsdetails.DSAttributeDetailID=urls.databasetype 
+                    left join KBDataSourceAttributeDetails dsdetails on dsdetails.DSAttributeDetailID=urls.databasetype      
+					where Sources.SOURCETYPE=1 and urls.DataSourceID in (1,9,11,12) /*(1,6)*/  and Lower(ObjectType)='source' 
 					and Lower(Urls.DATA_FETCH_TYPE)='currentdata' and Sources.IsActive='1'
 					Group BY 	Sources.SOURCETYPE_ID,DataSourceName,TIMEOFFSETS.TIMEZONENAME ,TIMEOFFSETS.UTCDurationinMinutes 
 					,TIMEOFFSETS.TIMEZONEID,Sources.TIMEZONEID,DATA_RETRIEVAL_TIME,DATA_RETRIEVAL_UOM
@@ -2487,7 +2554,7 @@ Group BY Sources.ENTITY_NAME,DataSourceName,DATA_RETRIEVAL_TIME,DATA_RETRIEVAL_U
 					--		and   dsdetails.DSAttributeDetailID=urls.DATABASETYPE  --newlyadded
 					--Join UrlTemp AA on urls.ID=AA.UrlId
                     Inner join KBDataSourceAttributeDetails dsdetails on dsdetails.DSAttributeDetailID=urls.databasetype 
-					where Sources.SOURCETYPE=1 and  urls.DataSourceID in (1,9) /*(1,6)*/  and Lower(ObjectType)='source' 
+					where Sources.SOURCETYPE=1 and  urls.DataSourceID in (1,9,11,12) /*(1,6)*/  and Lower(ObjectType)='source' 
 					and Urls.DATA_FETCH_TYPE='HistoricalData' and Sources.IsActive='1'
                     and  Sources.sourcetype_id not in (select distinct cast(callstatus as integer) from kbenginewisedatafetchinginformation)   
 					Group BY 	Sources.SOURCETYPE_ID,DataSourceName,TIMEOFFSETS.TIMEZONENAME ,TIMEOFFSETS.UTCDurationinMinutes 
@@ -2898,7 +2965,8 @@ End;
 
 End
 
-$function$;
+$BODY$;
 
 ALTER FUNCTION public.usp_dbservgetsourcecommonurl(json)
     OWNER TO postgres;
+

@@ -1,0 +1,7 @@
+insert into KBDataSourceAttributeDetails(dsattributedetailid,dsattributeid,dsadetailname,isactive,torder,createddate,createdby,modifieddate,modifiedby)
+select 14,1,'Azure DataLake Reader','1',1,now(),1,now(),1
+
+insert into KBDataSourceMst(datasourceid,datasourcename,isactive,createddate,modifieddate,createdby,modifiedby,torder)
+select 14,'Azure DataLake Reader','1',now(),now(),1,1,1
+
+alter table kbsourceurlmst alter column databasename type varchar(455)

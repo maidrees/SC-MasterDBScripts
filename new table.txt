@@ -1,0 +1,22 @@
+-- Table: public.kbplaceholdersmst
+
+-- DROP TABLE public.kbplaceholdersmst;
+
+CREATE TABLE public.kbplaceholdersmst
+(
+    placeholderid integer NOT NULL DEFAULT nextval('kbdatasourcemst_datasourceid_seq'::regclass),
+    phmkey character varying(100) COLLATE pg_catalog."default",
+    phmvalue character varying(100) COLLATE pg_catalog."default",
+    createddate timestamp without time zone DEFAULT timezone('utc'::text, now()),
+    createdby integer,
+    modifieddate timestamp without time zone DEFAULT timezone('utc'::text, now()),
+    modifiedby integer,
+    isactive integer
+)
+WITH (
+    OIDS = FALSE
+)
+TABLESPACE pg_default;
+
+ALTER TABLE public.kbplaceholdersmst
+    OWNER to postgres;
