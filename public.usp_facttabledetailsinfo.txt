@@ -1,14 +1,14 @@
--- FUNCTION: public.usp_facttabledetailsinfojson
+-- FUNCTION: public.usp_facttabledetailsinfo(json)
 
--- DROP FUNCTION public.usp_facttabledetailsinfojson;
+-- DROP FUNCTION public.usp_facttabledetailsinfo(json);
 
 CREATE OR REPLACE FUNCTION public.usp_facttabledetailsinfo(
 	input json DEFAULT NULL::json)
 RETURNS json
     LANGUAGE 'plpgsql'
-    COST 100.0
+    COST 100
     VOLATILE 
-AS $function$
+AS $BODY$
 
 begin
 
@@ -26,7 +26,7 @@ Return	(
 					Select Array_to_json(Array_Agg(row_to_json(cols))) "spoke"
 					from
 					(
-					select spoke_id "spokeid",SOURCETYPE_NAME "spokename",'spokeid,spokename' "Attribute_list",
+					select spoke_id "spokeid",SOURCETYPE_NAME "spokename",coalesce(datalake,0) "datalake",primarykeycolumns,'spokeid,spokename,datalake,primarykeycolumns' "Attribute_list",
 						(
 							Select Array_to_json(Array_Agg(row_to_json(tabs))) as "Table"
 							From
@@ -50,7 +50,7 @@ Return	(
 								) 
 								from kbspoketable Mst
 								where Mst.type in(1,3,4)
-								and MST.spoke_id=tab.Spoke_ID and Mst.isactive='1'
+								and MST.spoke_id=tab.Spoke_ID 
 								--for xml raw('Table')
 							) as tabs
 						)
@@ -58,7 +58,7 @@ Return	(
 					from kbsourcetypeMst sources
 					join kbspoketable tab on tab.spoke_id=sources.SOURCETYPE_ID
 					where tab.type=1 and sources.isactive='1' 
-					group by spoke_id,SOURCETYPE_NAME
+					group by spoke_id,SOURCETYPE_NAME,datalake,primarykeycolumns
 					)cols
 				)spk
 			)spks
@@ -69,9 +69,7 @@ Return	(
 ;
 End
 
-$function$;
+$BODY$;
 
 ALTER FUNCTION public.usp_facttabledetailsinfo(json)
     OWNER TO postgres;
-
-
