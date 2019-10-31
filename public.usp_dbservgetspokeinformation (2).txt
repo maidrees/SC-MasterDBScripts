@@ -1,0 +1,778 @@
+-- FUNCTION: public.usp_dbservgetspokeinformation(json)
+
+-- DROP FUNCTION public.usp_dbservgetspokeinformation(json);
+
+CREATE OR REPLACE FUNCTION public.usp_dbservgetspokeinformation(
+	input json)
+RETURNS json
+    LANGUAGE 'plpgsql'
+    COST 100
+    VOLATILE 
+AS $BODY$
+
+DECLARE 
+	VTRAN		VARCHAR(30);
+	VCreated_By	int;
+	VID		int;
+	VMetricCount	smallint;
+	VSeperator	varchar(50);
+	VSpokeType	varchar(50);
+	VdataFormat	varchar(50);
+	VSourceId	int;
+	VHasMetrics	smallint;
+	Vcnt		smallint;
+	VCnter		smallint;
+	VBuffer1	varchar(100);
+	Vbuffer2 	varchar(50);
+	VBuffer3 	varchar(50);
+	i		smallint;
+	VSrcid		int;
+	VdataFormatID	int;
+	VActiondate	timestamp default(current_timestamp at time zone 'utc')	;
+
+Begin
+
+drop table if exists temps;
+drop table if exists Inputdata;
+drop table if exists InputMetricdata;
+drop table if exists Inputdata;
+drop table if exists SpokeConfig;
+drop table if exists TempSourceType;
+drop table if exists Spoketypes;
+
+create temp table temps(id serial,ivalue json);
+create temp table Inputdata (RecordID serial, MetricName varchar(2000),SourceID bigint, SourceName varchar(100),TimezonId int,SpokeType varchar(50),DATAFORMAT Varchar(100),PRIMARYKEY Varchar(500),SPOKEPLACEHOLDERS Varchar(100),NLegsNMachines varchar(100));
+create temp table InputMetricdata (RecordID serial, MetricName varchar(2000));
+create temp table TempSourceType(id Serial,SourceTypeID int,counts int);
+create temp table SpokeConfig(ID Serial,MetricPos int, PosValue varchar(500));
+create temp table Spoketypes (Id serial,NLEGS INT,Sourcetypeid int);
+
+insert into temps(ivalue)
+select input;
+
+select ivalue->'INPUT'->> 'TRANSTYPE' 
+,ivalue->'INPUT'->> 'SEPERATOR'
+,cast(ivalue->'INPUT'->> 'METRICCOUNT' as int)
+,ivalue->'INPUT'->> 'TYPE'
+,ivalue->'INPUT'->> 'DATAFORMAT'
+,ivalue->'INPUT'->> 'SOURCEID'
+into VTRAN,VSeperator,VMetricCount,VSpokeType,VdataFormat,VSOURCEID
+from temps 
+limit 1;
+
+If VSourceid=0 then
+	VSourceId:=NULL;
+end if;
+
+If VTran ='' or VTran is NULL then
+	VTran:=NULL;
+End if;
+
+IF VSourceid is not null and VSourceid !=0 Then
+Begin
+
+	Insert into Inputdata(MetricName,SourceID,SourceName,TimezonId,SpokeType,NLegsNMachines )
+	select distinct NULL MetricName,Sources.SOURCETYPE_ID,Upper(Sources.Alias) Alias,Sources.timeZoneId ,Sources.SPOKETYPE,Sources.HasNlegsNMachine
+	from KBSourceTypeMst Sources 
+	where sources.sourceType_id=VSourceid;
+
+	insert into Spoketypes(NLEGS,Sourcetypeid)
+	select cast(substring(nlegs,1,1) as bigint), VSourceId Sourceid
+	from 
+	(
+		Select regexp_split_to_table(NLegsNMachines,',') as nlegs
+		from
+		(
+		select NLegsNMachines 
+		from Inputdata A
+		)nleg
+	)a
+	where nlegs!='' and nlegs is not null
+	;	
+
+	Return(
+			Select Row_to_json(output)
+			from
+			(
+			Select Row_to_json(spok) as "SPOKES"
+			From
+			(
+				Select Array_to_json(Array_Agg(Row_to_json((spks)))) as  "SPOKE"
+				From
+				(
+					Select   
+					input.SourceID "ID"
+					,input.SourceName "NAME"
+					,Input.SpokeType "SPOKETYPE"
+					,Coalesce(input.TimezonId,0) "TIMEZONEID"
+					,Coalesce(timezones.TimeZoneName,'') "TIMEZONENAME"
+					,Coalesce(timezones.UTCDurationinMinutes,0) "UTCOFFSET"
+					,coalesce(Input.DATAFORMAT,'')	"DATAFORMAT"
+					,coalesce(input.PRIMARYKEY,'')	"PRIMARYKEY"
+					, Coalesce(input.SPOKEPLACEHOLDERS,'') "SPOKEPLACEHOLDERS"
+					,case when coalesce(Sources.masterspokeid,0) > 0 then Sources.masterspokeid when coalesce(Sources.masterspokeid,0)=0 then sources.sourcetype_id end "MASTERSPOKEID"
+					,(select fn_ConcatenateStrings(cast(input.SourceID as bigint),cast(NULL as bigint),cast(NULL as varchar(50)),cast(3 as smallint)) ) as "TYPE"
+					,Coalesce((select count(distinct 1) from Spoketypes Nlegs	where NLegs=1 and Nlegs.Sourcetypeid=Input.SourceID ),0)  	as "NLEGS"
+					,Coalesce((select count(distinct 1) from Spoketypes Nmachines	where NLegs=2  and Nmachines.Sourcetypeid=Input.SourceID),0)  	as "NMACHINES"
+					,Coalesce((select count(distinct 1) from Spoketypes ISCONTAINER	where NLegs=3  and ISCONTAINER.Sourcetypeid=Input.SourceID),0)  as "ISCONTAINER"
+					,Coalesce((select count(distinct 1) from Spoketypes ISOTHER	where NLegs=4  and ISOTHER.Sourcetypeid=Input.SourceID) ,0)  	as "ISOTHER"
+					,
+					(
+						Select Row_to_json(mets) "METRICS"
+						From
+						(
+							Select Array_to_json(Array_Agg(Row_to_json(met))) as "METRIC"
+							from
+							(
+							Select SpokesConfig.buffer1 "DYNAMICPARAMETER",SpokesConfig.METRICNAME "METRICNAME", min(METRICORDER) "METRICORDER",Metricsmst.METRICDATATYPE "DataType"
+							,string_agg(xpath,';') "Path"
+							,(select alias.metricdatatype from kbspokewisemetricsinformation alias where Metricsmst.metric_id=alias.metricid) "DataTypeAlias"
+							,Coalesce((Select Case when  Count(MRules.Metric_Id)>0 Then 1 End
+									from kbmetricrules MRules 
+									Join KBMetricMst Metrics on Mrules.METRIC_ID=Metrics.METRIC_ID
+									Where SpokesConfig.METRICNAME=Metrics.METRICNAME and SpokesConfig.SOURCETYPEID=Metrics.SOURCE_ID and Metrics.TEMPLATE_ID=1
+							),0) as "HasFuzzyLogic"
+						,'DYNAMICPARAMETER,METRICNAME,METRICORDER,DataType,HasFuzzyLogic,Path,DataTypeAlias' "Attribute_list"
+							,
+							(
+								Select Row_to_json(log) "FuzzyLogic"
+								from
+								(
+									Select coalesce(Array_to_json(Array_Agg(Row_to_json(ruls))),'{}') as "Rule"
+									from
+									(	
+									Select Metrics.METRICNAME "MetricName",MRules.RULEID "RuleID",Rules.RuleTitle "RuleTitle"
+									,MRules.SourceID "DataSourceID",PRIORITY "Priority"
+									,'MetricName,RuleID,RuleTitle,DataSourceID,Priority' "Attribute_list"
+									,
+									(
+										Select Row_to_json(val) "Values"	
+										from
+										(
+											Select row_to_json(inp) "Input"
+											from
+											(
+                                                Select distinct VALUE  "Value",'Value' "Attribute_list" From KBMetricRules MRules1 
+												Where MRules.Metric_id=MRules1.Metric_ID and MRules.SourceID=MRules1.SourceID
+												and MRules1.SourceID=VSOURCEID
+												and MRules.RULEID=MRules1.RULEID    limit 1                   
+											
+											)inp
+										) as Val
+									)
+									from KBMetricRules MRules 
+									Join KBMetricMst Metrics on Mrules.METRIC_ID=Metrics.METRIC_ID
+									Left outer Join CBFuzzyLogicRulesMst Rules on MRules.RuleID=Rules.RuleID
+									where SpokesConfig.METRICNAME=Metrics.METRICNAME and SpokesConfig.SOURCETYPEID=Metrics.SOURCE_ID and Metrics.TEMPLATE_ID=1
+									Group By MRules.Metric_id,Metrics.METRICNAME,MRules.RULEID,MRules.SourceID,PRIORITY,Rules.RuleTitle
+								
+									)Ruls
+								)log
+							)
+							from KBSpokeConfigurations SpokesConfig 
+							Join KBMetricMst Metricsmst on SpokesConfig.METRICNAME=Metricsmst.METRICNAME and SpokesConfig.SOURCETYPEID=Metricsmst.SOURCE_ID
+							where input.SourceID=SpokesConfig.SOURCETYPEID 
+							Group By SpokesConfig.buffer1,SpokesConfig.METRICNAME, SpokesConfig.SOURCETYPEID,Metricsmst.METRICDATATYPE, Metricsmst.metric_id
+							Order by min(METRICORDER) 
+							--FOR XML RAW('METRIC'),ROOT('METRICS')
+							)as met
+						)mets	
+					)
+					,
+					(
+						Select Row_to_json(ide) as "IDENTIFIERS"
+						from
+						(	
+							Select  coalesce(Array_to_json(Array_Agg(Row_to_json(spk))),'{}') as "SPOKE"
+							from
+							(
+							Select SP.SourceTypeID "SourceTypeID",Sp.IdentifierMetrics "MetricPos",sp.IdentifierValues "PosValue" 
+							,'SourceTypeID,MetricPos,PosValue' "Attribute_list"
+							from KBSpokeIndetifierMst SP 
+							where Sp.IdentifierNames='MetricPosition' and SP.SourceTypeID=Input.SourceID
+							--For xml Raw('SPOKE'),Root('IDENTIFIERS')
+							) as spk
+						)ide
+					)
+					,
+					coalesce((
+						Select String_Agg(mets,'')
+						from
+						(
+						select case when smet.MetricDataType='Date time' Then 'Datetime' Else smet.MetricDataType End ||'#SWT01#'
+									|| Metrics.MetricName ||'#SWT01#'||'Seconds' ||'#CWT01#' as Mets
+						from KBSpokewiseMetricsInformation SMet 
+						Join kbmetricmst Metrics on Smet.Metricid=Metrics.METRIC_ID
+						where Input.SourceId=Smet.SourceTypeId and Smet.MetricDataType like '%Date%time' 
+						and Metrics.TEMPLATE_ID=1 
+						)mets
+						--FOR XML PATH('')					
+					),'') "SPOKECHARACTERISTICS"
+					,
+					(
+						Select Row_to_json(custs) as "CUSTOMERS"
+						From
+						(
+							Select coalesce(Array_to_json(Array_Agg(Row_to_json(cust))),'{}') as "CUSTOMER"
+							from
+							(
+							select Customers.ENTITY_NAME  "NAME",'NAME' "Attribute_list"
+							,(
+								Select coalesce(Array_to_json(Array_Agg(Row_to_json(loc))),'{}') as "LOCATION"
+								from
+								(
+									Select distinct  Locations.LOCATION_NAME "NAME" 
+									,'NAME' "Attribute_list"
+									from KBEntityLocations Locations 
+									where Customers.ENTITY_ID=Locations.ENTITY_ID 
+								--For XML RAW('LOCATION')
+								)loc		 
+							)
+							from KBEntityPhone CustPhones 
+							Join KBEntities Customers on CustPhones.ENTITY_ID=Customers.ENTITY_ID
+							where input.SourceID=CustPhones.SOURCETYPEID and CustPhones.CreatedBy=1 
+							Group By Customers.ENTITY_NAME,Customers.ENTITY_ID
+							--for XML raw('CUSTOMER'),ROOT('CUSTOMERS') 
+							) as cust
+						)Custs	
+					)
+					, (
+						Select licensekeyid 
+						from kblicensedetails Maps 
+						where Customerid= (Select CustomerId from kbusercustomermapping where userid= Sources.CreatedBy) limit 1
+					) "VID"
+					,'ID,NAME,SPOKETYPE,TIMEZONEID,TIMEZONENAME,UTCOFFSET,DATAFORMAT,PRIMARYKEY,SPOKEPLACEHOLDERS,TYPE,NLEGS,NMACHINES,ISCONTAINER,ISOTHER'
+					||'SPOKECHARACTERISTICS,VID,MASTERSPOKEID' "Attribute_list"
+					from 
+					Inputdata Input
+					Join KBSourceTypeMst Sources on input.SourceID=Sources.SOURCETYPE_ID
+					Left Join KBTimezoneOffsets Timezones on Input.TimezonId=timezones.TimeZoneId 
+				--For XML RAW('SPOKE'),ROOT('SPOKES')
+				)spks
+			)spok
+			)output		
+		);
+
+End;
+Else
+Begin
+
+	If VdataFormat is not null and (VMetricCount is null or VMetricCount=0) Then
+	Begin
+	
+		insert into TempSourceType(SourceTypeid)
+		select SOURCETYPE_ID 
+		from KBSourceTypeMst 
+		where dataformat=(select ID from KbSpokeDataFormats where lower(FORMATTYPE)=lower(VdataFormat))
+		;
+ 		Vcnt:=(select count(1) from TempSourceType);
+		VBuffer1:=SUBSTRING(VSpokeType,0,strpos(VSpokeType,';'));
+		while(i<=Vcnt) Loop
+		 
+			Update TempSourceType 
+				set counts=(select count(MetricName)from KBSpokeConfigurations where SOURCETYPEID
+							=(select SourceTypeID from TempSourceType where id=Vi )) 
+			where id=i;
+			i:=i+1;
+		end Loop;
+		
+		VSrcid=(select SourceTypeID from TempSourceType where counts=VMetricCount limit 1);
+	 
+		VdataFormatID:=(Select ID from KbSpokeDataFormats where lower(FORMATTYPE)=lower(VdataFormat));
+		If VSeperator ='' Then
+			VSeperator:=NULL;
+		End if;	
+		Begin
+		
+		Insert into Inputdata(MetricName,SourceID,SourceName,TimezonId,SpokeType,NlegsNMachines )
+		select distinct NULL MetricName,Sources.SOURCETYPE_ID,Upper(Sources.Alias) Alias,Sources.timeZoneId ,Sources.SPOKETYPE,Sources.HasNlegsNMachine
+		from KBSourceTypeMst Sources 
+		Join 
+			(
+				Select SOURCETYPEID,NLEG,Coalesce(Buffer1,'') Buffer1
+				,Count(METRICNAME) MetricCount 
+				from  KBSpokeConfigurations
+				where IsActive='1' 
+				Group By SOURCETYPEID,NLEG,Coalesce(Buffer1,''),Coalesce(Buffer2,''),Coalesce(Buffer3,'')
+			) SpokeConfigs 
+				on Sources.SOURCETYPE_ID=SpokeConfigs.SOURCETYPEID
+		where  DataFormat=VdataFormatID and IsActive='1'
+			and Sources.SourceType=0 ;
+			
+		End; 
+		
+		Insert into SpokeConfig(MetricPos,PosValue)
+		Select 
+		cast(metvals->> 'POS' as int)
+		,metvals->> 'VALUE'
+		from
+		(
+			select case when isarray='1' then json_array_elements(mets) else mets end as metvals
+			from
+			(
+				Select ivalue->'INPUT'->'Metrics'->'Metric' as mets
+				,case when left(cast(ivalue->'INPUT'->'Metrics'->'Metric' as text),1)='[' then '1' else '0' end isarray
+				from 
+				( 
+					select *
+					from temps 	
+					limit 1
+				) aa
+			)a
+		)metv	
+		;
+		
+		VCnt:=(Select COUNT(SourceID) from Inputdata);
+		While VCnter<=VCnt Loop
+		
+		VSourceId=(Select SourceID from Inputdata where RecordID=VCnter);
+		insert into Spoketypes(NLEGS,Sourcetypeid)
+		select cast(substring(nlegs,1,1) as bigint), VSourceId Sourceid
+		from 
+		(
+		Select regexp_split_to_table(NLegsNMachines,',') as nlegs
+		from
+		(
+		select NLegsNMachines 
+		from Inputdata A
+		)nleg
+		)a
+		where nlegs!='' and nlegs is not null
+		;	
+
+		VCnter:= VCnter+1;
+		End Loop;
+		Return(
+			Select Row_to_json(output)
+			from
+			(
+			Select Row_to_json(spok) as "SPOKES"
+			From
+			(
+				Select Array_to_json(Array_Agg(Row_to_json((spks)))) as  "SPOKE"
+				From
+				(
+					Select   
+					input.SourceID "ID"
+					,input.SourceName "NAME"
+					,Input.SpokeType "SPOKETYPE"
+					,Coalesce(input.TimezonId,0) "TIMEZONEID"
+					,Coalesce(timezones.TimeZoneName,'') "TIMEZONENAME"
+					,Coalesce(timezones.UTCDurationinMinutes,0) "UTCOFFSET"
+					,coalesce(Input.DATAFORMAT,'')	"DATAFORMAT"
+					,coalesce(input.PRIMARYKEY,'')	"PRIMARYKEY"
+					, Coalesce(input.SPOKEPLACEHOLDERS,'') "SPOKEPLACEHOLDERS"
+					,case when coalesce(Sources.masterspokeid,0) > 0 then Sources.masterspokeid when coalesce(Sources.masterspokeid,0)=0 then sources.sourcetype_id end "MASTERSPOKEID"
+					,(select fn_ConcatenateStrings(cast(input.SourceID as bigint),cast(NULL as bigint),cast(NULL as varchar(50)),cast(3 as smallint))) as "TYPE"
+					,Coalesce((select count(distinct 1) from Spoketypes Nlegs	where NLegs=1 and Nlegs.Sourcetypeid=Input.SourceID ),0)  	as "NLEGS"
+					,Coalesce((select count(distinct 1) from Spoketypes Nmachines	where NLegs=2  and Nmachines.Sourcetypeid=Input.SourceID),0)  	as "NMACHINES"
+					,Coalesce((select count(distinct 1) from Spoketypes ISCONTAINER	where NLegs=3  and ISCONTAINER.Sourcetypeid=Input.SourceID),0)  as "ISCONTAINER"
+					,Coalesce((select count(distinct 1) from Spoketypes ISOTHER	where NLegs=4  and ISOTHER.Sourcetypeid=Input.SourceID) ,0)  	as "ISOTHER"
+					,
+					(
+						Select Row_to_json(mets) "METRICS"
+						From
+						(
+							Select Array_to_json(Array_Agg(Row_to_json(met))) as "METRIC"
+							from
+							(
+							Select SpokesConfig.buffer1 "DYNAMICPARAM",SpokesConfig.METRICNAME "METRICNAME", min(METRICORDER) "METRICORDER",Metricsmst.METRICDATATYPE "DataType"
+							,(select alias.metricdatatype from kbspokewisemetricsinformation alias where Metricsmst.metric_id=alias.metricid) "DataTypeAlias"
+							,string_agg(xpath,';') "Path"
+							,Coalesce((Select Case when  Count(MRules.Metric_Id)>0 Then 1 End
+									from kbmetricrules MRules 
+									Join KBMetricMst Metrics on Mrules.METRIC_ID=Metrics.METRIC_ID
+									Where SpokesConfig.METRICNAME=Metrics.METRICNAME and SpokesConfig.SOURCETYPEID=Metrics.SOURCE_ID and Metrics.TEMPLATE_ID=1
+							),0) as "HasFuzzyLogic"
+							,'DYNAMICPARAM,METRICNAME,METRICORDER,DataType,HasFuzzyLogic,Path,DataTypeAlias' "Attribute_list"
+							,
+							(
+								Select Row_to_json(log) "FuzzyLogic"
+								from
+								(
+									Select coalesce(Array_to_json(Array_Agg(Row_to_json(ruls))),'{}') as "Rule"
+									from
+									(	
+									Select Metrics.METRICNAME "MetricName",MRules.RULEID "RuleID",Rules.RuleTitle "RuleTitle"
+									,MRules.SourceID "DataSourceID",PRIORITY "Priority"
+									,'MetricName,RuleID,RuleTitle,DataSourceID,Priority' "Attribute_list"
+									,
+									(
+										Select Row_to_json(val) "Values"	
+										from
+										(
+											Select row_to_json(inp) "Input"
+											from
+											(
+											Select VALUE  "Value"
+											,'Value' "Attribute_list"
+											From KBMetricRules MRules1 
+											Where MRules.Metric_id=MRules1.Metric_ID and MRules.SourceID=MRules1.SourceID
+											and MRules.RULEID=MRules1.RULEID
+											--For XML RAW('Input'),Root('Values')
+											)inp
+										) as Val
+									)
+									from KBMetricRules MRules 
+									Join KBMetricMst Metrics on Mrules.METRIC_ID=Metrics.METRIC_ID
+									Join CBFuzzyLogicRulesMst Rules on MRules.RuleID=Rules.RuleID
+									where SpokesConfig.METRICNAME=Metrics.METRICNAME and SpokesConfig.SOURCETYPEID=Metrics.SOURCE_ID and Metrics.TEMPLATE_ID=1
+									Group By MRules.Metric_id,Metrics.METRICNAME,MRules.RULEID,MRules.SourceID,PRIORITY,Rules.RuleTitle
+								--FOR XML RAW('Rule'),Root('FuzzyLogic')
+									)Ruls
+								)log
+							)
+							from KBSpokeConfigurations SpokesConfig 
+							Join KBMetricMst Metricsmst on SpokesConfig.METRICNAME=Metricsmst.METRICNAME and SpokesConfig.SOURCETYPEID=Metricsmst.SOURCE_ID
+							where input.SourceID=SpokesConfig.SOURCETYPEID 
+							Group By SpokesConfig.buffer1,SpokesConfig.METRICNAME, SpokesConfig.SOURCETYPEID,Metricsmst.METRICDATATYPE, Metricsmst.metric_id
+							Order by min(METRICORDER) 
+							--FOR XML RAW('METRIC'),ROOT('METRICS')
+							)as met
+						)mets	
+					)
+					,
+					(
+						Select Row_to_json(ide) as "IDENTIFIERS"
+						from
+						(	
+							Select  coalesce(Array_to_json(Array_Agg(Row_to_json(spk))),'{}') as "SPOKE"
+							from
+							(
+							Select Coalesce(SP.SourceTypeID,0) "SourceTypeID", Coalesce(Sp.IdentifierMetrics,'') "MetricPos"
+							,Coalesce(sp.IdentifierValues,'') "PosValue" 
+							,'SourceTypeID,MetricPos,PosValue' "Attribute_list"
+							from KBSpokeIndetifierMst SP 
+							where Sp.IdentifierNames='MetricPosition' and SP.SourceTypeID=Input.SourceID
+							--For xml Raw('SPOKE'),Root('IDENTIFIERS')
+							) as spk
+						)ide
+					)
+					,
+					coalesce((
+						Select String_Agg(mets,'')
+						from
+						(
+						select case when smet.MetricDataType='Date time' Then 'Datetime' Else smet.MetricDataType End ||'#SWT01#'
+									|| Metrics.MetricName ||'#SWT01#'||'Seconds' ||'#CWT01#' as Mets
+						from KBSpokewiseMetricsInformation SMet 
+						Join kbmetricmst Metrics on Smet.Metricid=Metrics.METRIC_ID
+						where Input.SourceId=Smet.SourceTypeId and Smet.MetricDataType like '%Date%time' 
+						and Metrics.TEMPLATE_ID=1 
+						)mets
+						--FOR XML PATH('')					
+					),'') "SPOKECHARACTERISTICS"
+					,
+					(
+						Select Row_to_json(custs) as "CUSTOMERS"
+						From
+						(
+							Select  coalesce(Array_to_json(Array_Agg(Row_to_json(cust))),'{}') as "CUSTOMER"
+							from
+							(
+							select Coalesce(Customers.ENTITY_NAME,'')  "NAME",'NAME' "Attribute_list"
+							,(
+								Select  coalesce(Array_to_json(Array_Agg(Row_to_json(loc))),'{}') as "LOCATION"
+								from
+								(
+									Select distinct  Coalesce(Locations.LOCATION_NAME,'') "NAME" 
+									,'NAME' "Attribute_list"
+									from KBEntityLocations Locations 
+									where Customers.ENTITY_ID=Locations.ENTITY_ID 
+								--For XML RAW('LOCATION')
+								)loc		 
+							)
+							from KBEntityPhone CustPhones 
+							Join KBEntities Customers on CustPhones.ENTITY_ID=Customers.ENTITY_ID
+							where input.SourceID=CustPhones.SOURCETYPEID and CustPhones.CreatedBy=1 
+							Group By Customers.ENTITY_NAME,Customers.ENTITY_ID
+							--for XML raw('CUSTOMER'),ROOT('CUSTOMERS') 
+							) as cust
+						)Custs	
+					)
+					, (
+						Select licensekeyid 
+						from kblicensedetails Maps 
+						where Customerid= (Select CustomerId from kbusercustomermapping where userid= Sources.CreatedBy) limit 1
+					) "VID"
+					,'ID,NAME,SPOKETYPE,TIMEZONEID,TIMEZONENAME,UTCOFFSET,DATAFORMAT,PRIMARYKEY,SPOKEPLACEHOLDERS,TYPE,NLEGS,NMACHINES,ISCONTAINER,ISOTHER'
+					||'SPOKECHARACTERISTICS,VID,MASTERSPOKEID' "Attribute_list"
+					from 
+					Inputdata Input
+					Join KBSourceTypeMst Sources on input.SourceID=Sources.SOURCETYPE_ID
+					Left Join KBTimezoneOffsets Timezones on Input.TimezonId=timezones.TimeZoneId 
+				--For XML RAW('SPOKE'),ROOT('SPOKES')
+				)spks
+			)spok
+			)output		
+		);
+		
+	End;
+	Else
+	Begin
+
+		insert into TempSourceType(SourceTypeid)
+		select SOURCETYPE_ID 
+		from KBSourceTypeMst 
+		where dataformat=(select ID from KbSpokeDataFormats where lower(FORMATTYPE)=lower(VdataFormat))
+		;
+ 		Vcnt:=(select count(1) from TempSourceType);
+ 		VBuffer1:=SUBSTRING(VSpokeType,0,strpos(VSpokeType,';'));
+
+		i:=1;	
+ 		while(i<=Vcnt) Loop
+		
+			Update TempSourceType 
+			set counts=(select count(MetricName)from KBSpokeConfigurations where SOURCETYPEID
+					=(select SourceTypeID from TempSourceType where id=i )
+					) 
+			where id=i;
+			i:=i+1;
+		end Loop;
+		
+		VSrcid=(select SourceTypeID from TempSourceType where counts=VMetricCount limit 1);
+		
+		VdataFormatID:=(Select ID from KbSpokeDataFormats where lower(FORMATTYPE)= Lower(VdataFormat));
+		
+		If VSeperator ='' Then
+			VSeperator:=NULL;
+		End if;	
+		Begin
+		
+		Insert into Inputdata(MetricName,SourceID,SourceName,TimezonId,SpokeType,NlegsNMachines )
+		select distinct NULL MetricName,Sources.SOURCETYPE_ID,Upper(Sources.Alias) Alias,Sources.timeZoneId ,Sources.SPOKETYPE,Sources.HasNlegsNMachine
+		from KBSourceTypeMst Sources 
+		Join 
+			(
+				Select SOURCETYPEID,NLEG,Coalesce(Buffer1,'') Buffer1
+				,Count(METRICNAME) MetricCount 
+				from  KBSpokeConfigurations
+				where IsActive='1' 
+				Group By SOURCETYPEID,NLEG,Coalesce(Buffer1,''),Coalesce(Buffer2,''),Coalesce(Buffer3,'')
+			) SpokeConfigs 
+				on Sources.SOURCETYPE_ID=SpokeConfigs.SOURCETYPEID
+		where MetricCount=VMetricCount and DataFormat=VdataFormatID and IsActive='1'
+			and Sources.SourceType=0 ;
+			
+		End; 
+		
+		Insert into SpokeConfig(MetricPos,PosValue)
+		Select 
+		cast(metvals->> 'POS' as int)
+		,metvals->> 'VALUE'
+		from
+		(
+			select case when isarray='1' then json_array_elements(mets) else mets end as metvals
+			from
+			(
+				Select ivalue->'INPUT'->'Metrics'->'Metric' as mets
+				,case when left(cast(ivalue->'INPUT'->'Metrics'->'Metric' as text),1)='[' then '1' else '0' end isarray
+				from 
+				( 
+					select *
+					from temps 	
+					limit 1
+				) aa
+			)a
+		)metv	
+		;
+
+		
+		VCnt:=(Select COUNT(SourceID) from Inputdata);
+		While VCnter<=VCnt Loop
+		
+		VSourceId=(Select SourceID from Inputdata where RecordID=VCnter);
+		insert into Spoketypes(NLEGS,Sourcetypeid)
+		select cast(substring(nlegs,1,1) as bigint), VSourceId Sourceid
+		from 
+		(
+			Select regexp_split_to_table(NLegsNMachines,',') as nlegs
+			from
+			(
+			select NLegsNMachines 
+			from Inputdata A
+			)nleg
+		)a
+		where nlegs!='' and nlegs is not null
+		;	
+
+		VCnter:= VCnter+1;
+		End Loop;
+		Return(
+			Select Row_to_json(output)
+			from
+			(
+			Select Row_to_json(spok) as "SPOKES"
+			From
+			(
+				Select Array_to_json(Array_Agg(Row_to_json((spks)))) as  "SPOKE"
+				From
+				(
+					Select   
+					input.SourceID "ID"
+					,input.SourceName "NAME"
+					,Input.SpokeType "SPOKETYPE"
+					,Coalesce(input.TimezonId,0) "TIMEZONEID"
+					,Coalesce(timezones.TimeZoneName,'') "TIMEZONENAME"
+					,Coalesce(timezones.UTCDurationinMinutes,0) "UTCOFFSET"
+					,coalesce(Input.DATAFORMAT,'')	"DATAFORMAT"
+					,coalesce(input.PRIMARYKEY,'')	"PRIMARYKEY"
+					, Coalesce(input.SPOKEPLACEHOLDERS,'') "SPOKEPLACEHOLDERS"
+					,case when coalesce(Sources.masterspokeid,0) > 0 then Sources.masterspokeid when coalesce(Sources.masterspokeid,0)=0 then sources.sourcetype_id end "MASTERSPOKEID"
+					,(select fn_ConcatenateStrings(cast(input.SourceID as bigint),cast(NULL as bigint),cast(NULL as varchar(50)),cast(3 as smallint))) as "TYPE"
+					,Coalesce((select count(distinct 1) from Spoketypes Nlegs	where NLegs=1 and Nlegs.Sourcetypeid=Input.SourceID ),0)  	as "NLEGS"
+					,Coalesce((select count(distinct 1) from Spoketypes Nmachines	where NLegs=2  and Nmachines.Sourcetypeid=Input.SourceID),0)  	as "NMACHINES"
+					,Coalesce((select count(distinct 1) from Spoketypes ISCONTAINER	where NLegs=3  and ISCONTAINER.Sourcetypeid=Input.SourceID),0)  as "ISCONTAINER"
+					,Coalesce((select count(distinct 1) from Spoketypes ISOTHER	where NLegs=4  and ISOTHER.Sourcetypeid=Input.SourceID) ,0)  	as "ISOTHER"
+					,
+					(
+						Select Row_to_json(mets) "METRICS"
+						From
+						(
+							Select Array_to_json(Array_Agg(Row_to_json(met))) as "METRIC"
+							from
+							(
+							Select SpokesConfig.buffer1 "DYNAMICPARAM",SpokesConfig.METRICNAME "METRICNAME",  min(METRICORDER) "METRICORDER",Metricsmst.METRICDATATYPE "DataType"
+							,(select alias.metricdatatype from kbspokewisemetricsinformation alias where Metricsmst.metric_id=alias.metricid) "DataTypeAlias"
+							,string_agg(xpath,';') "Path"
+							,Coalesce((Select Case when  Count(MRules.Metric_Id)>0 Then 1 End
+									from kbmetricrules MRules 
+									Join KBMetricMst Metrics on Mrules.METRIC_ID=Metrics.METRIC_ID
+									Where SpokesConfig.METRICNAME=Metrics.METRICNAME and SpokesConfig.SOURCETYPEID=Metrics.SOURCE_ID and Metrics.TEMPLATE_ID=1
+							),0) as "HasFuzzyLogic"
+							,'DYNAMICPARAM,METRICNAME,METRICORDER,DataType,HasFuzzyLogic,Path,DataTypeAlias' "Attribute_list"
+							,
+							(
+								Select Row_to_json(log) "FuzzyLogic"
+								from
+								(
+									Select coalesce(Array_to_json(Array_Agg(Row_to_json(ruls))),'{}') as "Rule"
+									from
+									(	
+									Select Metrics.METRICNAME "MetricName",MRules.RULEID "RuleID",Rules.RuleTitle "RuleTitle"
+									,MRules.SourceID "DataSourceID",PRIORITY "Priority"
+									,'MetricName,RuleID,RuleTitle,DataSourceID,Priority' "Attribute_list"
+									,
+									(
+										Select Row_to_json(val) "Values"	
+										from
+										(
+											Select row_to_json(inp) "Input"
+											from
+											(
+											Select VALUE  "Value"
+											,'Value' "Attribute_list"
+											From KBMetricRules MRules1 
+											Where MRules.Metric_id=MRules1.Metric_ID and MRules.SourceID=MRules1.SourceID
+											and MRules.RULEID=MRules1.RULEID
+											--For XML RAW('Input'),Root('Values')
+											)inp
+										) as Val
+									)
+									from KBMetricRules MRules 
+									Join KBMetricMst Metrics on Mrules.METRIC_ID=Metrics.METRIC_ID
+									Join CBFuzzyLogicRulesMst Rules on MRules.RuleID=Rules.RuleID
+									where SpokesConfig.METRICNAME=Metrics.METRICNAME and SpokesConfig.SOURCETYPEID=Metrics.SOURCE_ID and Metrics.TEMPLATE_ID=1
+									Group By MRules.Metric_id,Metrics.METRICNAME,MRules.RULEID,MRules.SourceID,PRIORITY,Rules.RuleTitle
+								--FOR XML RAW('Rule'),Root('FuzzyLogic')
+									)Ruls
+								)log
+							)
+							from KBSpokeConfigurations SpokesConfig 
+							Join KBMetricMst Metricsmst on SpokesConfig.METRICNAME=Metricsmst.METRICNAME and SpokesConfig.SOURCETYPEID=Metricsmst.SOURCE_ID
+							where input.SourceID=SpokesConfig.SOURCETYPEID 
+							Group By SpokesConfig.buffer1,SpokesConfig.METRICNAME, SpokesConfig.SOURCETYPEID,Metricsmst.METRICDATATYPE, Metricsmst.metric_id
+							Order by  min(METRICORDER) 
+							--FOR XML RAW('METRIC'),ROOT('METRICS')
+							)as met
+						)mets	
+					)
+					,
+					(
+						Select Row_to_json(ide) as "IDENTIFIERS"
+						from
+						(	
+							Select  coalesce(Array_to_json(Array_Agg(Row_to_json(spk))),'{}') as "SPOKE"
+							from
+							(
+							Select Coalesce(SP.SourceTypeID,0) "SourceTypeID"
+							,Coalesce(Sp.IdentifierMetrics,'') "MetricPos"
+							,Coalesce(sp.IdentifierValues,'') "PosValue" 
+							,'SourceTypeID,MetricPos,PosValue' "Attribute_list"
+							from KBSpokeIndetifierMst SP 
+							where Sp.IdentifierNames='MetricPosition' and SP.SourceTypeID=Input.SourceID
+							--For xml Raw('SPOKE'),Root('IDENTIFIERS')
+							) as spk
+						)ide
+					)
+					,
+					Coalesce((
+						Select String_Agg(mets,'')
+						from
+						(
+						select case when smet.MetricDataType='Date time' Then 'Datetime' Else smet.MetricDataType End ||'#SWT01#'
+									|| Metrics.MetricName ||'#SWT01#'||'Seconds' ||'#CWT01#' as Mets
+						from KBSpokewiseMetricsInformation SMet 
+						Join kbmetricmst Metrics on Smet.Metricid=Metrics.METRIC_ID
+						where Input.SourceId=Smet.SourceTypeId and Smet.MetricDataType like '%Date%time' 
+						and Metrics.TEMPLATE_ID=1 
+						)mets
+						--FOR XML PATH('')					
+					),'') "SPOKECHARACTERISTICS"
+					,
+					(
+						Select Row_to_json(custs) as "CUSTOMERS"
+						From
+						(
+							Select coalesce(Array_to_json(Array_Agg(Row_to_json(cust))),'{}') as "CUSTOMER"
+							from
+							(
+							select Coalesce(Customers.ENTITY_NAME,'')  "NAME",'NAME' "Attribute_list"
+							,(
+								Select coalesce(Array_to_json(Array_Agg(Row_to_json(loc))),'{}') as "LOCATION"
+								from
+								(
+									Select distinct  Coalesce(Locations.LOCATION_NAME,'') "NAME" 
+									,'NAME' "Attribute_list"
+									from KBEntityLocations Locations 
+									where Customers.ENTITY_ID=Locations.ENTITY_ID 
+								--For XML RAW('LOCATION')
+								)loc		 
+							)
+							from KBEntityPhone CustPhones 
+							Join KBEntities Customers on CustPhones.ENTITY_ID=Customers.ENTITY_ID
+							where input.SourceID=CustPhones.SOURCETYPEID and CustPhones.CreatedBy=1 
+							Group By Customers.ENTITY_NAME,Customers.ENTITY_ID
+							--for XML raw('CUSTOMER'),ROOT('CUSTOMERS') 
+							) as cust
+						)Custs	
+					)
+					, (
+						Select licensekeyid 
+						from kblicensedetails Maps 
+						where Customerid= (Select CustomerId from kbusercustomermapping where userid= Sources.CreatedBy)
+					) "VID"
+					,'ID,NAME,SPOKETYPE,TIMEZONEID,TIMEZONENAME,UTCOFFSET,DATAFORMAT,PRIMARYKEY,SPOKEPLACEHOLDERS,TYPE,NLEGS,NMACHINES,ISCONTAINER,ISOTHER'
+					||'SPOKECHARACTERISTICS,VID,MASTERSPOKEID' "Attribute_list"
+					from 
+					Inputdata Input
+					Join KBSourceTypeMst Sources on input.SourceID=Sources.SOURCETYPE_ID
+					Left Join KBTimezoneOffsets Timezones on Input.TimezonId=timezones.TimeZoneId 
+				--For XML RAW('SPOKE'),ROOT('SPOKES')
+				)spks
+			)spok
+			)output		
+		);
+	end;
+	End if;
+	
+End;
+End if;
+
+End
+
+$BODY$;
+
+ALTER FUNCTION public.usp_dbservgetspokeinformation(json)
+    OWNER TO postgres;
+
