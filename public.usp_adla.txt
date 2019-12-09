@@ -1,0 +1,252 @@
+-- FUNCTION: public.usp_adla(json)
+
+-- DROP FUNCTION public.usp_adla(json);
+
+CREATE OR REPLACE FUNCTION public.usp_adla(
+	input json)
+RETURNS json
+    LANGUAGE 'plpgsql'
+    COST 100
+    VOLATILE 
+AS $BODY$
+
+DECLARE
+	VTRAN			VARCHAR(30);
+	VCreated_By		int;
+	VID			int;
+	Vsource 		int;
+	VSourceid 		int;
+	Vipaddress 		varchar(255);
+	VResult 		json;
+	VInstanceID 		varchar(4000);
+	VConfigid 		bigint;
+	VEngineCount 		int;
+	VTotalUrlCount 		int;
+	VConfigidcount 		int;
+	VConfigUrlIdCount 	int;
+	VSTATUS 		smallint;
+	VURLID 			bigint;
+	VMasterInstanceID 	varchar(100);
+	VMasterInstanceStatus 	bit;
+	VEngineInstanceID 	varchar(4000);
+	VRangeStart 		int;
+	VProfileid 		int;
+	VTotalrecordsproccessed int;
+	VProcesstype 		smallint;
+	VprevConfigid 		int;
+	Vsourcetype		varchar(100);
+	Vcallinput		text;
+	Vcallstatus		int;
+	Vcallstatusmessage	varchar(10000);
+	Vlastdata	varchar(8000);
+	VActiondate		timestamp default(current_timestamp at time zone 'utc')	;	
+	vtype		varchar(55);
+	Vdiffdate		timestamp without time zone ;	
+	Vsliceendtime   timestamp without time zone ;
+    vtime int;
+    vfromdate timestamp without time zone;
+    vtodate timestamp without time zone;
+    vparam_name varchar(255);
+    vdata varchar(500);
+	vexists varchar(100);
+	vmetricid int;
+	vresult1 json;
+	vresult2 json;
+	vform varchar(10);
+
+   /* select usp_adla('{
+  "INPUT": {
+    "TransType": "updatedatalakestore",
+    "sqlcount": "0",
+    "SOURCEID": "8627",
+    "id": "205508",
+    "adlaprovid": "544",
+    "isfileupdated": 1
+  }
+}')*/
+
+Begin
+drop table if exists staticParameters;
+drop table if exists temps;
+
+create temp table temps(id serial,ivalue json);
+Create temp table staticParameters( id serial,tablecolumns varchar(1000));
+
+insert into temps(ivalue)
+select input;
+
+select ivalue->'INPUT'->> 'TransType'
+,ivalue->'INPUT'->> 'SOURCEID'
+,ivalue->'INPUT'->> 'Type'
+,ivalue->'INPUT'->> 'sourcetype'
+into VTRAN,VSourceid,vtype,Vsourcetype from temps limit 1;
+
+if VTRAN='UpdateADLSFilesModifiedDate' then 
+begin 
+return (
+	Select Row_to_json(outs)
+	from
+	(
+		Select Array_to_json(Array_agg(Row_to_json(spk))) "SPOKE"
+		from
+		(
+		select  b.adlid as adlaprovId,c.id as engineid,sourcetype_name as datasourcename,tablefolder as tablename , a.sourcetype_id as datasourceid, 
+case when name is null then 'adlasoesnotexists' else name end as adlaname,typeofdata as adlatype,folderpath,containerpath, frequency,frequencyuom ,offsetinterval as runsat,
+b.createddate as adlacreateddate,coalesce(b.modifieddate,b.createddate) as adlamodifieddate,a.createddate as dscreateddate,c.createddate as dslastiterateddate
+from kbsourcetypemst a inner join kbenginewisedatafetchinginformation c on a.sourcetype_id=c.callstatus and 
+c.id=(select max(id) from kbenginewisedatafetchinginformation d where d.callstatus=c.callstatus and d.engineinstanceid like 'p4%')
+left join kbsourceadldetails b on a.sourcetype_id=b.sourcetype_id and b.isactive='1'
+where engineinstanceid like 'p4%' and a.isactive='1'
+ order by a.sourcetype_id
+		) spk
+	) outs		
+	);  
+
+ end;
+ 
+elseif Lower(VTran)='updatedatalakestore' then
+begin
+select ivalue->'INPUT'->> 'path',
+ivalue->'INPUT'->> 'size',
+ivalue->'INPUT'->> 'filename',
+ivalue->'INPUT'->> 'lastmodifieddate',
+ivalue->'INPUT'->> 'sqlcount',
+ivalue->'INPUT'->> 'SOURCEID',
+ivalue->'INPUT'->> 'id',
+ivalue->'INPUT'->> 'isfileupdated',
+ivalue->'INPUT'->> 'adlaprovid'
+
+into 
+VEngineInstanceID,VMasterInstanceID,VInstanceID,Vipaddress,Vlastdata,VSourceid,
+VEngineCount,vdata,VID	
+from temps limit 1;
+vfromdate:=( NOW()::date);
+vtodate:= vfromdate :: date ;
+Vdiffdate:=vtodate :: date||' '||'23:59:59';
+vexists:=(select sourceid from kbdldetails where sourceid=VSourceid and (createddate>=vfromdate and
+		createddate <=Vdiffdate) and adlaid=VID limit 1);
+		RAISE NOTICE '%', vfromdate;
+if vexists is null then
+begin
+INSERT INTO kbdldetails(enginewiseid,sourceid,engineinstance,sqlcount,datalakemodifieddate,folder,
+						size,path,createddate,fileupdated,adlaid)
+SELECT (select max(id) from kbenginewisedatafetchinginformation where engineinstanceid like 'p4%' limit 1) 
+        ,VSourceid,
+        'p493ed206-e2eb-4837-acc5-1f70308227c544-1'
+       ,Vlastdata,Vipaddress,VInstanceID,
+		VMasterInstanceID,VEngineInstanceID,VActiondate,vdata,VID;
+end;
+else
+begin
+update kbdldetails
+set sqlcount=Vlastdata,datalakemodifieddate=Vipaddress,folder=VInstanceID,size=VMasterInstanceID,
+path=VEngineInstanceID,createddate=VActiondate,fileupdated=vdata
+where sourceid=VSourceid and adlaid=VID;
+end;
+end if;
+Vresult:=(
+		
+			Select Row_to_json(a) as "OUTPUT"
+			from
+			(
+			Select 'SUCCESSFULLY UPDATED' "MESSAGE"
+			)a
+		
+	);
+Return(VResult);        
+end;   
+elseif VTRAN='getplaceholders' then
+begin
+return (
+	Select Row_to_json(outs)
+	from
+	(
+	Select Row_to_json(root) "root"
+		from
+	(
+	Select Row_to_json(spks) "spokes"
+		from
+	(
+		Select Array_to_json(Array_agg(Row_to_json(spk))) "PLACEHOLDERS"
+		from
+		(
+		select  phmkey as key,phmvalue as value,placeholderid,phmtype,
+		createddate,createdby,sourcetype from kbplaceholdersmst
+		where type=vtype --and sourcetype=Vsourcetype
+		) spk
+		)spks
+		)root
+	) outs		
+	);  
+end;
+
+elseif VTRAN='getmetrics' then
+begin
+insert into staticparameters(tablecolumns)
+values('RECORDDATEUTC')/*,('LOCATIONDIMENSIONID'),('EntityId'),('EntityLocationId'),('operating_id'),('source_id'),
+('seq'),('Call_UID')*/;
+
+vmetricid:=(select recordid from kbspoketable where spoke_id=VSourceid and table_name like 'Fact%');
+vresult1:=(Select Row_to_json(outs)
+from	
+(	
+Select Array_to_json(Array_agg(Row_to_json(spk))) "dynamicmetrics"
+from
+(
+select 
+table_columns from kbspoketabledetails where table_id=vmetricid 
+and table_columns not in ('RECORDDATEUTC','LOCATIONDIMENSIONID','EntityId','EntityLocationId','operating_id','source_id'
+,'seq','Call_UID') order by 1
+
+) spk	
+) outs	
+); 
+
+vresult2:=(Select Row_to_json(outs)
+from	
+(	
+Select Array_to_json(Array_agg(Row_to_json(spk))) "staticmetrics"
+from
+(
+select 
+tablecolumns as table_columns from staticparameters 
+) spk	
+) outs	
+); 
+end;
+VResult:= (	
+Select row_to_json(a)
+from
+(
+Select 
+(select vresult2 as "staticparameters" ) 
+,(select vresult1 as "dynamicparameters" )
+)a
+)
+;
+
+Begin
+
+VResult:=(
+
+Select Row_to_json(outs)
+from
+(
+Select VResult as "OUTPUT" -- For XML Path('OUTPUT')
+)outs
+
+);
+
+--VResult:= (Replace(Replace(Replace(VResult,'\',''),':"[',':['),']""',']"')); 
+Return(select VResult as "OUTPUT");	
+
+End;
+end if;
+
+end 
+
+$BODY$;
+
+ALTER FUNCTION public.usp_adla(json)
+    OWNER TO postgres;
+
