@@ -149,7 +149,6 @@ begin
 
 	if (Lower(VTran)='insertenginedetails') then
 	begin	
-	
 	update KBEnginePagingWorkTable set isactive=null, modifieddate=case when modifieddate is null then now() else modifieddate end
 	where engineinstanceid=vInstanceId;
 	
@@ -167,21 +166,16 @@ begin
 	where engineinstanceid=vInstanceId  and lower(enginemode)='start' and lower(enginetype)=lower(VEngineInstanceID) and isactive=1;
 	end;
 	end if;
-		
-	
-Vresult:=(
-		
+Vresult:=(	
 			Select Row_to_json(a) as "OUTPUT"
 			from
 			(
 			Select VResult  as "1"
-			)a
-		
+			)a	
 	);
-
 Return(VResult);	
-
 end;
+
 elseif Lower(VTran)='updatedatalakestore' then
 begin
 
@@ -492,7 +486,7 @@ if(VEngineCount is null or VEngineCount=0) then
 									from  kbenginewisedatafetchinginformation a inner join KBEnginePagingWorkTable b 
 									on a.engineinstanceid=b.engineinstanceid and b.enginetype='publish'
 									inner join kbsourceurlmst url on a.callstatus=url.sourceid
-										where a.callstatus=mst.sourcetype_id and 
+										where a.callstatus=mst.sourcetype_id and callstatusmessage = 'process' and
                                     case when lower(data_retrieval_uom)='daily' then (a.createddate>=vtodate)
                                     when lower(data_retrieval_uom)='weekly' then (a.createddate>=a.createddate - INTERVAL '7 DAY')
                                     when lower(data_retrieval_uom)='minutes' then (a.createddate>=a.createddate - INTERVAL '30 min')
@@ -627,6 +621,80 @@ return ( Select Array_to_json(Array_agg(row_to_json(outs))) as "SPOKE"
 	
  end;
  
+ elseif Lower(VTran)='insertdatalakeerrors' Then
+begin
+Vsource:=(select sourcetype_id from kbsourcetypemst where lower(sourcetype_name)= lower(vipaddress) and isactive='1' limit 1);
+--select * from nmsspperformancelogger order by 1 desc limit 1
+--return input;
+	Insert into nmsspperformancelogger(sourceid,spname,sinput,errormesssage,status)
+	select Vsource,VTran,Vcallinput,Vcallstatusmessage,VSTATUS;
+
+Vresult:=(
+		
+			Select Row_to_json(a) as "OUTPUT"
+			from
+			(
+			Select 'message'  as "1"
+			)a
+		
+	);
+
+Return(VResult);	
+
+end;
+
+ elseif Lower(VTran)='updatedatalakeerrors' Then
+begin
+
+--select * from nmsspperformancelogger order by 1 desc limit 1
+--return input;
+	update nmsspperformancelogger
+	set status='1'
+	where id=vURLID ;
+		--and sourceid=Vsource;
+	
+
+Vresult:=(
+		
+			Select Row_to_json(a) as "OUTPUT"
+			from
+			(
+			Select 'message'  as "1"
+			)a
+		
+	);
+
+Return(VResult);	
+
+end;
+
+elseif Lower(VTran)='getdatalakeerrors' Then
+begin
+Vresult:=(
+			Select Row_to_json(outs) as "root"
+			from
+			(
+			Select Row_to_json(a) as "OUTPUT"
+			from
+			(
+				
+				Select Array_to_json(Array_agg(Row_to_json(mrul))) "URL"
+				from
+				(
+				Select id,spname,sinput,createddate,modifieddate,sourceid,errormesssage,status
+				from nmsspperformancelogger
+				where spname like '%datalake%' and status='0'
+				order by createddate desc
+				)mrul
+			)a
+			)outs
+	);
+
+Return(VResult);	
+								 
+			
+end;
+ 
  
 elseif Lower(VTran)='inserterrors' Then
 begin
@@ -654,8 +722,10 @@ end;
 elseif Lower(VTran)='insertenginecalldetails' Then
 begin
 
-	
-                             
+	-- wajahat 23sept
+     if Vcallstatusmessage is null then 
+	 Vcallstatusmessage:='1';
+	 end if;
 
 	Vdiffdate=(select max(createddate) from kbenginewisedatafetchinginformation 
                where callstatus=Vcallstatus and engineinstanceid=VEngineInstanceID 
@@ -666,7 +736,11 @@ begin
      else callstatusmessage end
 			  )
 			  );
+			
+			RAISE NOTICE '%', Vdiffdate;
+			
 	   if( Vdiffdate is null  ) then 
+	   RAISE NOTICE '%', Vdiffdate;
 	Vdiffdate=current_timestamp at time zone 'utc';
 	VTotalUrlCount=1;
 	VConfigidcount=1;
@@ -675,6 +749,7 @@ begin
 	VConfigidcount=date_part('hour',(current_timestamp at time zone 'utc'-Vdiffdate));-- Hour
 	VConfigUrlIdCount=date_part('minute',(current_timestamp at time zone 'utc'-Vdiffdate));-- minute
 end if ;
+--return VTotalUrlCount;
 
 		
 	VprevConfigid=date_part('hour', Vdiffdate);
@@ -691,7 +766,9 @@ end if ;
 		callstatus=Vcallstatus and  VTotalUrlCount<1  and callstatusmessage=Vcallstatusmessage and engineinstanceid=VEngineInstanceID; 
 									  
    elseif ( Vcallinput ='cep' or Vcallinput='publish' or Vcallinput='correlation' or Vcallinput='historical') 
+
 	   and (Vcallstatusmessage ='process' and VTotalUrlCount<1) then
+
 										  
 							  RAISE NOTICE 'Calling process % ', VTotalUrlCount;			  
 			  
@@ -700,14 +777,15 @@ end if ;
 		callstatus=Vcallstatus and  VTotalUrlCount<1  and callstatusmessage=Vcallstatusmessage and engineinstanceid=VEngineInstanceID;
 										  
 	elseif (Vdiffdate is not null and VTotalUrlCount<=0 and VConfigidcount<=0 and VConfigUrlIdCount<=15 and VprevConfigid=VLimit ) then 
+	
 		update kbenginewisedatafetchinginformation
-		set recordcount= COALESCE(recordcount,0) + VEngineCount 
+		set recordcount= COALESCE(recordcount,0) + coalesce(VEngineCount ,0)
 		,modifieddate=current_timestamp at time zone 'utc'
 		where callstatus=Vcallstatus and  createddate=Vdiffdate and VprevConfigid=VLimit and engineinstanceid=VEngineInstanceID;
 	else		
 	
 	Insert into kbenginewisedatafetchinginformation(engineinstanceid,callinput,callstatus,callstatusmessage,lastdata,createddate,modifieddate,recordcount,sliceendtime)
-	select VEngineInstanceID,Vcallinput,Vcallstatus,Vcallstatusmessage,Vlastdata,Vactiondate,Vactiondate,VEngineCount,Vsliceendtime;
+	select VEngineInstanceID,Vcallinput,Vcallstatus,Vcallstatusmessage,Vlastdata,Vactiondate,Vactiondate,VEngineCount,Vactiondate;
 
 	update kbsourceurlmst
     set isactive=null where sourceid=cast(Vcallstatus as int) 
@@ -1382,7 +1460,7 @@ VResult:= (
 		,( select lastdata from kbenginewisedatafetchinginformation a where id=(select max(b.id) 
 		from kbenginewisedatafetchinginformation b where a.callstatus=b.callstatus and cast(callstatus as integer)=VSourceid )) lastdata
          ,( 
-		select max(coalesce(sliceendtime,createddate)) from kbenginewisedatafetchinginformation where callstatus=VSourceid 
+		select max(coalesce(sliceendtime,createddate)) from kbenginewisedatafetchinginformation where recordcount>0 and callstatus=VSourceid 
           and engineinstanceid in (select distinct engineinstanceid from KBEnginePagingWorkTable where lower(enginetype)='pull' )
           ) createddate
 		,'id,Key,Value,group,Operator,ptype,lastdata,createddate,format' "Attribute_list"	
@@ -1926,6 +2004,7 @@ delete from pullengineconfigdetails;
 					,PRIMARYKEYCOLUMNS "PRIMARYKEYCOLUMNS"
 					,DATASOURCENAME	"DATASOURCENAME"
 					, '&' 		"CONCATS"
+					,Sources.emailid
 					,urls.ID AS 	"URLID"
 					,MainSeparator	"MainSeparator"
 					,SPOKETYPE	"SPOKETYPE"
@@ -1937,6 +2016,7 @@ delete from pullengineconfigdetails;
 					,TIMEOFFSETS.TIMEZONEID AS 	"TIMEZONEID"
 					,DATA_FETCH_TYPE		"DATA_FETCH_TYPE"
 					,portnumber
+					,removeolddata
 					--,urls.databasetype as "DATABASETYPE"
 					 ,(Case  
  					when urls.databasetype =1 THEN 'oracle'
@@ -2056,6 +2136,7 @@ Begin
 						,SPOKETYPE 		"SPOKETYPE"
 						,urls.ID 		"URLID"	
 						,URL 			"NAME"
+						,Sources.emailid
 						,MainSeparator		"MainSeparator"
 						,SubSeparator		"SubSeparator"
 						,ParameterAppender			"CONCATS"
@@ -2067,6 +2148,7 @@ Begin
 						,Coalesce(DATA_FETCH_TYPE,'CurrentData') "DATA_FETCH_TYPE"
 						,'' 			"DATABASETYPE"
 						,portnumber as  			"PORTNUMBER"
+						,removeolddata
 						,custom_authenticationtype "TOKENAUTH"
 						,MainSeparator		"RECORDTYPE"
 						,DATA_RETRIEVAL_TIME as "TIMEINTERVAL"
@@ -2189,6 +2271,8 @@ select Metric.METRIC_ID "METRIC_ID",Metric.METRICNAME "METRICNAME",Metric.CONSTA
 						,''		"MainSeparator"
 						,''		"SubSeparator"
 						, '&' 			"CONCATS"
+						,'' emailid
+						,'' removeolddata																									
 						
 						--,TIMEOFFSETS.TIMEZONENAME "TIMEZONENAME"
 						--,TIMEOFFSETS.UTCDurationinMinutes as "UTCOFFSET"
@@ -2313,6 +2397,7 @@ Group BY Sources.ENTITY_NAME,DataSourceName,DATA_RETRIEVAL_TIME,DATA_RETRIEVAL_U
 					PRIMARYKEYCOLUMNS 		"PRIMARYKEYCOLUMNS"
 					,DATASOURCENAME	"DATASOURCENAME"
 					, '&' 		"CONCATS"
+					,Sources.emailid
 					,urls.ID AS 	"URLID"
 					,MainSeparator	"MainSeparator"
 					,SPOKETYPE	"SPOKETYPE"
@@ -2325,6 +2410,7 @@ Group BY Sources.ENTITY_NAME,DataSourceName,DATA_RETRIEVAL_TIME,DATA_RETRIEVAL_U
 					,DATA_FETCH_TYPE		"DATA_FETCH_TYPE"
 					,Coalesce(dsdetails.DSADetailName,'') "DATABASETYPE"
 					,Coalesce(urls.PortNumber,0) as  "PORTNUMBER"
+					,removeolddata
 					,DATA_RETRIEVAL_TIME as "TIMEINTERVAL"
 					,DATA_RETRIEVAL_UOM   as "UOM"
 					,UPLOADTYPE   as "EXACTTIMECHECKED"
@@ -2420,7 +2506,7 @@ Group BY Sources.ENTITY_NAME,DataSourceName,DATA_RETRIEVAL_TIME,DATA_RETRIEVAL_U
 					--and   (dsdetails.DSAttributeDetailID=urls.DATABASETYPE or dsdetails.DSAttributeDetailID=urls.DataSourceID) --newlyadded
 					-- Inner join KBDataSourceAttributeDetails dsdetails on dsdetails.DSAttributeDetailID=urls.databasetype 
                     left join KBDataSourceAttributeDetails dsdetails on dsdetails.DSAttributeDetailID=urls.databasetype      
-					where Sources.SOURCETYPE=1 and urls.DataSourceID in (1,9,11,12) /*(1,6)*/  and Lower(ObjectType)='source' 
+					where Sources.SOURCETYPE=1 and urls.DataSourceID in (1,9,11,12,14) /*(1,6)*/  and Lower(ObjectType)='source' 
 					and Lower(Urls.DATA_FETCH_TYPE)='currentdata' and Sources.IsActive='1'
 					Group BY 	Sources.SOURCETYPE_ID,DataSourceName,TIMEOFFSETS.TIMEZONENAME ,TIMEOFFSETS.UTCDurationinMinutes 
 					,TIMEOFFSETS.TIMEZONEID,Sources.TIMEZONEID,DATA_RETRIEVAL_TIME,DATA_RETRIEVAL_UOM
@@ -2446,6 +2532,7 @@ Group BY Sources.ENTITY_NAME,DataSourceName,DATA_RETRIEVAL_TIME,DATA_RETRIEVAL_U
 					PRIMARYKEYCOLUMNS 		"PRIMARYKEYCOLUMNS"
 					,DATASOURCENAME	"DATASOURCENAME"
 					, '&' 		"CONCATS"
+					,emailid
 					,urls.ID AS 	"URLID"
 					,MainSeparator	"MainSeparator"
 					,SPOKETYPE	"SPOKETYPE"
@@ -2458,6 +2545,7 @@ Group BY Sources.ENTITY_NAME,DataSourceName,DATA_RETRIEVAL_TIME,DATA_RETRIEVAL_U
 					,DATA_FETCH_TYPE		"DATA_FETCH_TYPE"
 					,Coalesce(dsdetails.DSADetailName,'') "DATABASETYPE"
 					,Coalesce(urls.PortNumber,0) as  "PORTNUMBER"
+					,removeolddata
 					,DATA_RETRIEVAL_TIME as "TIMEINTERVAL"
 					,DATA_RETRIEVAL_UOM   as "UOM"
 					,UPLOADTYPE   as "EXACTTIMECHECKED"
@@ -2554,7 +2642,7 @@ Group BY Sources.ENTITY_NAME,DataSourceName,DATA_RETRIEVAL_TIME,DATA_RETRIEVAL_U
 					--		and   dsdetails.DSAttributeDetailID=urls.DATABASETYPE  --newlyadded
 					--Join UrlTemp AA on urls.ID=AA.UrlId
                     Inner join KBDataSourceAttributeDetails dsdetails on dsdetails.DSAttributeDetailID=urls.databasetype 
-					where Sources.SOURCETYPE=1 and  urls.DataSourceID in (1,9,11,12) /*(1,6)*/  and Lower(ObjectType)='source' 
+					where Sources.SOURCETYPE=1 and  urls.DataSourceID in (1,9,11,12,14) /*(1,6)*/  and Lower(ObjectType)='source' 
 					and Urls.DATA_FETCH_TYPE='HistoricalData' and Sources.IsActive='1'
                     and  Sources.sourcetype_id not in (select distinct cast(callstatus as integer) from kbenginewisedatafetchinginformation)   
 					Group BY 	Sources.SOURCETYPE_ID,DataSourceName,TIMEOFFSETS.TIMEZONENAME ,TIMEOFFSETS.UTCDurationinMinutes 
@@ -2582,6 +2670,7 @@ Group BY Sources.ENTITY_NAME,DataSourceName,DATA_RETRIEVAL_TIME,DATA_RETRIEVAL_U
 					PRIMARYKEYCOLUMNS 		"PRIMARYKEYCOLUMNS"
 					,DATASOURCENAME				"DATASOURCENAME"
 					, '&' 					"CONCATS"
+					,emailid
 					,urls.ID AS 				"URLID"
 					,MainSeparator				"MainSeparator"
 					,SPOKETYPE				"SPOKETYPE"
@@ -2594,6 +2683,7 @@ Group BY Sources.ENTITY_NAME,DataSourceName,DATA_RETRIEVAL_TIME,DATA_RETRIEVAL_U
 					,DATA_FETCH_TYPE			"DATA_FETCH_TYPE"
 					,Coalesce(DataSources.Datasourcename,'') "DATABASETYPE"
 					,Coalesce(urls.PortNumber,0) as  	"PORTNUMBER"
+					,removeolddata
 					,DATA_RETRIEVAL_TIME as "TIMEINTERVAL"
 					,DATA_RETRIEVAL_UOM   as "UOM"
 					,UPLOADTYPE   as "EXACTTIMECHECKED"
@@ -2710,6 +2800,7 @@ Group BY Sources.ENTITY_NAME,DataSourceName,DATA_RETRIEVAL_TIME,DATA_RETRIEVAL_U
 					PRIMARYKEYCOLUMNS 		"PRIMARYKEYCOLUMNS"
 					,DATASOURCENAME				"DATASOURCENAME"
 					, '&' 					"CONCATS"
+					,emailid
 					,urls.ID AS 				"URLID"
 					,MainSeparator				"MainSeparator"
 					,SPOKETYPE				"SPOKETYPE"
@@ -2722,6 +2813,7 @@ Group BY Sources.ENTITY_NAME,DataSourceName,DATA_RETRIEVAL_TIME,DATA_RETRIEVAL_U
 					,DATA_FETCH_TYPE			"DATA_FETCH_TYPE"
 					,Coalesce(DataSources.Datasourcename,'') "DATABASETYPE"
 					,Coalesce(urls.PortNumber,0) as  	"PORTNUMBER"
+					,removeolddata
 					,DATA_RETRIEVAL_TIME as "TIMEINTERVAL"
 					,DATA_RETRIEVAL_UOM as "UOM"
 					,UPLOADTYPE   as "EXACTTIMECHECKED"
@@ -2812,7 +2904,7 @@ Group BY Sources.ENTITY_NAME,DataSourceName,DATA_RETRIEVAL_TIME,DATA_RETRIEVAL_U
 					Left Outer Join KbSpokeDataFormats DataFormats on Sources.DataFormat=Dataformats.ID
 					join KbSpokeDataFormats ksdf on Sources.DataFormat=ksdf.ID
 					Join KBDataSourceMst DataSources on Urls.DataSourceID=DataSources.DataSourceID
-					Join UrlTemp AA on urls.ID=AA.UrlId
+					left Join UrlTemp AA on urls.ID=AA.UrlId
 					where Sources.SOURCETYPE=1 and Urls.DataSourceID in (7)  and Lower(ObjectType)='source' and Urls.DATA_FETCH_TYPE='CurrentData' and Sources.IsActive='1'
 					Group BY 	Sources.SOURCETYPE_ID,DataSourceName,TIMEOFFSETS.TIMEZONENAME ,TIMEOFFSETS.UTCDurationinMinutes 
 					,TIMEOFFSETS.TIMEZONEID,Sources.TIMEZONEID,DATA_RETRIEVAL_TIME,DATA_RETRIEVAL_UOM
@@ -2836,6 +2928,7 @@ Group BY Sources.ENTITY_NAME,DataSourceName,DATA_RETRIEVAL_TIME,DATA_RETRIEVAL_U
 					PRIMARYKEYCOLUMNS 		"PRIMARYKEYCOLUMNS"
 					,DATASOURCENAME				"DATASOURCENAME"
 					, '&' 					"CONCATS"
+					,emailid
 					,urls.ID AS 				"URLID"
 					,MainSeparator				"MainSeparator"
 					,SPOKETYPE				"SPOKETYPE"
@@ -2850,6 +2943,7 @@ Group BY Sources.ENTITY_NAME,DataSourceName,DATA_RETRIEVAL_TIME,DATA_RETRIEVAL_U
 					,DATA_RETRIEVAL_TIME as "TIMEINTERVAL"
 					,DATA_RETRIEVAL_UOM   as "UOM"
 					,UPLOADTYPE   as "EXACTTIMECHECKED"
+					,removeolddata
 					
 					,ksdf.FORMATTYPE as 			"TYPE"
 					,(

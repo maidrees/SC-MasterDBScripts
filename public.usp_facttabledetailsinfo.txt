@@ -26,7 +26,7 @@ Return	(
 					Select Array_to_json(Array_Agg(row_to_json(cols))) "spoke"
 					from
 					(
-					select spoke_id "spokeid",SOURCETYPE_NAME "spokename",coalesce(datalake,0) "datalake",primarykeycolumns,'spokeid,spokename,datalake,primarykeycolumns' "Attribute_list",
+					select spoke_id "spokeid",SOURCETYPE_NAME "spokename",coalesce(datalake,0) "datalake",coalesce(removeolddata,0) as "removeolddata",primarykeycolumns,'spokeid,spokename,datalake,removeolddata,primarykeycolumns' "Attribute_list",
 						(
 							Select Array_to_json(Array_Agg(row_to_json(tabs))) as "Table"
 							From
@@ -58,7 +58,7 @@ Return	(
 					from kbsourcetypeMst sources
 					join kbspoketable tab on tab.spoke_id=sources.SOURCETYPE_ID
 					where tab.type=1 and sources.isactive='1' 
-					group by spoke_id,SOURCETYPE_NAME,datalake,primarykeycolumns
+					group by spoke_id,SOURCETYPE_NAME,datalake,removeolddata,primarykeycolumns
 					)cols
 				)spk
 			)spks
@@ -73,3 +73,4 @@ $BODY$;
 
 ALTER FUNCTION public.usp_facttabledetailsinfo(json)
     OWNER TO postgres;
+

@@ -1,14 +1,14 @@
--- FUNCTION: public.usp_kbspokejson
+-- FUNCTION: public.usp_kbspoke(json)
 
--- DROP FUNCTION public.usp_kbspokejson;
+-- DROP FUNCTION public.usp_kbspoke(json);
 
 CREATE OR REPLACE FUNCTION public.usp_kbspoke(
 	input json)
 RETURNS json
     LANGUAGE 'plpgsql'
-    COST 100.0
+    COST 100
     VOLATILE 
-AS $function$
+AS $BODY$
 
 /*added limit 1 in get details transtype on 25-09-2018
 Select Row_to_json(src) "MetricExtraction"*/
@@ -107,7 +107,7 @@ create temp table InputData(RecordID serial, SpokeName varchar(1000), SpokeDescr
 ServerName varchar(256),UserName varchar(1000),Password varchar(256),AuthenticationType int,FilePath varchar(256),HASNLEGSNMACHINE varchar(100)
 ,INPUT varchar(256),Primarykey varchar(1000),CUSTOMERIDENTIFIER varchar(1000),TIMEZONEID int,CONNECTIONTYPE int,DataFormat int,
 CollectionName varchar(1000),MainSeparator varchar(100),SubSeparator varchar(100),SourceURL varchar(1000),SourceType INT,SpokeType INT,entityidentitfier varchar(1000),sourceguid varchar(100)
-,masterspokeid bigint);
+,masterspokeid bigint,datalake int,removeolddata int);
 
 create temp table InputMetricRulesData(RecordID serial,Sourceid bigint,MetricId bigint, MetricName varchar(256),RuleID int,Value varchar(3000),Priority int
 ,TransformActualDataType varchar(50),TransformationDataTypeAlias varchar(50));
@@ -184,7 +184,7 @@ Inner join
 
 	Insert into InputData(SpokeName,SpokeDescription,CreatedBy,ServerName,UserName,Password,AuthenticationType,FilePath,HASNLEGSNMACHINE
 	,INPUT,Primarykey,CUSTOMERIDENTIFIER,TIMEZONEID,CONNECTIONTYPE ,DataFormat,CollectionName,MainSeparator,SubSeparator,SourceURL,SourceType,SpokeType,entityidentitfier
-	,sourceguid,masterspokeid)
+	,sourceguid,masterspokeid,datalake,removeolddata)
 	SELECT 
 		ivalue->'SPOKE'->> 'SPOKENAME',
 		ivalue->'SPOKE'->> 'SPOKEDESCRIPTION',
@@ -210,6 +210,8 @@ Inner join
 		ivalue->'SPOKE'->> 'IDENTIFIER',
 		ivalue->'SPOKE'->> 'sourceguid' sourceguid,
 		cast(ivalue->'SPOKE'->> 'MASTERSPOKEID' as bigint) masterspokeid
+		,cast(ivalue->'SPOKE'->> 'DataLake' as bigint) datalake
+		,cast(ivalue->'SPOKE'->> 'removeolddata' as bigint) removeolddata
 		
 	from temps limit 1
 
@@ -347,12 +349,14 @@ VResult:=(
 		from kbenginewisedatafetchinginformation 
             inner join kbsourceurlmst url on kbenginewisedatafetchinginformation.callstatus=url.sourceid
             where callstatus=VSourcetypeid
-            and (case when url.data_retrieval_uom='daily' then 
+            and (case when lower(url.data_retrieval_uom)='daily' then 
                  (kbenginewisedatafetchinginformation.createddate>=vfromdate)
                  when url.data_retrieval_uom='hourly' then 
                  (kbenginewisedatafetchinginformation.createddate>=vdate)
                  when url.data_retrieval_uom='minutes' then 
-                 (kbenginewisedatafetchinginformation.createddate>=vdate )end)
+                 (kbenginewisedatafetchinginformation.createddate>=vdate )
+                 when url.data_retrieval_uom='weekly' then 
+                 (kbenginewisedatafetchinginformation.createddate>=vfromdate )end)
 		and engineinstanceid in (select distinct engineinstanceid from kbenginepagingworktable where lower(enginetype)='pull' )
 		order by kbenginewisedatafetchinginformation.createddate desc
 		
@@ -708,10 +712,11 @@ Begin
 		INSERT INTO KBSourceTypeMst(SOURCETYPE_NAME,Description,CreatedBy,CreatedDate,HasNlegsNMachine,Input,IsMetricAdded,PrimaryKeyColumns
 		,CorrelationKeyColumns,TIMEZONEID,DataFormat,CollectionName ,MainSeparator,SubSeparator,DuplicateKeys
 		,CallEndIdentitifer,SourceType,SOURCEURL,ENTITYIDENTIFIER,Alias,IsActive,SpokeType,CUSTOMERIDENTIFIER,ENTITYIDENTIFIER_service,sourceguid
-		,masterspokeid,spokeplaceholders,dataseperator,IsEntity,IsEntityType)
+		,masterspokeid,spokeplaceholders,dataseperator,IsEntity,IsEntityType,datalake,removeolddata)
 		SELECT SpokeName, SpokeDescription,CreatedBy,VActiondate,HASNLEGSNMACHINE,VMQTTTopic,VIsMetricAdded,PrimaryKey,PrimaryKey
 		,TIMEZONEID,DataFormat, VMQTTUsername,MainSeparator,SubSeparator,PrimaryKey,NULL,SourceType,SOURCEURL,CUSTOMERIDENTIFIER
 		,Replace(SpokeName,' ',''),'1',SpokeType,CUSTOMERIDENTIFIER,entityidentitfier,sourceguid,masterspokeid,VMQTTPassword,VMQTTURL,vIsEntity,vIsEntityType
+		,datalake,removeolddata
 		FROM  
 		InputData a;
  
@@ -1061,7 +1066,7 @@ Begin
 		VSource:=(select cast(ivalue->'SPOKE'->'SourceURL'->> 'Source' as smallint) from temps limit 1);
 
 		/* Inserting the url's master information. */
-		if(VSource=1)  Then
+		if(VSource=1 or VSource=11 or VSource=12 or VSource=14)  Then
 		BEGIN
 
 		
@@ -2677,7 +2682,7 @@ then cast(ivalue->'SPOKE'->'SourceURL'->>'LDAPPortNumber' as int) else null end
 		Begin 
 		VSource:=(select cast(ivalue->'SPOKE'->'SourceURL'->> 'Source' as smallint) from temps limit 1);
 		/* Inserting the url's master information. */
-		if(VSource=1) Then
+		if(VSource=1 or VSource=11 or VSource=12) then 
 		BEGIN
 		
 			INSERT INTO KBSOURCEURLMST(SOURCEID,URL,USERNAME,"password",DATA_RETRIEVAL_TIME,DATA_RETRIEVAL_UOM,ISACTIVE,DataSourceID,ServerName
@@ -3528,7 +3533,9 @@ Return(
 		from
 		(
 			SELECT 
-            CMT.isactive
+            datalake
+			,removeolddata																					
+			,CMT.isactive
 			, Vsourcetypeid "SPOKEID"
 			,SOURCETYPE_NAME as "SPOKENAME"
 			,Description as  "SPOKEDESCRIPTION"
@@ -3685,12 +3692,12 @@ Return(
 					,"password"	"PASSWORD"
 					,DATA_RETRIEVAL_TIME as "TIMEPERIOD"
 					,DATA_RETRIEVAL_UOM as "TIMEPERIODUOM"
-					, case when DataSourceID=1 Or DataSourceID=6 Or DataSourceID=7 or DataSourceID=9 or DataSourceID=3 then ServerName END as "DBServerName"
+					, case when DataSourceID=1 Or DataSourceID=11 Or DataSourceID=6 Or DataSourceID=7 or DataSourceID=9 or DataSourceID=3 or DataSourceID=12 then ServerName END as "DBServerName"
 					,case when DataSourceID=3  then ServerName END as "LDAPServerName"
 					,PortNumber as "LDAPPortNumber"
 					,Organisation as "LDAPOrg"
 					,"group" as "LDAPGroup"
-					,  case when DataSourceID=1  Or DataSourceID=6 Or DataSourceID=7 or DataSourceID=9 or DataSourceID=2 then DBAuthType END as "DBAuthType"
+					,  case when DataSourceID=1  Or DataSourceID=11  Or  DataSourceID=6 Or DataSourceID=7 or DataSourceID=9 or DataSourceID=2 or DataSourceID = 14 then DBAuthType END as "DBAuthType"
 					,case when DataSourceID=3  then ServerName END as "LDAPAuthType"
 					,Coalesce(DatabaseName,Organisation) as "Database"
 					,DBQuery	"DBQuery"
@@ -3722,11 +3729,11 @@ Return(
 							select DATABASETYPE as "SelectedDatabaseType"
 							,Coalesce(ServerName,URL) as "DBServerName"
 							,DBAuthType	"DBAuthType"
-							,case when DataSourceID =1 Or DataSourceID=4 Or DataSourceID=6 Or DataSourceID=7 then  USERNAME else '' end as "DBUsername"
+							,case when DataSourceID =1 Or DataSourceID =11 Or DataSourceID=4 Or DataSourceID=6 Or DataSourceID=7 then  USERNAME else '' end as "DBUsername"
 							,case when DataSourceID=2 then USERNAME else '' end as "WSUSERNAME"
                             ,case when DataSourceID=2 then USERNAME when  DataSourceID=10 then USERNAME end as "USERNAME"
 							,case when DataSourceID=3 then USERNAME else '' end as "LDAPUSERNAME"
-							,case when DataSourceID=1  Or DataSourceID=4 Or DataSourceID=6 Or DataSourceID=7 Or DataSourceID=9  then "password" else '' end as "DBPassword"
+							,case when DataSourceID=1  Or DataSourceID=11  Or DataSourceID=4 Or DataSourceID=6 Or DataSourceID=7 Or DataSourceID=9  then "password" else '' end as "DBPassword"
 							,case when DataSourceID=2 then "password"  else '' end as "WSPASSWORD"
                             ,case when DataSourceID=2 then "password" when DataSourceID=10 then "password"  end as "PASSWORD"
 							,case when DataSourceID=3 then "password"  else '' end as "LDAPPASSWORD"               
@@ -4089,7 +4096,8 @@ End if;
 
 End
 
-$function$;
+$BODY$;
 
 ALTER FUNCTION public.usp_kbspoke(json)
     OWNER TO postgres;
+
