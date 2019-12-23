@@ -1,0 +1,210 @@
+-- Function: usp_dbservgetspokedimensions(json)
+
+-- DROP FUNCTION usp_dbservgetspokedimensions(json);
+
+CREATE OR REPLACE FUNCTION usp_dbservgetspokedimensions(input json DEFAULT NULL::json)
+  RETURNS json AS
+$BODY$
+begin
+ 
+drop table if exists Inputs;
+
+Create temp table Inputs (id int, MetricName varchar(255),Inputs text,DimColumn varchar(100),dimTable varchar(100));
+
+
+	Insert into Inputs(id, MetricName,Inputs,DimColumn,dimTable)
+	Select ROW_NUMBER() Over(Order By Id ) SNO,A.DIMCol METRICNAME, 'execute (''Select '
+	||A.SurrogateCol ||' Id' || ',"'|| A.DIMCol||'" Value' || ' from '|| A.dim_tbl || ''')' ,DIMCol,DIM_tbl
+	FROM KB_DIM_SOURCELINK A;
+
+	Return(
+		select Row_to_json(output)
+		From
+		(
+			Select Row_to_json(dimes) "DIMENSIONS"
+			from
+			(
+				Select Array_to_json(Array_agg(Row_to_json(dims))) "DIMENSION"
+				From
+				(
+					SELECT    B.createdby, Mst.ID  "ID",Mst.DIMENSIONNAME  as "NAME",'DIM_'||Mst.DIMENSIONNAME as "TABLENAME"
+					,(Select LicenseKeyId from KBUserCustomerMapping A Join KBLicenseDetails C on A.CustomerID=C.CustomerId
+					Where B.CREATEDBY=A.UserID
+					Limit 1
+					) "VID"
+					
+					,
+					(	Select Row_to_json(mets) as "METRICS"
+						From
+						(
+							Select Array_to_json(Array_agg(Row_to_json(imetric))) as "METRIC"
+							From
+							(
+								Select RULEID "RULEID", ISPRIMARY "ISPRIMARY",ATTRIBUTE "ATTRIBUTE",SOURCENAME "SOURCENAME",SOURCEID "SOURCEID",
+								METRICNAME "METRICNAME",METRICDATATYPE "METRICDATATYPE",ATTRIBUTECOLUMNTYPE "ATTRIBUTECOLUMNTYPE"
+								,ATTRIBUTECHANGETYPE "ATTRIBUTECHANGETYPE"
+								,'RULEID,ISPRIMARY,ATTRIBUTE,SOURCENAME,SOURCEID,METRICNAME,METRICDATATYPE,ATTRIBUTECOLUMNTYPE,ATTRIBUTECHANGETYPE' "Attribute_list"
+								From
+								(
+								
+								SELECT  Coalesce(RuleID,0) RULEID
+								,ATT.IsPrimary as ISPRIMARY
+								, ATT.AttributeName as ATTRIBUTE
+								, SOURCEID,Upper(SRC.Alias) as SOURCENAME
+								,METRICNAME
+								,Coalesce(METRICDATATYPE,'') as METRICDATATYPE
+								,Coalesce(case when ATT.IsPrimary=0 and ATTRIBUTECOLUMNTYPE=0 then 'History'
+								when  ATT.IsPrimary=0 and ATTRIBUTECOLUMNTYPE=1 then 'Change'
+								when ATT.IsPrimary=0 and ATTRIBUTECOLUMNTYPE=2 then 'Fixed'
+								end,'') as ATTRIBUTECOLUMNTYPE
+								,Coalesce(case when AttributeColumnType=1 then  AttributeChangeType end,0) as ATTRIBUTECHANGETYPE
+								--,CASE when METRICDATATYPE='DateTime' then METRICDATATYPE else '' end as METRICDATATYPE
+								from KB_DIM_SOURCELINK LINK  
+								join KBsourcetypeMst SRC on SRC.SOURCETYPE_ID=LINK.SOURCEID and Link.ID=Mst.ID
+								JOIN DIM_DIMENSIONATTRIBUTES ATT ON ATT.DimensionID=Link.ID and Link.AttributeName=ATT.AttributeName
+								where Link.ID=B.ID  and Src.IsActive='1' and mst.id!=1 and coalesce(masterspokeid,0)=0
+								
+								Union all
+								
+								SELECT  Coalesce(RuleID,0) RULEID
+								,1 as ISPRIMARY
+								,AttributeName as ATTRIBUTE
+								,SOURCEID
+								,Upper(SRC.Alias) as SOURCENAME
+								,METRICNAME
+								,Coalesce(METRICDATATYPE,'') as METRICDATATYPE
+								,'' ATTRIBUTECOLUMNTYPE
+								,0 ATTRIBUTECHANGETYPE
+								--,CASE when METRICDATATYPE='DateTime' then METRICDATATYPE else '' end as METRICDATATYPE
+								from KB_DIM_SOURCELINK LINK  
+								join KBsourcetypeMst SRC on SRC.SOURCETYPE_ID=LINK.SOURCEID and Link.ID=Mst.ID
+								where Link.ID=B.ID  and Mst.ID=1 and Src.IsActive='1' and coalesce(masterspokeid,0)=0
+								) A
+								
+								--FOR XML RAW('METRIC'),ROOT('METRICS')
+							) as imetric
+						) Mets
+					)	
+					
+					,
+					(
+						Select Row_to_json(tabs) as "TABLESTRUCTURE"
+						From
+						(	
+							Select Array_to_json(Array_agg(Row_to_json(met))) as "METRIC"
+							From
+							( 
+								select X.SOURCEID "SOURCEID",X.METRICID "METRICID",X.METRICNAME "METRICNAME",X.TABLECOL "TABLECOL"  
+								,'SOURCEID,METRICID,METRICNAME,TABLECOL' "Attribute_list"
+								from
+								(	
+								select distinct 0 as SOURCEID,'' as METRICID,'' as METRICNAME,'ID' as TABLECOL 
+								UNION ALL
+								select distinct 0 as SOURCEID,'' as METRICID,'' as METRICNAME,'Virtus_StartDate' as TABLECOL 
+								UNION ALL
+								select distinct 0 as SOURCEID,'' as METRICID,'' as METRICNAME,'Virtus_EndDate' as TABLECOL 
+								UNION ALL
+								select distinct 0 as SOURCEID,'' as METRICID,'' as METRICNAME,'Original_Key_Position' as TABLECOL 
+								UNION ALL
+								select sourceid as SOURCEID, MetricId METRICID,MetricName METRICNAME,AttributeName TABLECOL 
+								from 
+								KB_DIM_SOURCELINK link
+								where link.id=Mst.id 
+								and exists(Select 1 from KBSourceTypeMst Src where link.SOURCEID=Src.SOURCETYPE_ID and Src.IsActive='1')
+								
+								)X
+								--for xml raw('METRIC'),root('TABLESTRUCTURE') --for xml raw('METRIC'),root('TABLESTRUCTURE')
+							)as met
+						)Tabs
+					
+					)
+							
+						,case when Mst .ID Not in (1,2)
+						then 
+						
+						(
+							Select Row_to_json(tab) as "table"
+							from
+							(
+								Select Array_to_json(Array_agg(Row_to_json(col))) as "column"
+								From
+								(
+								select A.tablecol "tablecol",A.metricdatatype "metricdatatype"
+								,'tablecol,metricdatatype' as "Attribute_list"
+								from 
+								(
+									select 'ID' as tablecol,'BIGINT' as metricdatatype,1 AS tORDER
+									from KB_Dim_DImensionMst where ID=Mst.ID and ID!=1
+									UNION  all
+									select 'CreatedDate' as tablecol,'datetime' metricdatatype ,2 AS tORDER
+									UNION  all
+									select 'Virtus_StartDate' as tablecol,'datetime' metricdatatype ,3 AS tORDER
+									UNION  all
+									select 'Virtus_EndDate' as tablecol,'datetime' metricdatatype  ,4 AS tORDER
+									UNION  all
+									select 'Original_Key_Position' as tablecol,'BIGINT' metricdatatype ,5 AS tORDER
+									UNION  all
+									select 'ISACTIVE' as tablecol,'tinyint' metricdatatype  ,6 AS tORDER
+									union all
+									select 'RuleID' as tablecol,'BIGINT' metricdatatype  ,7 AS tORDER
+									UNION ALL
+									select 'ModifiedDate' as tablecol,'datetime' metricdatatype  ,8 AS tORDER
+									UNION ALL
+									select AttributeName tablecol,case when datatype='INT' then 'BIGINT' else DataType end as metricdatatype,9 as Torder 
+									from Dim_dimensionAttributes Attributes
+									where Attributes.DimensionID=Mst.Id    
+								)A
+								)Col 
+								--for xml raw('column'),root('table')
+							)as tab
+						)	
+					else
+						(
+							Select Row_to_json(tab) as "table"
+							from
+							(
+								Select Array_to_json(Array_agg(Row_to_json(col))) as "column"
+								From
+								(
+									select A.tablecol "tablecol",A.metricdatatype "metricdatatype"
+									,'tablecol,metricdatatype' as "Attribute_list"
+									from 
+									(
+									select 'ID' as tablecol,'BIGINT' as metricdatatype
+									from KB_Dim_DImensionMst where ID=Mst.ID and ID!=1
+									UNION ALL
+									select AttributeName tablecol,case when datatype='INT' then 'BIGINT' else DataType end as metricdatatype from Dim_dimensionAttributes Attributes
+									where Attributes.DimensionID=Mst.Id 
+									UNION ALL
+									select 'CreatedBy' as tablecol,'bigint' metricdatatype 
+									UNION ALL
+									select 'CreatedDate' as tablecol,'datetime' metricdatatype 
+									UNION ALL 
+									select 'ISACTIVE' as tablecol,'bit' metricdatatype 
+									)A
+								) Col 
+								--for xml raw('column'),root('table')
+							)as tab
+						)	
+					END
+					,'ID,NAME,TABLENAME,VID'  "Attribute_list"			
+					FROM KB_DIM_SOURCELINK B 
+					join KB_Dim_DImensionMst Mst on B.ID=Mst.Id
+					where Mst.isactive=1 and Mst.Id!=2
+					and exists(Select 1 from KBSourceTypeMst Src where B.SOURCEID=Src.SOURCETYPE_ID and Src.IsActive='1')
+					group by B.ID,Mst.ID,Mst.DIMENSIONNAME,B.DIM_tbl,B.DIMCol,B.rowid,B.CREATEDBY   
+					--for xml RAW('DIMENSION'),ROOT('DIMENSIONS') 
+				)dims
+			)dimes
+		)output
+	 
+	);
+
+
+
+End
+$BODY$
+  LANGUAGE plpgsql VOLATILE
+  COST 100;
+ALTER FUNCTION usp_dbservgetspokedimensions(json)
+  OWNER TO postgres;
